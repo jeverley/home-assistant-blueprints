@@ -1,0 +1,580 @@
+blueprint:
+  name: Automatic lights control
+  description:
+    "Controls lighting based on occupancy, illuminance, and manual activity.
+    Supports restoration of lighting conditions after the area is unoccupied. Designed
+    to be compatible with the HACS Adaptive Lighting integration."
+  domain: automation
+  input:
+    area:
+      name: Area
+      description:
+        "The area where the automation will be applied. This is used to
+        determine which lights to control based on the occupancy sensor."
+      selector:
+        area:
+          multiple: false
+    occupancy_sensor:
+      name: Occupancy sensor
+      description:
+        "The occupancy sensor that detects presence in the area. This can
+        be a binary sensor with device class occupancy, presence, or motion."
+      selector:
+        entity:
+          multiple: false
+          filter:
+            - domain:
+                - binary_sensor
+              device_class:
+                - occupancy
+                - presence
+                - motion
+    area_occupied_delay:
+      name: Area occupied delay
+      description: "The duration to wait before considering the area occupied."
+      default: 0
+      selector:
+        number:
+          min: 0.0
+          max: 120.0
+          unit_of_measurement: s
+          step: 1.0
+          mode: slider
+    area_unoccupied_delay:
+      name: Area unoccupied delay
+      description: "The duration to wait before considering the area unoccupied."
+      default: 60
+      selector:
+        number:
+          min: 0.0
+          max: 120.0
+          unit_of_measurement: s
+          step: 1.0
+          mode: slider
+    transition_on:
+      name: Lights on transition
+      description:
+        "The default transition time for turning lights on. This helps
+        in providing a smooth lighting change experience."
+      default: 1
+      selector:
+        number:
+          min: 0.0
+          max: 30.0
+          unit_of_measurement: s
+          step: 1.0
+          mode: slider
+    transition_off:
+      name: Lights off transition
+      description:
+        "The default transition time for turning lights off. This helps
+        in providing a smooth lighting change experience."
+      default: 2
+      selector:
+        number:
+          min: 0.0
+          max: 30.0
+          unit_of_measurement: s
+          step: 1.0
+          mode: slider
+    lights_on_scene:
+      name: Lights on scene (optional)
+      description:
+        "You can specify a scene to activate instead of turning on the area's lights.
+        This can be used to apply specific lighting conditions."
+      default: null
+      selector:
+        entity:
+          multiple: false
+          filter:
+            - domain: scene
+    automatic_control_toggle:
+      name: Automatic control toggle (optional)
+      description:
+        "A toggle/switch/binary sensor for controlling automatic lighting control.
+        If not provided, the automation will always be active."
+      default: null
+      selector:
+        entity:
+          multiple: false
+          filter:
+            - domain:
+                - input_boolean
+                - switch
+                - binary_sensor
+    automatic_control_reset:
+      name: Automatic control reset (optional)
+      description: The duration after which the automatic control toggle will be re-enabled if not manually controlled.
+      default: "04:00:00"
+      selector:
+        time: {}
+    physical_override_lights:
+      name: Physical override lights (optional)
+      description: "Physical control of these lights will pause/resume occupancy control if the room is occupied, this requires the automatic control toggle to be an input_boolean or switch entity."
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain:
+                - light
+
+    scene_options:
+      name: Scene Restoration
+      icon: mdi:lamps
+      description: "Parameters for controlling scene restoration after someone re-enters the area."
+      collapsed: true
+      input:
+        scene_timeout:
+          name: Scene timeout
+          description: "The duration after which a saved scene is not restored after area re-entry."
+          default: "00:05:00"
+          selector:
+            time: {}
+        scene_timeout_helper:
+          name: Scene timeout helper (optional)
+          description: "A time-only datetime entity for specifying scene timeout, if defined this is used instead of the timeout parameter."
+          default: null
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - input_datetime
+
+    illuminance_options:
+      name: Illuminance Options
+      icon: mdi:brightness-5
+      description:
+        "Optional parameters for using illuminance state to influence lighting
+        control."
+      collapsed: true
+      input:
+        illuminance_sensor:
+          name: Illuminance sensor (optional)
+          description: "The illuminance sensor that measures light levels in the area."
+          default: null
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - sensor
+                  device_class:
+                    - illuminance
+        illuminance_minimum:
+          name: Lights on illuminance
+          description:
+            "The minimum illuminance level, below which the lights will
+            be turned on. This helps in ensuring that the area is adequately lit when
+            it is dark."
+          default: 1500
+          selector:
+            number:
+              min: 0.0
+              max: 10000.0
+              unit_of_measurement: lx
+              step: 1.0
+              mode: slider
+        illuminance_minimum_duration:
+          name: Lights on illuminance duration
+          description: "The duration that Illuminance must be below the threshold to trigger a change."
+          default: 5
+          selector:
+            number:
+              min: 0.0
+              max: 60.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
+        illuminance_maximum:
+          name: Lights off illuminance
+          description:
+            "The maximum illuminance level, above which the lights will
+            be turned off. This helps in preventing over-illumination when there is
+            sufficient natural light."
+          default: 3000
+          selector:
+            number:
+              min: 0.0
+              max: 10000.0
+              unit_of_measurement: lx
+              step: 1.0
+              mode: slider
+        illuminance_maximum_duration:
+          name: Lights off illuminance duration
+          description: "The duration that Illuminance must be above the threshold to trigger a change."
+          default: 15
+          selector:
+            number:
+              min: 0.0
+              max: 60.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
+        illuminance_transition:
+          name: Illuminance transition
+          description:
+            "The transition time for lights when triggered by illuminance
+            changes. This allows for a gradual adjustment of lighting based on ambient
+            light levels."
+          default: 15
+          selector:
+            number:
+              min: 0.0
+              max: 60.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
+
+    cover_options:
+      name: Cover Shading Options
+      icon: mdi:roller-shade
+      description:
+        "Optional parameters for using cover state to influence lighting
+        control. If not provided, the automation will not consider cover position."
+      collapsed: true
+      input:
+        cover:
+          name: Cover (optional)
+          description: "If provided the automation will consider the cover position when controlling the lights."
+          default: null
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - cover
+        cover_shading_position:
+          name: Cover shading position
+          description: "The lights will always be turned on when the cover is below this position and the area is occupied."
+          default: 0
+          selector:
+            number:
+              min: 0.0
+              max: 100.0
+              unit_of_measurement: "%"
+              step: 1.0
+              mode: slider
+
+    routine_options:
+      name: Routine Options
+      icon: mdi:clock-fast
+      description:
+        "Optional parameters for using routine state to influence lighting
+        control. If not provided, the automation will not consider routine changes."
+      collapsed: true
+      input:
+        routine_sensor:
+          name: Routine sensor (optional)
+          description: "A sensor/select entity which determines the current routine (e.g. waking, awake, bedtime, sleep)."
+          default: null
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - sensor
+                    - select
+        control_reset_routine_states:
+          name: Automatic control reset states (optional)
+          description: Routine states that re-enable the automatic control.
+          default: []
+          selector:
+            text:
+              multiple: true
+              multiline: false
+        control_immediately_routine_states:
+          name: States for immediate change after control is re-enabled (optional)
+          description: The lights will be controlled immediately if automatic control is re-enabled and the routine is in these states (optional)
+          default: []
+          selector:
+            text:
+              multiple: true
+              multiline: false
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/automatic_lighting.yaml
+
+trigger_variables:
+  # Main variables
+  area: !input area
+  occupancy_sensor: !input occupancy_sensor
+  transition_on: !input transition_on
+  transition_off: !input transition_off
+  lights_on_scene: !input lights_on_scene
+  automatic_control_toggle: !input automatic_control_toggle
+
+  # Scene restoration options
+  scene_timeout: !input scene_timeout
+  scene_timeout_helper: !input scene_timeout_helper
+
+  # Illuminance options
+  illuminance_sensor: !input illuminance_sensor
+  illuminance_minimum: !input illuminance_minimum
+  illuminance_maximum: !input illuminance_maximum
+  illuminance_transition: !input illuminance_transition
+
+  # Routine options
+  routine_sensor: !input routine_sensor
+  control_reset_routine_states: !input control_reset_routine_states
+  control_immediately_routine_states: !input control_immediately_routine_states
+
+  # Cover shading options
+  cover: !input cover
+  cover_shading_position: !input cover_shading_position
+
+variables:
+  adaptive_lighting_entities: "{{ integration_entities('adaptive_lighting') | select('in', area_entities(area)) | expand | selectattr('attributes.manual_control', 'defined') | map(attribute='entity_id') | list }}"
+  light_entities: '{{ area_entities(area) | select(''match'', ''^light\.'') | reject(''is_hidden_entity'') | expand | map(attribute=''entity_id'') | list }}'
+  cover_position: "{{ state_attr(cover, 'current_position')|int(none) }}"
+  illuminance: "{{ states(illuminance_sensor)|int(none) }}"
+  scene_id: "{{ area + '_saved' }}"
+  scene_entity: "{{ 'scene.' + scene_id }}"
+  scene_expiration: "{{ as_timedelta(states(scene_timeout_helper)) or as_timedelta(scene_timeout) }}"
+  is_control_enabled: "{{ automatic_control_toggle is none or is_state(automatic_control_toggle, 'on') }}"
+  is_control_toggleable: "{{ automatic_control_toggle | contains('input_boolean.') or automatic_control_toggle | contains('switch.') }}"
+  is_cover_shading: "{{ cover is not none and cover_position|int(none) < cover_shading_position|int(none) }}"
+  is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
+  is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
+  is_light_on: "{{ light_entities | map('states') | select('equalto', 'on') | list | count > 0 }}"
+  is_occupied: "{{ states(occupancy_sensor)|bool(false) }}"
+  is_scene_adaptive: "{{ not expand(adaptive_lighting_entities) | rejectattr('attributes.manual_control', 'in', [[], none]) | list | count > 0 }}"
+  is_scene_saved: "{{ states[scene_entity].state is defined }}"
+  is_scene_expired: "{{ is_scene_saved and states[scene_entity].last_updated < now() - as_timedelta(scene_expiration) }}"
+
+trigger:
+  - trigger: state
+    entity_id: !input occupancy_sensor
+    to: "on"
+    for:
+      seconds: !input area_occupied_delay
+    id: occupancy
+  - trigger: state
+    entity_id: !input occupancy_sensor
+    to: "off"
+    for:
+      seconds: !input area_unoccupied_delay
+    id: occupancy
+  - trigger: state
+    entity_id: !input automatic_control_toggle
+    to: "on"
+    id: control_reset
+  - trigger: state
+    entity_id: !input routine_sensor
+    to: !input control_reset_routine_states
+    id: control_reset
+  - trigger: numeric_state
+    entity_id: !input illuminance_sensor
+    above: !input illuminance_maximum
+    for:
+      seconds: !input illuminance_maximum_duration
+    id: illuminance
+  - trigger: numeric_state
+    entity_id: !input illuminance_sensor
+    below: !input illuminance_minimum
+    for:
+      seconds: !input illuminance_minimum_duration
+    id: illuminance
+  - trigger: numeric_state
+    entity_id: !input cover
+    attribute: current_position
+    below: !input cover_shading_position
+    id: illuminance
+  - trigger: numeric_state
+    entity_id: !input cover
+    attribute: current_position
+    above: !input cover_shading_position
+    id: illuminance
+  - trigger: state
+    entity_id: !input physical_override_lights
+    to:
+      - "off"
+      - "on"
+    from:
+      - "off"
+      - "on"
+    id: manual_control
+
+condition:
+  - condition: state
+    entity_id: !input occupancy_sensor
+    state:
+      - "on"
+      - "off"
+  - condition: or
+    conditions:
+      - condition: and
+        conditions:
+          - condition: trigger
+            id:
+              - illuminance
+              - occupancy
+          - condition: template
+            value_template: "{{ is_control_enabled }}"
+      - condition: and
+        conditions:
+          - condition: trigger
+            id:
+              - control_reset
+          - condition: template
+            value_template: "{{ routine_sensor is none or is_state(routine_sensor, control_immediately_routine_states) }}"
+      - condition: and
+        conditions:
+          - condition: trigger
+            id:
+              - manual_control
+          - condition: template
+            value_template: |-
+              {{
+                trigger.to_state.context.user_id is none
+                and (
+                  trigger.to_state.context.parent_id is none
+                  and trigger.to_state.context.id is not search(':al:.*:.*:')
+                  or trigger.to_state.context.parent_id == trigger.from_state.context.parent_id
+                  and trigger.to_state.context.id is search(':al:.*:.*:')
+                )
+              }}
+
+actions:
+  - alias: Handle control status changes
+    if:
+      - condition: trigger
+        id:
+          - control_reset
+          - manual_control
+      - condition: template
+        value_template: "{{ is_control_toggleable }}"
+    then:
+      - choose:
+          - alias: Automatic control reset
+            conditions:
+              - condition: trigger
+                id: control_reset
+            sequence:
+              - action: homeassistant.turn_on
+                metadata: {}
+                data: {}
+                target:
+                  entity_id: "{{ automatic_control_toggle }}"
+          - alias: Automatic control turn off
+            conditions:
+              - condition: template
+                value_template: "{{ is_control_enabled }}"
+              - condition: template
+                value_template: "{{ is_occupied }}"
+              - condition: template
+                value_template: "{{ not is_light_on }}"
+            sequence:
+              - action: homeassistant.turn_off
+                metadata: {}
+                data: {}
+                target:
+                  entity_id: "{{ automatic_control_toggle }}"
+              - stop: Automatic lights control disabled
+          - alias: Automatic control turn on
+            conditions:
+              - condition: template
+                value_template: "{{ not is_control_enabled }}"
+              - condition: template
+                value_template: "{{ is_occupied }}"
+              - condition: template
+                value_template: "{{ is_light_on }}"
+            sequence:
+              - action: homeassistant.turn_on
+                metadata: {}
+                data: {}
+                target:
+                  entity_id: "{{ automatic_control_toggle }}"
+              - stop: Automatic lights control enabled
+        default:
+          - stop: No action taken for control state change
+
+  - alias: Control lights
+    if:
+      - alias: The area is occupied
+        condition: template
+        value_template: "{{ is_occupied }}"
+      - alias: Illuminance is below the minimum or the cover is shading
+        condition: template
+        value_template: "{{ is_cover_shading or is_illuminance_low or is_light_on and not is_illuminance_high }}"
+    then:
+      - alias: Turn the lights on if they're off
+        if:
+          - condition: template
+            value_template: "{{ not is_light_on }}"
+            alias: If the lights are off
+        then:
+          - alias: Restore scene or turn lights on
+            choose:
+              - conditions:
+                  - alias: A valid saved scene exists
+                    condition: template
+                    value_template: "{{ is_scene_saved and not is_scene_expired }}"
+                sequence:
+                  - action: scene.turn_on
+                    metadata: {}
+                    target:
+                      entity_id: "{{ scene_entity }}"
+                    enabled: true
+                    data:
+                      transition: "{{ illuminance_transition if trigger.id == 'illuminance' and illuminance_transition is not none else transition_on }}"
+              - conditions:
+                  - alias: A scene is used to turn on the lights
+                    condition: template
+                    value_template: "{{ lights_on_scene is not none }}"
+                sequence:
+                  - action: scene.turn_on
+                    metadata: {}
+                    target:
+                      entity_id: "{{ lights_on_scene }}"
+                    enabled: true
+                    data:
+                      transition: "{{ illuminance_transition if trigger.id == 'illuminance' and illuminance_transition is not none else transition_on }}"
+            default:
+              - action: light.turn_on
+                metadata: {}
+                data:
+                  transition: "{{ illuminance_transition if trigger.id == 'illuminance' and illuminance_transition is not none else transition_on }}"
+                target:
+                  area_id: "{{ area }}"
+          - alias: Delete saved scene
+            if:
+              - alias: A saved scene exists
+                condition: template
+                value_template: "{{ is_scene_saved }}"
+            then:
+              - action: scene.delete
+                metadata: {}
+                data: {}
+                target:
+                  entity_id: "{{ scene_entity }}"
+    else:
+      - alias: Save the scene if lights are manually controlled
+        if:
+          - alias: If lighting is under manual control
+            condition: template
+            value_template: "{{ not is_scene_adaptive }}"
+        then:
+          - action: scene.create
+            metadata: {}
+            data:
+              snapshot_entities: "{{ light_entities }}"
+              scene_id: "{{ scene_id }}"
+        else:
+          - alias: Clean up saved scene
+            if:
+              - alias: A saved scene exists
+                condition: template
+                value_template: "{{ is_scene_saved }}"
+            then:
+              - action: scene.delete
+                metadata: {}
+                data: {}
+                target:
+                  entity_id: "{{ scene_entity }}"
+      - action: light.turn_off
+        metadata: {}
+        data:
+          transition: "{{ illuminance_transition if trigger.id == 'illuminance' and illuminance_transition is not none else transition_off }}"
+        target:
+          area_id: "{{ area }}"
+mode: restart
