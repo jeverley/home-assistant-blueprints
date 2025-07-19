@@ -110,7 +110,7 @@ blueprint:
         time: {}
     physical_override_lights:
       name: Physical override lights (optional)
-      description: "Physical control of these lights will pause/resume occupancy control, this requires the automatic control toggle to be an input_boolean or switch entity."
+      description: "Physical control of these lights will pause/resume occupancy control if the room is occupied, this requires the automatic control toggle to be an input_boolean or switch entity."
       default: []
       selector:
         entity:
