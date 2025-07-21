@@ -276,17 +276,17 @@ blueprint:
                 - domain:
                     - sensor
                     - select
-        control_reset_routine_states:
-          name: Automatic control reset states (optional)
-          description: Routine states that re-enable the automatic control.
+        control_reset_trigger_routine_states:
+          name: Control reset trigger states (optional)
+          description: Routine states that re-enable automatic control.
           default: []
           selector:
             text:
               multiple: true
               multiline: false
-        control_immediately_routine_states:
-          name: States for immediate change after control is re-enabled (optional)
-          description: The lights will be controlled immediately if automatic control is re-enabled and the routine is in these states (optional)
+        control_reset_permitted_routine_states:
+          name: Routine states that permit automatic control reset (optional)
+          description: "Routine states that allow automatic control to be reset, if not provided any routine state will permit the reset."
           default: []
           selector:
             text:
@@ -315,8 +315,8 @@ trigger_variables:
 
   # Routine options
   routine_sensor: !input routine_sensor
-  control_reset_routine_states: !input control_reset_routine_states
-  control_immediately_routine_states: !input control_immediately_routine_states
+  control_reset_trigger_routine_states: !input control_reset_trigger_routine_states
+  control_reset_permitted_routine_states: !input control_reset_permitted_routine_states
 
   # Cover shading options
   cover: !input cover
@@ -357,10 +357,10 @@ trigger:
   - trigger: state
     entity_id: !input automatic_control_toggle
     to: "on"
-    id: control_reset
+    id: control_enabled
   - trigger: state
     entity_id: !input routine_sensor
-    to: !input control_reset_routine_states
+    to: !input control_reset_trigger_routine_states
     id: control_reset
   - trigger: numeric_state
     entity_id: !input illuminance_sensor
@@ -415,8 +415,12 @@ condition:
           - condition: trigger
             id:
               - control_reset
-          - condition: template
-            value_template: "{{ routine_sensor is none or is_state(routine_sensor, control_immediately_routine_states) }}"
+          - condition: or
+            conditions:
+              - condition: template
+                value_template: "{{ routine_sensor is none or union(control_reset_permitted_routine_states or [], control_reset_trigger_routine_states or []) == [] }}"
+              - condition: template
+                value_template: "{{ is_state(routine_sensor, union(control_reset_permitted_routine_states or [], control_reset_trigger_routine_states or [])) }}"
       - condition: and
         conditions:
           - condition: trigger
@@ -435,16 +439,20 @@ condition:
               }}
 
 actions:
-  - alias: Handle control status changes
+  - alias: Handle control status actions
     if:
       - condition: trigger
         id:
           - control_reset
           - manual_control
-      - condition: template
-        value_template: "{{ is_control_toggleable }}"
     then:
       - choose:
+          - alias: Control is not toggleable
+            conditions:
+              - condition: template
+                value_template: "{{ not is_control_toggleable }}"
+            sequence:
+              - stop: Automatic control is not toggleable
           - alias: Automatic control reset
             conditions:
               - condition: trigger
@@ -486,7 +494,7 @@ actions:
                   entity_id: "{{ automatic_control_toggle }}"
               - stop: Automatic lights control enabled
         default:
-          - stop: No action taken for control state change
+          - stop: No action taken for control status change
 
   - alias: Control lights
     if:
