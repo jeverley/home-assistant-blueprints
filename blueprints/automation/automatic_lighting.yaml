@@ -472,7 +472,7 @@ actions:
               - condition: template
                 value_template: "{{ is_occupied }}"
               - condition: template
-                value_template: "{{ not is_light_on }}"
+                value_template: "{{ trigger.to_state.state == 'off' }}"
             sequence:
               - action: homeassistant.turn_off
                 metadata: {}
@@ -487,7 +487,7 @@ actions:
               - condition: template
                 value_template: "{{ is_occupied }}"
               - condition: template
-                value_template: "{{ is_light_on }}"
+                value_template: "{{ trigger.to_state.state == 'on' }}"
             sequence:
               - action: homeassistant.turn_on
                 metadata: {}
