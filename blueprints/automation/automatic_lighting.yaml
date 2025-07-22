@@ -410,6 +410,9 @@ condition:
       - "off"
   - condition: or
     conditions:
+      - condition: trigger
+        id:
+          - control_enabled
       - condition: and
         conditions:
           - condition: trigger
