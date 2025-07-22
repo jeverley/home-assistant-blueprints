@@ -102,9 +102,9 @@ blueprint:
                 - input_boolean
                 - switch
                 - binary_sensor
-    automatic_control_reset:
+    automatic_control_reset_duration:
       name: Automatic control reset (optional)
-      description: The duration after which the automatic control toggle will be re-enabled if not manually controlled.
+      description: The duration after which the automatic control toggle will be re-enabled.
       default: "04:00:00"
       selector:
         time: {}
@@ -302,10 +302,13 @@ trigger_variables:
   transition_off: !input transition_off
   lights_on_scene: !input lights_on_scene
   automatic_control_toggle: !input automatic_control_toggle
+  is_control_toggleable: "{{ automatic_control_toggle | contains('input_boolean.') or automatic_control_toggle | contains('switch.') }}"
 
   # Scene restoration options
-  scene_timeout: !input scene_timeout
+  scene_id: "{{ area + '_saved' }}"
+  scene_entity: "{{ 'scene.' + scene_id }}"
   scene_timeout_helper: !input scene_timeout_helper
+  scene_timeout: !input scene_timeout
 
   # Illuminance options
   illuminance_sensor: !input illuminance_sensor
@@ -327,11 +330,8 @@ variables:
   light_entities: '{{ area_entities(area) | select(''match'', ''^light\.'') | reject(''is_hidden_entity'') | expand | map(attribute=''entity_id'') | list }}'
   cover_position: "{{ state_attr(cover, 'current_position')|int(none) }}"
   illuminance: "{{ states(illuminance_sensor)|int(none) }}"
-  scene_id: "{{ area + '_saved' }}"
-  scene_entity: "{{ 'scene.' + scene_id }}"
   scene_expiration: "{{ as_timedelta(states(scene_timeout_helper)) or as_timedelta(scene_timeout) }}"
   is_control_enabled: "{{ automatic_control_toggle is none or is_state(automatic_control_toggle, 'on') }}"
-  is_control_toggleable: "{{ automatic_control_toggle | contains('input_boolean.') or automatic_control_toggle | contains('switch.') }}"
   is_cover_shading: "{{ cover is not none and cover_position|int(none) < cover_shading_position|int(none) }}"
   is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
   is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
@@ -359,9 +359,16 @@ trigger:
     to: "on"
     id: control_enabled
   - trigger: state
+    entity_id: !input automatic_control_toggle
+    to: "off"
+    for: !input automatic_control_reset_duration
+    id: control_reset
+    enabled: "{{ is_control_toggleable and automatic_control_reset_duration not in [none, '00:00:00'] }}"
+  - trigger: state
     entity_id: !input routine_sensor
     to: !input control_reset_trigger_routine_states
     id: control_reset
+    enabled: "{{ is_control_toggleable }}"
   - trigger: numeric_state
     entity_id: !input illuminance_sensor
     above: !input illuminance_maximum
@@ -393,6 +400,7 @@ trigger:
       - "off"
       - "on"
     id: manual_control
+    enabled: "{{ is_control_toggleable }}"
 
 condition:
   - condition: state
@@ -447,12 +455,6 @@ actions:
           - manual_control
     then:
       - choose:
-          - alias: Control is not toggleable
-            conditions:
-              - condition: template
-                value_template: "{{ not is_control_toggleable }}"
-            sequence:
-              - stop: Automatic control is not toggleable
           - alias: Automatic control reset
             conditions:
               - condition: trigger
@@ -463,7 +465,7 @@ actions:
                 data: {}
                 target:
                   entity_id: "{{ automatic_control_toggle }}"
-          - alias: Automatic control turn off
+          - alias: Turn off automatic control
             conditions:
               - condition: template
                 value_template: "{{ is_control_enabled }}"
@@ -478,7 +480,7 @@ actions:
                 target:
                   entity_id: "{{ automatic_control_toggle }}"
               - stop: Automatic lights control disabled
-          - alias: Automatic control turn on
+          - alias: Turn on automatic control
             conditions:
               - condition: template
                 value_template: "{{ not is_control_enabled }}"
@@ -494,12 +496,11 @@ actions:
                   entity_id: "{{ automatic_control_toggle }}"
               - stop: Automatic lights control enabled
         default:
-          - stop: No action taken for control status change
+          - stop: Control status not changed
 
   - alias: Control lights
     if:
-      - alias: The area is occupied
-        condition: template
+      - condition: template
         value_template: "{{ is_occupied }}"
       - alias: Illuminance is below the minimum or the cover is shading
         condition: template
