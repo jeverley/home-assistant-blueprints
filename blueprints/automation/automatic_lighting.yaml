@@ -88,8 +88,8 @@ blueprint:
           multiple: false
           filter:
             - domain: scene
-    automatic_control_toggle:
-      name: Automatic control toggle (optional)
+    automatic_control_helper:
+      name: Automatic control helper (optional)
       description:
         "A toggle/switch/binary sensor for controlling automatic lighting control.
         If not provided, the automation will always be active."
@@ -104,13 +104,13 @@ blueprint:
                 - binary_sensor
     automatic_control_reset_duration:
       name: Automatic control reset (optional)
-      description: The duration after which the automatic control toggle will be re-enabled.
+      description: The duration after which the automatic control helper will be re-enabled.
       default: "04:00:00"
       selector:
         time: {}
     physical_override_lights:
       name: Physical override lights (optional)
-      description: "Physical control of these lights will pause/resume occupancy control if the room is occupied, this requires the automatic control toggle to be an input_boolean or switch entity."
+      description: "Physical control of these lights will pause/resume automatic control if the room is occupied, this requires the automatic control helper to be an input_boolean or switch entity."
       default: []
       selector:
         entity:
@@ -301,8 +301,8 @@ trigger_variables:
   transition_on: !input transition_on
   transition_off: !input transition_off
   lights_on_scene: !input lights_on_scene
-  automatic_control_toggle: !input automatic_control_toggle
-  is_control_toggleable: "{{ automatic_control_toggle | contains('input_boolean.') or automatic_control_toggle | contains('switch.') }}"
+  automatic_control_helper: !input automatic_control_helper
+  is_control_toggleable: "{{ automatic_control_helper | contains('input_boolean.') or automatic_control_helper | contains('switch.') }}"
 
   # Scene restoration options
   scene_id: "{{ area + '_saved' }}"
@@ -331,7 +331,7 @@ variables:
   cover_position: "{{ state_attr(cover, 'current_position')|int(none) }}"
   illuminance: "{{ states(illuminance_sensor)|int(none) }}"
   scene_expiration: "{{ as_timedelta(states(scene_timeout_helper)) or as_timedelta(scene_timeout) }}"
-  is_control_enabled: "{{ automatic_control_toggle is none or is_state(automatic_control_toggle, 'on') }}"
+  is_control_enabled: "{{ automatic_control_helper is none or is_state(automatic_control_helper, 'on') }}"
   is_cover_shading: "{{ cover is not none and cover_position|int(none) < cover_shading_position|int(none) }}"
   is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
   is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
@@ -355,11 +355,11 @@ trigger:
       seconds: !input area_unoccupied_delay
     id: occupancy
   - trigger: state
-    entity_id: !input automatic_control_toggle
+    entity_id: !input automatic_control_helper
     to: "on"
     id: control_enabled
   - trigger: state
-    entity_id: !input automatic_control_toggle
+    entity_id: !input automatic_control_helper
     to: "off"
     for: !input automatic_control_reset_duration
     id: control_reset
@@ -464,7 +464,7 @@ actions:
                 metadata: {}
                 data: {}
                 target:
-                  entity_id: "{{ automatic_control_toggle }}"
+                  entity_id: "{{ automatic_control_helper }}"
           - alias: Turn off automatic control
             conditions:
               - condition: template
@@ -478,7 +478,7 @@ actions:
                 metadata: {}
                 data: {}
                 target:
-                  entity_id: "{{ automatic_control_toggle }}"
+                  entity_id: "{{ automatic_control_helper }}"
               - stop: Automatic lights control disabled
           - alias: Turn on automatic control
             conditions:
@@ -493,7 +493,7 @@ actions:
                 metadata: {}
                 data: {}
                 target:
-                  entity_id: "{{ automatic_control_toggle }}"
+                  entity_id: "{{ automatic_control_helper }}"
               - stop: Automatic lights control enabled
         default:
           - stop: Control status not changed
