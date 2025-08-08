@@ -629,8 +629,6 @@ actions:
           - condition: template
             value_template: "{{ not is_control_enabled }}"
           - condition: template
-            value_template: "{{ is_occupied }}"
-          - condition: template
             value_template: "{{ trigger.to_state.state == 'on' }}"
         sequence:
           - action: homeassistant.turn_on
