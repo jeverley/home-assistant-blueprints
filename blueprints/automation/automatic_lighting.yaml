@@ -347,7 +347,7 @@ variables:
   adaptive_lighting_entities: |
     {{ integration_entities('adaptive_lighting') | select('in', area_entities(area)) | expand | selectattr('attributes.manual_control', 'defined') | map(attribute='entity_id') | list }}
   light_entities: |
-    {{ area_entities(area) | select('match', '^light\.') | reject('is_hidden_entity') | expand | map(attribute=''entity_id'') | list }}
+    {{ area_entities(area) | select('match', '^light\.') | reject('is_hidden_entity') | expand | map(attribute='entity_id') | list }}
   cover_position: "{{ state_attr(cover, 'current_position')|int(none) }}"
   illuminance: "{{ states(illuminance_sensor)|int(none) }}"
   scene_expiration: |
