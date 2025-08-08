@@ -118,6 +118,12 @@ blueprint:
           filter:
             - domain:
                 - light
+    area_exit_control_reset_duration:
+      name: Area exit control reset duration (optional)
+      description: Re-enable control if the area was unoccupied for this duration after the lights were physically turned off
+      default: null
+      selector:
+        time: {}
 
     scene_options:
       name: Scene Restoration
@@ -301,8 +307,13 @@ trigger_variables:
   transition_on: !input transition_on
   transition_off: !input transition_off
   lights_on_scene: !input lights_on_scene
+
+  # Control options
   automatic_control_helper: !input automatic_control_helper
-  is_control_toggleable: "{{ automatic_control_helper | contains('input_boolean.') or automatic_control_helper | contains('switch.') }}"
+  physical_override_lights: !input physical_override_lights
+  is_control_toggleable: "{{ automatic_control_helper|contains('input_boolean.') or automatic_control_helper|contains('switch.') }}"
+  automatic_control_reset_duration: !input automatic_control_reset_duration
+  area_exit_control_reset_duration: !input area_exit_control_reset_duration
 
   # Scene restoration options
   scene_id: "{{ area + '_saved' }}"
@@ -358,17 +369,6 @@ trigger:
     entity_id: !input automatic_control_helper
     to: "on"
     id: control_enabled
-  - trigger: state
-    entity_id: !input automatic_control_helper
-    to: "off"
-    for: !input automatic_control_reset_duration
-    id: control_reset
-    enabled: "{{ is_control_toggleable and automatic_control_reset_duration not in [none, '00:00:00'] }}"
-  - trigger: state
-    entity_id: !input routine_sensor
-    to: !input control_reset_trigger_routine_states
-    id: control_reset
-    enabled: "{{ is_control_toggleable }}"
   - trigger: numeric_state
     entity_id: !input illuminance_sensor
     above: !input illuminance_maximum
@@ -391,6 +391,29 @@ trigger:
     attribute: current_position
     above: !input cover_shading_position
     id: illuminance
+  - trigger: state
+    entity_id: !input automatic_control_helper
+    to: "off"
+    for: !input automatic_control_reset_duration
+    id: control_reset
+    enabled: "{{ is_control_toggleable and automatic_control_reset_duration not in [none, '00:00:00'] }}"
+  - trigger: template
+    value_template: >-
+      {% set physical_override_off_time = (expand(physical_override_lights) | selectattr('state', 'eq', 'off') | sort(attribute='last_changed') | last | default({'last_changed': none})).last_changed %}
+      {% set helper_off_tolerance = timedelta(seconds=1) %}
+      {{
+        physical_override_off_time
+        and is_state(automatic_control_helper, 'off')
+        and is_state(occupancy_sensor, 'off') 
+        and now() - area_exit_control_reset_duration > states[occupancy_sensor].last_changed > states[automatic_control_helper].last_changed + helper_off_tolerance >= physical_override_off_time
+      }}
+    id: control_reset
+    enabled: "{{ is_control_toggleable and physical_override_lights and area_exit_control_reset_duration not in [none, '00:00:00'] }}"
+  - trigger: state
+    entity_id: !input routine_sensor
+    to: !input control_reset_trigger_routine_states
+    id: control_reset
+    enabled: "{{ is_control_toggleable }}"
   - trigger: state
     entity_id: !input physical_override_lights
     to:
