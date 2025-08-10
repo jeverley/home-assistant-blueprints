@@ -538,8 +538,7 @@ condition:
                 and (
                   trigger.to_state.context.parent_id is none
                   and trigger.to_state.context.id is not search(':al:.*:.*:')
-                  or trigger.to_state.context.parent_id == trigger.from_state.context.parent_id
-                  and trigger.to_state.context.id is search(':al:.*:.*:')
+                  or trigger.to_state.context.parent_id == trigger.from_state.context.parent_id != none
                 )
               }}
 
