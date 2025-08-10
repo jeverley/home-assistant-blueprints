@@ -458,6 +458,16 @@ trigger:
     above: !input cover_shading_position
     id: illuminance
   - trigger: state
+    entity_id: !input physical_control_lights
+    to: "on"
+    from: "off"
+    id: manual_on
+  - trigger: state
+    entity_id: !input physical_control_lights
+    to: "off"
+    from: "on"
+    id: manual_off
+  - trigger: state
     entity_id: !input automatic_control_helper
     to: "off"
     for: !input automatic_control_reset_duration
@@ -478,16 +488,6 @@ trigger:
     entity_id: !input routine_sensor
     to: !input control_reset_trigger_routine_states
     id: control_reset
-    enabled: "{{ is_control_toggleable }}"
-  - trigger: state
-    entity_id: !input physical_control_lights
-    to:
-      - "off"
-      - "on"
-    from:
-      - "off"
-      - "on"
-    id: manual_control
     enabled: "{{ is_control_toggleable }}"
 
 condition:
@@ -528,7 +528,8 @@ condition:
       - and:
           - condition: trigger
             id:
-              - manual_control
+              - manual_on
+              - manual_off
           - condition: template
             alias: If the state was changed by an external action
             value_template: |
@@ -550,13 +551,13 @@ actions:
         data:
           snapshot_entities: |
             {# Excludes the manual control light from the light_entities list #}
-            {{ light_entities | reject('eq', trigger.entity_id) | list if trigger.id == 'manual_control' else light_entities }}
+            {{ light_entities | reject('eq', trigger.entity_id) | list if trigger.id == 'manual_off' else light_entities }}
           entities: |
             {# Save the previous state and attributes of the manual control light #}
-            {% if trigger.id == 'manual_control' and trigger.entity_id in light_entities %}
+            {% if trigger.id == 'manual_off' and trigger.entity_id in light_entities %}
               {{ {trigger.entity_id: dict(trigger.from_state.attributes, state=trigger.from_state.state)} }}
             {% else %}
-              {{ none }}
+              {{ {} }}
             {% endif %}
           scene_id: "{{ scene_id }}"
 
@@ -572,11 +573,11 @@ actions:
             target:
               entity_id: "{{ scene_entity }}"
 
-      lights_on_conditions: &lights_on_conditions
+      auto_lights_on_conditions: &auto_lights_on_conditions
         and:
           - not:
               - condition: trigger
-                id: manual_control
+                id: manual_off
           - condition: state
             entity_id: !input occupancy_sensor
             state: "on"
@@ -590,11 +591,11 @@ actions:
               - condition: template
                 value_template: "{{ is_illuminance_low }}"
 
-      lights_off_conditions: &lights_off_conditions
+      auto_lights_off_conditions: &auto_lights_off_conditions
         and:
           - not:
               - condition: trigger
-                id: manual_control
+                id: manual_on
           - condition: template
             value_template: "{{ is_light_on }}"
           - or:
@@ -679,23 +680,17 @@ actions:
       - alias: Lights on
         conditions:
           - or:
-              - and:
-                  - condition: trigger
-                    id: manual_control
-                  - condition: template
-                    value_template: "{{ trigger.to_state.state == 'on' }}"
-              - *lights_on_conditions
+              - condition: trigger
+                id: manual_on
+              - *auto_lights_on_conditions
         sequence:
           - *lights_on_action
       - alias: Lights off
         conditions:
           - or:
-              - and:
-                  - condition: trigger
-                    id: manual_control
-                  - condition: template
-                    value_template: "{{ trigger.to_state.state == 'off' }}"
-              - *lights_off_conditions
+              - condition: trigger
+                id: manual_off
+              - *auto_lights_off_conditions
         sequence:
           - *lights_off_action
 
@@ -714,13 +709,11 @@ actions:
       - alias: Turn off automatic control
         conditions:
           - condition: trigger
-            id: manual_control
+            id: manual_off
           - condition: template
             value_template: "{{ is_control_enabled }}"
           - condition: template
             value_template: "{{ is_occupied }}"
-          - condition: template
-            value_template: "{{ trigger.to_state.state == 'off' }}"
         sequence:
           - action: homeassistant.turn_off
             metadata: {}
@@ -730,11 +723,9 @@ actions:
       - alias: Turn on automatic control
         conditions:
           - condition: trigger
-            id: manual_control
+            id: manual_on
           - condition: template
             value_template: "{{ not is_control_enabled }}"
-          - condition: template
-            value_template: "{{ trigger.to_state.state == 'on' }}"
         sequence:
           - action: homeassistant.turn_on
             metadata: {}
