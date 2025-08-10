@@ -74,18 +74,6 @@ blueprint:
           unit_of_measurement: s
           step: 1.0
           mode: slider
-    lights_on_scene:
-      name: Lights on scene (optional)
-      description:
-        You can specify a scene to activate instead of turning on the area's
-        lights. This can be used to apply specific lighting conditions.
-      default:
-      selector:
-        entity:
-          multiple: false
-          filter:
-            - domain:
-                - scene
     automatic_control_helper:
       name: Automatic control helper (optional)
       description:
@@ -100,14 +88,8 @@ blueprint:
                 - input_boolean
                 - switch
                 - binary_sensor
-    automatic_control_reset_duration:
-      name: Automatic control reset (optional)
-      description: The duration after which the automatic control helper will be re-enabled.
-      default: 04:00:00
-      selector:
-        time: {}
-    physical_override_lights:
-      name: Physical override lights (optional)
+    physical_control_lights:
+      name: Physical control lights (optional)
       description:
         Physical control of these lights will pause/resume automatic control
         if the room is occupied, this requires the automatic control helper to be
@@ -127,6 +109,52 @@ blueprint:
       default:
       selector:
         time: {}
+    automatic_control_reset_duration:
+      name: Automatic control reset (optional)
+      description: The duration after which the automatic control helper will be re-enabled.
+      default: 04:00:00
+      selector:
+        time: {}
+    advanced_options:
+      name: Advanced Options
+      icon: mdi:cog
+      description: Advanced configuration for controlling lights behaviour.
+      collapsed: true
+      input:
+        area_lights:
+          name: Area lights (optional)
+          description: Manually specify lights that should be controlled in the area.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain:
+                    - light
+        lights_on_scene:
+          name: Lights on scene (optional)
+          description:
+            A scene can be activated instead of turning on the area's lights.
+            This can be used to apply specific lighting conditions.
+          default:
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - scene
+        lights_off_scene:
+          name: Lights off scene (optional)
+          description:
+            A scene can be activated instead of turning off the area's lights.
+            This can be used to apply specific lighting conditions.
+          default:
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - scene
     scene_options:
       name: Scene Restoration
       icon: mdi:lamps
@@ -202,6 +230,19 @@ blueprint:
               unit_of_measurement: s
               step: 1.0
               mode: slider
+        illuminance_on_transition:
+          name: Illuminance lights on transition
+          description:
+            The transition time for turning off lights when illuminance falls below the minimum level.
+            This allows for a gradual adjustment of lighting based on ambient light levels.
+          default: 10
+          selector:
+            number:
+              min: 0.0
+              max: 60.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
         illuminance_maximum:
           name: Lights off illuminance
           description:
@@ -229,13 +270,12 @@ blueprint:
               unit_of_measurement: s
               step: 1.0
               mode: slider
-        illuminance_transition:
-          name: Illuminance transition
+        illuminance_off_transition:
+          name: Illuminance lights off transition
           description:
-            The transition time for lights when triggered by illuminance
-            changes. This allows for a gradual adjustment of lighting based on ambient
-            light levels.
-          default: 15
+            The transition time for turning on lights when illuminance rises above the maximum level.
+            This allows for a gradual adjustment of lighting based on ambient light levels.
+          default: 30
           selector:
             number:
               min: 0.0
@@ -319,12 +359,14 @@ blueprint:
 
 trigger_variables:
   area: !input area
+  area_lights: !input area_lights
   occupancy_sensor: !input occupancy_sensor
   transition_on: !input transition_on
   transition_off: !input transition_off
   lights_on_scene: !input lights_on_scene
+  lights_off_scene: !input lights_off_scene
   automatic_control_helper: !input automatic_control_helper
-  physical_override_lights: !input physical_override_lights
+  physical_control_lights: !input physical_control_lights
   is_control_toggleable: |
     {{ automatic_control_helper|contains('input_boolean.') or automatic_control_helper|contains('switch.') }}
   automatic_control_reset_duration: !input automatic_control_reset_duration
@@ -336,7 +378,8 @@ trigger_variables:
   illuminance_sensor: !input illuminance_sensor
   illuminance_minimum: !input illuminance_minimum
   illuminance_maximum: !input illuminance_maximum
-  illuminance_transition: !input illuminance_transition
+  illuminance_on_transition: !input illuminance_on_transition
+  illuminance_off_transition: !input illuminance_off_transition
   routine_sensor: !input routine_sensor
   control_reset_trigger_routine_states: !input control_reset_trigger_routine_states
   control_reset_permitted_routine_states: !input control_reset_permitted_routine_states
@@ -347,11 +390,15 @@ variables:
   adaptive_lighting_entities: |
     {{ integration_entities('adaptive_lighting') | select('in', area_entities(area)) | expand | selectattr('attributes.manual_control', 'defined') | map(attribute='entity_id') | list }}
   light_entities: |
-    {{ area_entities(area) | select('match', '^light\.') | reject('is_hidden_entity') | expand | map(attribute='entity_id') | list }}
+    {% if area_lights %}
+      {{ area_lights }}
+    {% else %}
+      {{ area_entities(area) | select('match', '^light\.') | reject('is_hidden_entity') | expand | map(attribute='entity_id') | list }}
+    {% endif %}
   lights_on_transition: |
-    {{ illuminance_transition if trigger.id == 'illuminance' and illuminance_transition is not none else transition_on }}
+    {{ illuminance_on_transition if trigger.id == 'illuminance' and illuminance_on_transition is not none else transition_on }}
   lights_off_transition: |
-    {{ illuminance_transition if trigger.id == 'illuminance' and illuminance_transition is not none else transition_off }}
+    {{ illuminance_off_transition if trigger.id == 'illuminance' and illuminance_off_transition is not none else transition_off }}
   cover_position: "{{ state_attr(cover, 'current_position')|int(none) }}"
   illuminance: "{{ states(illuminance_sensor)|int(none) }}"
   scene_expiration: |
@@ -418,23 +465,22 @@ trigger:
     enabled: "{{ is_control_toggleable and automatic_control_reset_duration not in [none, '00:00:00'] }}"
   - trigger: template
     value_template: |
-      {% set physical_override_off_time = (expand(physical_override_lights) | selectattr('state', 'eq', 'off') | sort(attribute='last_changed') | last | default({'last_changed': none})).last_changed %}
-      {% set helper_off_tolerance = timedelta(seconds=1) %}
+      {% set physical_control_off_time = (expand(physical_control_lights) | selectattr('state', 'eq', 'off') | sort(attribute='last_changed') | last | default({'last_changed': none})).last_changed %}
       {{
-        physical_override_off_time
+        physical_control_off_time
         and is_state(automatic_control_helper, 'off')
         and is_state(occupancy_sensor, 'off')
-        and now() - area_exit_control_reset_duration >= states[occupancy_sensor].last_changed > states[automatic_control_helper].last_changed + helper_off_tolerance >= physical_override_off_time
+        and now() - area_exit_control_reset_duration >= states[occupancy_sensor].last_changed > states[automatic_control_helper].last_changed >= physical_control_off_time
       }}
     id: control_reset
-    enabled: "{{ is_control_toggleable and physical_override_lights and area_exit_control_reset_duration not in [none, '00:00:00'] }}"
+    enabled: "{{ is_control_toggleable and physical_control_lights and area_exit_control_reset_duration not in [none, '00:00:00'] }}"
   - trigger: state
     entity_id: !input routine_sensor
     to: !input control_reset_trigger_routine_states
     id: control_reset
     enabled: "{{ is_control_toggleable }}"
   - trigger: state
-    entity_id: !input physical_override_lights
+    entity_id: !input physical_control_lights
     to:
       - "off"
       - "on"
@@ -452,37 +498,34 @@ condition:
       - "off"
   - condition: or
     conditions:
-      - condition: and
-        conditions:
+      - and:
           - condition: trigger
             id:
               - illuminance
               - occupancy
           - condition: template
             value_template: "{{ is_control_enabled }}"
-      - condition: and
-        conditions:
+      - and:
           - condition: trigger
             id:
               - control_enabled
           - alias: If the automation is not runnning
             condition: template
             value_template: "{{ this.attributes.current == 0 }}"
-      - condition: and
-        conditions:
+      - and:
           - condition: trigger
             id:
               - control_reset
-          - condition: or
-            conditions:
-              - condition: template
+          - or:
+              - alias: If there are no routine restrictions
+                condition: template
                 value_template: |
                   {{ routine_sensor is none or union(control_reset_permitted_routine_states or [], control_reset_trigger_routine_states or []) == [] }}
-              - condition: template
+              - alias: If the routine is in a permitted reset state
+                condition: template
                 value_template: |
                   {{ is_state(routine_sensor, union(control_reset_permitted_routine_states or [], control_reset_trigger_routine_states or [])) }}
-      - condition: and
-        conditions:
+      - and:
           - condition: trigger
             id:
               - manual_control
@@ -532,12 +575,39 @@ actions:
 
       lights_on_conditions: &lights_on_conditions
         and:
-          - condition: template
-            value_template: "{{ is_occupied }}"
-          - condition: template
-            value_template: "{{ is_cover_shading or is_illuminance_low or (is_light_on and not is_illuminance_high) }}"
+          - not:
+              - condition: trigger
+                id: manual_control
+          - condition: state
+            entity_id: !input occupancy_sensor
+            state: "on"
+            for:
+              seconds: !input area_occupied_delay
           - condition: template
             value_template: "{{ not is_light_on }}"
+          - or:
+              - condition: template
+                value_template: "{{ is_cover_shading }}"
+              - condition: template
+                value_template: "{{ is_illuminance_low }}"
+
+      lights_off_conditions: &lights_off_conditions
+        and:
+          - not:
+              - condition: trigger
+                id: manual_control
+          - condition: template
+            value_template: "{{ is_light_on }}"
+          - or:
+              - condition: state
+                entity_id: !input occupancy_sensor
+                state: "off"
+                for:
+                  seconds: !input area_unoccupied_delay
+              - condition: template
+                value_template: "{{ not is_cover_shading and not is_illuminance_low }}"
+              - condition: template
+                value_template: "{{ is_illuminance_high }}"
 
       lights_on_action: &lights_on_action
         sequence:
@@ -552,7 +622,6 @@ actions:
                     metadata: {}
                     target:
                       entity_id: "{{ scene_entity }}"
-                    enabled: true
                     data:
                       transition: "{{ lights_on_transition }}"
               - alias: A scene is used to turn on the lights
@@ -564,7 +633,6 @@ actions:
                     metadata: {}
                     target:
                       entity_id: "{{ lights_on_scene }}"
-                    enabled: true
                     data:
                       transition: "{{ lights_on_transition }}"
             default:
@@ -573,7 +641,7 @@ actions:
                 data:
                   transition: "{{ lights_on_transition }}"
                 target:
-                  area_id: "{{ area }}"
+                  entity_id: "{{ light_entities }}"
           - *delete_saved_scene
 
       lights_off_action: &lights_off_action
@@ -587,14 +655,52 @@ actions:
               - *create_saved_scene
             else:
               - *delete_saved_scene
-          - action: light.turn_off
-            metadata: {}
-            data:
-              transition: "{{ lights_off_transition }}"
-            target:
-              area_id: "{{ area }}"
+          - choose:
+              - alias: A scene is used to turn off the lights
+                conditions:
+                  - condition: template
+                    value_template: "{{ lights_off_scene is not none }}"
+                sequence:
+                  - action: scene.turn_on
+                    metadata: {}
+                    target:
+                      entity_id: "{{ lights_off_scene }}"
+                    data:
+                      transition: "{{ lights_off_transition }}"
+            default:
+              - action: light.turn_off
+                metadata: {}
+                data:
+                  transition: "{{ lights_off_transition }}"
+                target:
+                  entity_id: "{{ light_entities }}"
 
-  - alias: Handle control status actions
+  - alias: Control lights
+    choose:
+      - alias: Lights on
+        conditions:
+          - or:
+              - and:
+                  - condition: trigger
+                    id: manual_control
+                  - condition: template
+                    value_template: "{{ trigger.to_state.state == 'on' }}"
+              - *lights_on_conditions
+        sequence:
+          - *lights_on_action
+      - alias: Lights off
+        conditions:
+          - or:
+              - and:
+                  - condition: trigger
+                    id: manual_control
+                  - condition: template
+                    value_template: "{{ trigger.to_state.state == 'off' }}"
+              - *lights_off_conditions
+        sequence:
+          - *lights_off_action
+
+  - alias: Update control helper
     choose:
       - alias: Automatic control reset
         conditions:
@@ -636,31 +742,5 @@ actions:
             data: {}
             target:
               entity_id: "{{ automatic_control_helper }}"
-
-  - alias: Control lights
-    choose:
-      - alias: Lights off
-        conditions:
-          - or:
-              - and:
-                  - condition: trigger
-                    id: manual_control
-                  - condition: template
-                    value_template: "{{ trigger.to_state.state == 'off' }}"
-              - not:
-                  - *lights_on_conditions
-        sequence:
-          - *lights_off_action
-      - alias: Lights on
-        conditions:
-          - or:
-              - and:
-                  - condition: trigger
-                    id: manual_control
-                  - condition: template
-                    value_template: "{{ trigger.to_state.state == 'on' }}"
-              - *lights_on_conditions
-        sequence:
-          - *lights_on_action
 
 mode: restart
