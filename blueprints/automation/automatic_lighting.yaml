@@ -316,6 +316,12 @@ blueprint:
               unit_of_measurement: "%"
               step: 1.0
               mode: slider
+        cover_shading_when_closing:
+          name: Cover is shading when closing
+          description: The cover will be considered shading whilst in the closing state
+          default: false
+          selector:
+            boolean:
     routine_options:
       name: Routine Options
       icon: mdi:clock-fast
@@ -377,7 +383,9 @@ trigger_variables:
   scene_timeout: !input scene_timeout
   illuminance_sensor: !input illuminance_sensor
   illuminance_minimum: !input illuminance_minimum
+  illuminance_minimum_duration: !input illuminance_minimum_duration
   illuminance_maximum: !input illuminance_maximum
+  illuminance_maximum_duration: !input illuminance_maximum_duration
   illuminance_on_transition: !input illuminance_on_transition
   illuminance_off_transition: !input illuminance_off_transition
   routine_sensor: !input routine_sensor
@@ -385,6 +393,7 @@ trigger_variables:
   control_reset_permitted_routine_states: !input control_reset_permitted_routine_states
   cover: !input cover
   cover_shading_position: !input cover_shading_position
+  cover_shading_when_closing: !input cover_shading_when_closing
 
 variables:
   adaptive_lighting_entities: |
@@ -406,7 +415,10 @@ variables:
   is_control_enabled: |
     {{ automatic_control_helper is none or is_state(automatic_control_helper, 'on') }}
   is_cover_shading: |
-    {{ cover_position is not none and cover_position|int(none) < cover_shading_position|int(none) }}
+    {{
+      cover_position|int(100) < cover_shading_position|int(0)
+      or cover_shading_when_closing and is_state(cover, 'closing') and states[cover].last_changed <= now() - as_timedelta(illuminance_minimum_duration)
+    }}
   is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
   is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
   is_light_on: |
@@ -457,6 +469,13 @@ trigger:
     attribute: current_position
     above: !input cover_shading_position
     id: illuminance
+  - trigger: state
+    entity_id: !input cover
+    to: "closing"
+    for:
+      seconds: !input illuminance_minimum_duration
+    id: illuminance
+    enabled: !input cover_shading_when_closing
   - trigger: state
     entity_id: !input physical_control_lights
     to: "on"
