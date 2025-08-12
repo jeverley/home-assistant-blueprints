@@ -520,6 +520,7 @@ condition:
               - alias: If there are no routine restrictions
                 condition: template
                 value_template: |
+                  {# The routine sensor or reset states are undefined #}
                   {{ routine_sensor is none or union(control_reset_permitted_routine_states or [], control_reset_trigger_routine_states or []) == [] }}
               - alias: If the routine is in a permitted reset state
                 condition: template
@@ -604,10 +605,11 @@ actions:
                 state: "off"
                 for:
                   seconds: !input area_unoccupied_delay
-              - condition: template
-                value_template: "{{ not is_cover_shading and not is_illuminance_low }}"
-              - condition: template
-                value_template: "{{ is_illuminance_high }}"
+              - and:
+                  - condition: template
+                    value_template: "{{ not is_cover_shading }}"
+                  - condition: template
+                    value_template: "{{ is_illuminance_high }}"
 
       lights_on_action: &lights_on_action
         sequence:
@@ -616,7 +618,9 @@ actions:
               - alias: A valid saved scene exists
                 conditions:
                   - condition: template
-                    value_template: "{{ is_scene_saved and not is_scene_expired }}"
+                    value_template: "{{ is_scene_saved }}"
+                  - condition: template
+                    value_template: "{{ not is_scene_expired }}"
                 sequence:
                   - action: scene.turn_on
                     metadata: {}
