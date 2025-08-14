@@ -487,27 +487,22 @@ trigger:
     from: "on"
     id: manual_off
   - trigger: state
+    entity_id: !input routine_sensor
+    to: !input control_reset_trigger_routine_states
+    id: control_reset
+    enabled: "{{ is_control_toggleable }}"
+  - trigger: state
     entity_id: !input automatic_control_helper
     to: "off"
     for: !input automatic_control_reset_duration
     id: control_reset
     enabled: "{{ is_control_toggleable and automatic_control_reset_duration not in [none, '00:00:00'] }}"
-  - trigger: template
-    value_template: |
-      {% set physical_control_off_time = (expand(physical_control_lights) | selectattr('state', 'eq', 'off') | sort(attribute='last_changed') | last | default({'last_changed': none})).last_changed %}
-      {{
-        physical_control_off_time
-        and is_state(automatic_control_helper, 'off')
-        and is_state(occupancy_sensor, 'off')
-        and now() - area_exit_control_reset_duration >= states[occupancy_sensor].last_changed > states[automatic_control_helper].last_changed >= physical_control_off_time
-      }}
-    id: control_reset
-    enabled: "{{ is_control_toggleable and physical_control_lights and area_exit_control_reset_duration not in [none, '00:00:00'] }}"
   - trigger: state
-    entity_id: !input routine_sensor
-    to: !input control_reset_trigger_routine_states
-    id: control_reset
-    enabled: "{{ is_control_toggleable }}"
+    entity_id: !input occupancy_sensor
+    to: "off"
+    for: !input area_exit_control_reset_duration
+    id: area_exit_control_reset
+    enabled: "{{ is_control_toggleable and physical_control_lights and area_exit_control_reset_duration not in [none, '00:00:00'] }}"
 
 condition:
   - condition: state
@@ -535,6 +530,7 @@ condition:
           - condition: trigger
             id:
               - control_reset
+              - area_exit_control_reset
           - or:
               - alias: If there are no routine restrictions
                 condition: template
@@ -545,6 +541,22 @@ condition:
                 condition: template
                 value_template: |
                   {{ is_state(routine_sensor, union(control_reset_permitted_routine_states or [], control_reset_trigger_routine_states or [])) }}
+          - or:
+              - not:
+                  - condition: trigger
+                    id:
+                      - area_exit_control_reset
+              - alias: The occupancy sensor turned off after the physical light and helper was turned off
+                condition: template
+                value_template: |
+                  {% set physical_control_off_time = (expand(physical_control_lights) | selectattr('state', 'eq', 'off') | sort(attribute='last_changed') | last | default({'last_changed': none})).last_changed %}
+                  {{
+                    physical_control_off_time
+                    and not is_control_enabled
+                    and not is_occupied
+                    and states[occupancy_sensor].last_changed > states[automatic_control_helper].last_changed >= physical_control_off_time
+                  }}
+
       - and:
           - condition: trigger
             id:
@@ -722,7 +734,9 @@ actions:
       - alias: Automatic control reset
         conditions:
           - condition: trigger
-            id: control_reset
+            id:
+              - control_reset
+              - area_exit_control_reset
         sequence:
           - action: homeassistant.turn_on
             metadata: {}
