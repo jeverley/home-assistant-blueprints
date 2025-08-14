@@ -423,7 +423,7 @@ variables:
   is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
   is_light_on: |
     {{ light_entities | map('states') | select('eq', 'on') | list | count > 0 }}
-  is_occupied: "{{ states(occupancy_sensor)|bool(false) }}"
+  is_occupied: "{{ is_state(occupancy_sensor, 'on') }}"
   is_scene_adaptive: |
     {{ not expand(adaptive_lighting_entities) | rejectattr('attributes.manual_control', 'in', [[], none]) | list | count > 0 }}
   is_scene_saved: "{{ states[scene_entity].state is defined }}"
