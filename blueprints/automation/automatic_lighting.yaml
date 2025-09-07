@@ -110,7 +110,7 @@ blueprint:
     physical_control_transition:
       name: Physical control transition (optional)
       description: The transition time for lights triggered by manual control.
-      default: 0
+      default: 1
       selector:
         number:
           min: 0.0
