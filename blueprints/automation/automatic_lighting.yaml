@@ -88,6 +88,12 @@ blueprint:
                 - input_boolean
                 - switch
                 - binary_sensor
+    automatic_control_reset_duration:
+      name: Automatic control reset (optional)
+      description: The duration after which the automatic control will be re-enabled.
+      default: 04:00:00
+      selector:
+        time: {}
     physical_control_lights:
       name: Physical control lights (optional)
       description:
@@ -101,18 +107,23 @@ blueprint:
           filter:
             - domain:
                 - light
+    physical_control_transition:
+      name: Physical control transition (optional)
+      description: The transition time for lights triggered by manual control.
+      default: 0
+      selector:
+        number:
+          min: 0.0
+          max: 30.0
+          unit_of_measurement: s
+          step: 1.0
+          mode: slider
     area_exit_control_reset_duration:
       name: Area exit control reset duration (optional)
       description:
         Re-enable control if the area was unoccupied for this duration
         after the lights were physically turned off
       default:
-      selector:
-        time: {}
-    automatic_control_reset_duration:
-      name: Automatic control reset (optional)
-      description: The duration after which the automatic control helper will be re-enabled.
-      default: 04:00:00
       selector:
         time: {}
     advanced_options:
@@ -373,6 +384,7 @@ trigger_variables:
   lights_off_scene: !input lights_off_scene
   automatic_control_helper: !input automatic_control_helper
   physical_control_lights: !input physical_control_lights
+  physical_control_transition: !input physical_control_transition
   is_control_toggleable: |
     {{ automatic_control_helper|contains('input_boolean.') or automatic_control_helper|contains('switch.') }}
   automatic_control_reset_duration: !input automatic_control_reset_duration
@@ -405,9 +417,21 @@ variables:
       {{ area_entities(area) | select('match', '^light\.') | reject('is_hidden_entity') | expand | map(attribute='entity_id') | list }}
     {% endif %}
   lights_on_transition: |
-    {{ illuminance_on_transition if trigger.id == 'illuminance' and illuminance_on_transition is not none else transition_on }}
+    {% if trigger.id == 'illuminance' and illuminance_on_transition is not none %}
+    {{ illuminance_on_transition }}
+    {% elif trigger.id == 'manual_on' %}
+    {{ physical_control_transition }}
+    {% else %}
+    {{ transition_on }}
+    {% endif %}
   lights_off_transition: |
-    {{ illuminance_off_transition if trigger.id == 'illuminance' and illuminance_off_transition is not none else transition_off }}
+    {% if trigger.id == 'illuminance' and illuminance_off_transition is not none %}
+    {{ illuminance_off_transition }}
+    {% elif trigger.id == 'manual_off' %}
+    {{ physical_control_transition }}
+    {% else %}
+    {{ transition_off }}
+    {% endif %}
   cover_position: "{{ state_attr(cover, 'current_position')|int(none) }}"
   illuminance: "{{ states(illuminance_sensor)|int(none) }}"
   scene_expiration: |
@@ -585,9 +609,32 @@ actions:
             {# Excludes the manual control light from the light_entities list #}
             {{ light_entities | reject('eq', trigger.entity_id) | list if trigger.id == 'manual_off' else light_entities }}
           entities: |
+            {# Sanitize a single value and return JSON-safe string #}
+            {% macro sanitize_value(value) %}
+              {% if value is string or value is number or value is boolean or value is none %}
+                {{ value | to_json }}
+              {% elif value is iterable and value is not mapping %}
+                {{ value | map('string') | list | to_json }}
+              {% elif value is mapping %}
+                {{ sanitize_mapping(value) }}
+              {% else %}
+                {{ value | string | to_json }}
+              {% endif %}
+            {% endmacro %}
+
+            {# Recursively sanitize a dict and return JSON string #}
+            {% macro sanitize_mapping(map) %}
+              {% set out = namespace(clean={}) %}
+              {% for k, v in map.items() %}
+                {% set out.clean = dict(out.clean, **{k: sanitize_value(v) | from_json}) %}
+              {% endfor %}
+              {{ out.clean | to_json }}
+            {% endmacro %}
+
             {# Save the previous state and attributes of the manual control light #}
+            {% set attrs = sanitize_mapping(trigger.from_state.attributes) | from_json %}
             {% if trigger.id == 'manual_off' and trigger.entity_id in light_entities %}
-              {{ {trigger.entity_id: dict(trigger.from_state.attributes, state=trigger.from_state.state)} }}
+              {{ {trigger.entity_id: dict(attrs, state=trigger.from_state.state)} }}
             {% else %}
               {{ {} }}
             {% endif %}
