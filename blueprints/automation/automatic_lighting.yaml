@@ -94,6 +94,17 @@ blueprint:
       default: 04:00:00
       selector:
         time: {}
+    control_reset_transition:
+      name: Control reset transition (optional)
+      description: The transition time for lights when control is reset.
+      default: 10
+      selector:
+        number:
+          min: 0.0
+          max: 60.0
+          unit_of_measurement: s
+          step: 1.0
+          mode: slider
     physical_control_lights:
       name: Physical control lights (optional)
       description:
@@ -244,7 +255,7 @@ blueprint:
         illuminance_on_transition:
           name: Illuminance lights on transition
           description:
-            The transition time for turning off lights when illuminance falls below the minimum level.
+            The transition time for turning on lights when illuminance falls below the minimum level.
             This allows for a gradual adjustment of lighting based on ambient light levels.
           default: 10
           selector:
@@ -401,6 +412,7 @@ trigger_variables:
   illuminance_on_transition: !input illuminance_on_transition
   illuminance_off_transition: !input illuminance_off_transition
   routine_sensor: !input routine_sensor
+  control_reset_transition: !input control_reset_transition
   control_reset_trigger_routine_states: !input control_reset_trigger_routine_states
   control_reset_permitted_routine_states: !input control_reset_permitted_routine_states
   cover: !input cover
@@ -414,11 +426,15 @@ variables:
     {% if area_lights %}
       {{ area_lights }}
     {% else %}
-      {{ area_entities(area) | select('match', '^light\.') | reject('is_hidden_entity') | expand | map(attribute='entity_id') | list }}
+      {{ area_entities(area) | select('contains', 'light.') | reject('is_hidden_entity') | expand | map(attribute='entity_id') | list }}
     {% endif %}
+  is_control_reset: |
+    {{ trigger.id | contains('control_reset') }}
   lights_on_transition: |
     {% if trigger.id == 'illuminance' and illuminance_on_transition is not none %}
     {{ illuminance_on_transition }}
+    {% if is_control_reset and control_reset_transition is not none %}
+    {{ control_reset_transition }}
     {% elif trigger.id == 'manual_on' %}
     {{ physical_control_transition }}
     {% else %}
@@ -511,11 +527,6 @@ trigger:
     from: "on"
     id: manual_off
   - trigger: state
-    entity_id: !input routine_sensor
-    to: !input control_reset_trigger_routine_states
-    id: control_reset
-    enabled: "{{ is_control_toggleable }}"
-  - trigger: state
     entity_id: !input automatic_control_helper
     to: "off"
     for: !input automatic_control_reset_duration
@@ -527,6 +538,11 @@ trigger:
     for: !input area_exit_control_reset_duration
     id: area_exit_control_reset
     enabled: "{{ is_control_toggleable and physical_control_lights and area_exit_control_reset_duration not in [none, '00:00:00'] }}"
+  - trigger: state
+    entity_id: !input routine_sensor
+    to: !input control_reset_trigger_routine_states
+    id: routine_control_reset
+    enabled: "{{ is_control_toggleable }}"
 
 condition:
   - condition: state
@@ -551,10 +567,8 @@ condition:
             condition: template
             value_template: "{{ this.attributes.current == 0 }}"
       - and:
-          - condition: trigger
-            id:
-              - control_reset
-              - area_exit_control_reset
+          - condition: template
+            value_template: "{{ is_control_reset }}"
           - or:
               - alias: If there are no routine restrictions
                 condition: template
@@ -780,10 +794,8 @@ actions:
     choose:
       - alias: Automatic control reset
         conditions:
-          - condition: trigger
-            id:
-              - control_reset
-              - area_exit_control_reset
+          - condition: template
+            value_template: "{{ is_control_reset }}"
         sequence:
           - action: homeassistant.turn_on
             metadata: {}
