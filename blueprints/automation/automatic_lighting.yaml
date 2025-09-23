@@ -435,7 +435,7 @@ variables:
     {{ illuminance_on_transition }}
     {% elif is_control_reset and control_reset_transition is not none %}
     {{ control_reset_transition }}
-    {% elif trigger.id == 'manual_on' %}
+    {% elif trigger.id == 'manual_on' and physical_control_transition is not none %}
     {{ physical_control_transition }}
     {% else %}
     {{ transition_on }}
@@ -443,7 +443,7 @@ variables:
   lights_off_transition: |
     {% if trigger.id == 'illuminance' and illuminance_off_transition is not none %}
     {{ illuminance_off_transition }}
-    {% elif trigger.id == 'manual_off' %}
+    {% elif trigger.id == 'manual_off' and physical_control_transition is not none %}
     {{ physical_control_transition }}
     {% else %}
     {{ transition_off }}
