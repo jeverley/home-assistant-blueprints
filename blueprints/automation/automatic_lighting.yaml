@@ -216,7 +216,7 @@ blueprint:
         illuminance_sensor:
           name: Illuminance sensor (optional)
           description: The illuminance sensor that measures light levels in the area.
-          default:
+          default: []
           selector:
             entity:
               multiple: false
@@ -318,7 +318,7 @@ blueprint:
           description:
             If provided the automation will consider the cover position
             when controlling the lights.
-          default:
+          default: []
           selector:
             entity:
               multiple: false
