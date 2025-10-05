@@ -465,7 +465,13 @@ variables:
     {{ light_entities | map('states') | select('eq', 'on') | list | count > 0 }}
   is_occupied: "{{ is_state(occupancy_sensor, 'on') }}"
   is_scene_adaptive: |
-    {{ not expand(adaptive_lighting_entities) | rejectattr('attributes.manual_control', 'in', [[], none]) | list | count > 0 }}
+    {{
+      expand(adaptive_lighting_entities)
+      | selectattr('attributes.manual_control', 'defined')
+      | rejectattr('attributes.manual_control', 'equalto', none)
+      | rejectattr('attributes.manual_control', 'equalto', [])
+      | list | count > 0
+    }}
   is_scene_saved: "{{ states[scene_entity].state is defined }}"
   is_scene_expired: |
     {{ is_scene_saved and states[scene_entity].last_updated is defined and states[scene_entity].last_updated < now() - as_timedelta(scene_expiration) }}
