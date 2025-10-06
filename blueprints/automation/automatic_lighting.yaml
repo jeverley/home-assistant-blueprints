@@ -420,6 +420,7 @@ trigger_variables:
   cover_shading_when_closing: !input cover_shading_when_closing
 
 variables:
+  trigger_id: "{{ trigger.id | default('') }}"
   adaptive_lighting_entities: |
     {{ integration_entities('adaptive_lighting') | select('in', area_entities(area)) | expand | selectattr('attributes.manual_control', 'defined') | map(attribute='entity_id') | list }}
   light_entities: |
@@ -429,21 +430,21 @@ variables:
       {{ area_entities(area) | select('contains', 'light.') | reject('is_hidden_entity') | expand | map(attribute='entity_id') | list }}
     {% endif %}
   is_control_reset: |
-    {{ trigger.id | default('') | contains('control_reset') }}
+    {{ trigger_id | contains('control_reset') }}
   lights_on_transition: |
-    {% if trigger.id | default('') == 'illuminance' and illuminance_on_transition is not none %}
+    {% if trigger_id == 'illuminance' and illuminance_on_transition is not none %}
       {{ illuminance_on_transition }}
     {% elif is_control_reset and control_reset_transition is not none %}
       {{ control_reset_transition }}
-    {% elif trigger.id | default('') == 'manual_on' and physical_control_transition is not none %}
+    {% elif trigger_id == 'manual_on' and physical_control_transition is not none %}
       {{ physical_control_transition }}
     {% else %}
       {{ transition_on }}
     {% endif %}
   lights_off_transition: |
-    {% if trigger.id | default('') == 'illuminance' and illuminance_off_transition is not none %}
+    {% if trigger_id == 'illuminance' and illuminance_off_transition is not none %}
       {{ illuminance_off_transition }}
-    {% elif trigger.id | default('') == 'manual_off' and physical_control_transition is not none %}
+    {% elif trigger_id == 'manual_off' and physical_control_transition is not none %}
       {{ physical_control_transition }}
     {% else %}
       {{ transition_off }}
@@ -627,7 +628,7 @@ actions:
         data:
           snapshot_entities: |
             {# Excludes the manual control light from the light_entities list #}
-            {{ light_entities | reject('eq', trigger.entity_id | default('')) | list if trigger.id | default('') == 'manual_off' else light_entities }}
+            {{ light_entities | reject('eq', trigger.entity_id | default('')) | list if trigger_id == 'manual_off' else light_entities }}
           entities: |
             {# Sanitize a single value and return JSON-safe string #}
             {% macro sanitize_value(value) %}
@@ -652,8 +653,8 @@ actions:
             {% endmacro %}
 
             {# Save the previous state and attributes of the manual control light #}
-            {% if trigger.id | default('') == 'manual_off' and trigger.entity_id | default('') in light_entities %}
-              {% set attrs = sanitize_mapping(trigger.from_state.attributes | default({})) | from_json %}
+            {% if trigger_id == 'manual_off' and trigger.entity_id | default('') in light_entities %}
+              {% set attrs = sanitize_mapping(trigger.from_state.attributes) | from_json %}
               {{ {trigger.entity_id: dict(attrs, state=trigger.from_state.state)} }}
             {% else %}
               {{ {} }}
