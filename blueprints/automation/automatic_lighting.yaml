@@ -420,7 +420,7 @@ trigger_variables:
   cover_shading_when_closing: !input cover_shading_when_closing
 
 variables:
-  trigger_id: "{{ trigger.id|string | default('') }}"
+  trigger_id: "{{ trigger.id | default('') | string }}"
   adaptive_lighting_entities: |
     {{ integration_entities('adaptive_lighting') | select('in', area_entities(area)) | expand | selectattr('attributes.manual_control', 'defined') | map(attribute='entity_id') | list }}
   light_entities: |
