@@ -420,7 +420,7 @@ trigger_variables:
   cover_shading_when_closing: !input cover_shading_when_closing
 
 variables:
-  trigger_id: "{{ trigger.id | default('') }}"
+  trigger_id: "{{ trigger.id|string | default('') }}"
   adaptive_lighting_entities: |
     {{ integration_entities('adaptive_lighting') | select('in', area_entities(area)) | expand | selectattr('attributes.manual_control', 'defined') | map(attribute='entity_id') | list }}
   light_entities: |
@@ -450,7 +450,7 @@ variables:
       {{ transition_off }}
     {% endif %}
   cover_position: "{{ state_attr(cover, 'current_position')|int(none) if cover else none}}"
-  illuminance: "{{ states(illuminance_sensor)|int(none) }}"
+  illuminance: "{{ states(illuminance_sensor)|int(none) if illuminance_sensor else none }}"
   scene_expiration: |
     {{ as_timedelta(states(scene_timeout_helper)) or as_timedelta(scene_timeout) }}
   is_control_enabled: |
@@ -464,7 +464,7 @@ variables:
   is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
   is_light_on: |
     {{ light_entities | map('states') | select('eq', 'on') | list | count > 0 }}
-  is_occupied: "{{ is_state(occupancy_sensor, 'on') }}"
+  is_occupied: "{{ is_state(occupancy_sensor, 'on') if occupancy_sensor else none }}"
   is_scene_adaptive: |
     {{
       expand(adaptive_lighting_entities)
