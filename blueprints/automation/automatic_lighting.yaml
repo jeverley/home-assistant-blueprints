@@ -1,7 +1,7 @@
 blueprint:
   name: Automatic lights control
   description: |
-    Controls lighting based on occupancy, illuminance, and manual activity. 
+    Controls lighting based on occupancy, illuminance, and physical activity. 
     Supports restoration of lighting conditions after the area is unoccupied. Designed
     to be compatible with the HACS Adaptive Lighting integration.
   domain: automation
@@ -120,7 +120,7 @@ blueprint:
                 - light
     physical_control_transition:
       name: Physical control transition (optional)
-      description: The transition time for lights triggered by manual control.
+      description: The transition time for lights triggered by physical control.
       default: 1
       selector:
         number:
@@ -144,8 +144,8 @@ blueprint:
       collapsed: true
       input:
         area_lights:
-          name: Area lights (optional)
-          description: Manually specify lights that should be controlled in the area.
+          name: Area lights override (optional)
+          description: Specify which lights should be controlled in the area.
           default: []
           selector:
             entity:
@@ -436,7 +436,7 @@ variables:
       {{ illuminance_on_transition }}
     {% elif is_control_reset and control_reset_transition is not none %}
       {{ control_reset_transition }}
-    {% elif trigger_id == 'manual_on' and physical_control_transition is not none %}
+    {% elif trigger_id == 'physical_on' and physical_control_transition is not none %}
       {{ physical_control_transition }}
     {% else %}
       {{ transition_on }}
@@ -444,7 +444,7 @@ variables:
   lights_off_transition: |
     {% if trigger_id == 'illuminance' and illuminance_off_transition is not none %}
       {{ illuminance_off_transition }}
-    {% elif trigger_id == 'manual_off' and physical_control_transition is not none %}
+    {% elif trigger_id == 'physical_off' and physical_control_transition is not none %}
       {{ physical_control_transition }}
     {% else %}
       {{ transition_off }}
@@ -527,12 +527,12 @@ trigger:
     entity_id: !input physical_control_lights
     to: "on"
     from: "off"
-    id: manual_on
+    id: physical_on
   - trigger: state
     entity_id: !input physical_control_lights
     to: "off"
     from: "on"
-    id: manual_off
+    id: physical_off
   - trigger: state
     entity_id: !input automatic_control_helper
     to: "off"
@@ -605,8 +605,8 @@ condition:
       - and:
           - condition: trigger
             id:
-              - manual_on
-              - manual_off
+              - physical_on
+              - physical_off
           - condition: template
             alias: If the state was changed by an external action
             value_template: |
@@ -627,8 +627,8 @@ actions:
         metadata: {}
         data:
           snapshot_entities: |
-            {# Excludes the manual control light from the light_entities list #}
-            {{ light_entities | reject('eq', trigger.entity_id | default('')) | list if trigger_id == 'manual_off' else light_entities }}
+            {# Excludes the physical control light from the light_entities list #}
+            {{ light_entities | reject('eq', trigger.entity_id | default('')) | list if trigger_id == 'physical_off' else light_entities }}
           entities: |
             {# Sanitize a single value and return JSON-safe string #}
             {% macro sanitize_value(value) %}
@@ -652,8 +652,8 @@ actions:
               {{ out.clean | to_json }}
             {% endmacro %}
 
-            {# Save the previous state and attributes of the manual control light #}
-            {% if trigger_id == 'manual_off' and trigger.entity_id | default('') in light_entities %}
+            {# Save the previous state and attributes of the physical control light #}
+            {% if trigger_id == 'physical_off' and trigger.entity_id | default('') in light_entities %}
               {% set attrs = sanitize_mapping(trigger.from_state.attributes) | from_json %}
               {{ {trigger.entity_id: dict(attrs, state=trigger.from_state.state)} }}
             {% else %}
@@ -677,7 +677,7 @@ actions:
         and:
           - not:
               - condition: trigger
-                id: manual_off
+                id: physical_off
           - condition: state
             entity_id: !input occupancy_sensor
             state: "on"
@@ -695,7 +695,7 @@ actions:
         and:
           - not:
               - condition: trigger
-                id: manual_on
+                id: physical_on
           - condition: template
             value_template: "{{ is_light_on }}"
           - or:
@@ -784,7 +784,7 @@ actions:
         conditions:
           - or:
               - condition: trigger
-                id: manual_on
+                id: physical_on
               - *auto_lights_on_conditions
         sequence:
           - *lights_on_action
@@ -792,7 +792,7 @@ actions:
         conditions:
           - or:
               - condition: trigger
-                id: manual_off
+                id: physical_off
               - *auto_lights_off_conditions
         sequence:
           - *lights_off_action
@@ -812,7 +812,7 @@ actions:
       - alias: Turn off automatic control
         conditions:
           - condition: trigger
-            id: manual_off
+            id: physical_off
           - condition: template
             value_template: "{{ is_control_enabled }}"
           - condition: template
@@ -826,7 +826,7 @@ actions:
       - alias: Turn on automatic control
         conditions:
           - condition: trigger
-            id: manual_on
+            id: physical_on
           - condition: template
             value_template: "{{ not is_control_enabled }}"
         sequence:
