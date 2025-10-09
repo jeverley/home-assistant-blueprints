@@ -458,7 +458,7 @@ variables:
   is_cover_shading: |
     {{
       cover_position|int(100) < cover_shading_position|int(0)
-      or cover and cover_shading_when_closing and is_state(cover, 'closing') and states[cover].last_changed <= now() - as_timedelta(illuminance_minimum_duration)
+      or cover and cover_shading_when_closing and is_state(cover, 'closing') and states[cover].last_changed <= now() - timedelta(seconds=illuminance_minimum_duration)
     }}
   is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
   is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
