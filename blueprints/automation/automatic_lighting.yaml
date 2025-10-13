@@ -55,7 +55,7 @@ blueprint:
     automatic_control_toggle:
       name: Automatic control toggle (optional)
       description: A toggle/switch/binary sensor for enabling automatic lighting
-        control. If not provided, the automation will always be active.
+        control. If not provided, the automation will fall back to the occupancy sensor.
       default: []
       selector:
         entity:
@@ -496,7 +496,11 @@ variables:
   scene_expiration: |
     {{ as_timedelta(states(scene_timeout_helper)) if scene_timeout_helper is string else as_timedelta(scene_timeout) }}
   is_automatic_control_enabled: |
-    {{ not automatic_control_toggle or is_state(automatic_control_toggle, 'on') }}
+    {% if not automatic_control_toggle %}
+      {{ occupancy_sensor is string }}
+    {% else %}
+      {{ is_state(automatic_control_toggle, 'on') }}
+    {% endif %}
   is_cover_shading: |
     {{
       cover_position|int(100) < cover_shading_position|int(0)
@@ -736,9 +740,8 @@ actions:
           - not:
               - condition: trigger
                 id: physical_off
-          - alias: If a trigger or occupancy sensor is defined
-            condition: template
-            value_template: "{{ trigger_id != '' or occupancy_sensor is string }}"
+          - condition: template
+            value_template: "{{ is_automatic_control_enabled }}"
           - condition: state
             entity_id: !input occupancy_sensor
             state: "on"
@@ -757,6 +760,8 @@ actions:
           - not:
               - condition: trigger
                 id: physical_on
+          - condition: template
+            value_template: "{{ is_automatic_control_enabled }}"
           - condition: template
             value_template: "{{ is_light_on }}"
           - or:
