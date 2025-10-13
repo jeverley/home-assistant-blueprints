@@ -73,9 +73,7 @@ blueprint:
       input:
         transition_on:
           name: Lights on transition
-          description:
-            The default transition time for turning lights on. This helps in
-            providing a smooth lighting change experience.
+          description: The default transition time for turning lights on. This provides a smooth lighting change experience.
           default: 1
           selector:
             number:
@@ -86,9 +84,7 @@ blueprint:
               mode: slider
         transition_off:
           name: Lights off transition
-          description:
-            The default transition time for turning lights off. This helps
-            in providing a smooth lighting change experience.
+          description: The default transition time for turning lights off. This provides a smooth lighting change experience.
           default: 2
           selector:
             number:
@@ -97,14 +93,29 @@ blueprint:
               unit_of_measurement: s
               step: 1.0
               mode: slider
-        physical_control_transition:
-          name: Physical control transition (optional)
-          description: The transition time for lights triggered by physical control.
-          default: 1
+        illuminance_on_transition:
+          name: Illuminance lights on transition
+          description:
+            The transition time for turning on lights when illuminance falls below the minimum level.
+            This allows for a gradual adjustment of lighting based on ambient light levels.
+          default: 10
           selector:
             number:
               min: 0.0
-              max: 30.0
+              max: 60.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
+        illuminance_off_transition:
+          name: Illuminance lights off transition
+          description:
+            The transition time for turning on lights when illuminance rises above the maximum level.
+            This allows for a gradual adjustment of lighting based on ambient light levels.
+          default: 30
+          selector:
+            number:
+              min: 0.0
+              max: 60.0
               unit_of_measurement: s
               step: 1.0
               mode: slider
@@ -116,6 +127,28 @@ blueprint:
             number:
               min: 0.0
               max: 60.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
+        physical_control_transition:
+          name: Physical control transition (optional)
+          description: The transition time for lights triggered by physical control.
+          default: null
+          selector:
+            number:
+              min: 0.0
+              max: 30.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
+        physical_control_latency_compensation:
+          name: Physical control latency compensation (optional)
+          description: The transition time is reduced by this value for physically triggered changes.
+          default: 0
+          selector:
+            number:
+              min: 0.0
+              max: 5.0
               unit_of_measurement: s
               step: 1.0
               mode: slider
@@ -155,34 +188,6 @@ blueprint:
           default:
           selector:
             time: {}
-    scene_options:
-      name: Scene Restoration
-      icon: mdi:lamps
-      description:
-        Parameters for controlling scene restoration after someone re-enters
-        the area.
-      collapsed: true
-      input:
-        scene_timeout:
-          name: Scene timeout
-          description:
-            The duration after which a saved scene is not restored after
-            area re-entry.
-          default: 00:05:00
-          selector:
-            time: {}
-        scene_timeout_helper:
-          name: Scene timeout helper (optional)
-          description:
-            A time-only datetime entity for specifying scene timeout, if
-            defined this is used instead of the timeout parameter.
-          default:
-          selector:
-            entity:
-              multiple: false
-              filter:
-                - domain:
-                    - input_datetime
     illuminance_options:
       name: Illuminance
       icon: mdi:brightness-5
@@ -218,19 +223,6 @@ blueprint:
               unit_of_measurement: s
               step: 1.0
               mode: slider
-        illuminance_on_transition:
-          name: Illuminance lights on transition
-          description:
-            The transition time for turning on lights when illuminance falls below the minimum level.
-            This allows for a gradual adjustment of lighting based on ambient light levels.
-          default: 10
-          selector:
-            number:
-              min: 0.0
-              max: 60.0
-              unit_of_measurement: s
-              step: 1.0
-              mode: slider
         illuminance_maximum:
           name: Lights off illuminance
           description:
@@ -258,19 +250,34 @@ blueprint:
               unit_of_measurement: s
               step: 1.0
               mode: slider
-        illuminance_off_transition:
-          name: Illuminance lights off transition
+    scene_options:
+      name: Scene Restoration
+      icon: mdi:lamps
+      description:
+        Parameters for controlling scene restoration after someone re-enters
+        the area.
+      collapsed: true
+      input:
+        scene_timeout:
+          name: Scene timeout
           description:
-            The transition time for turning on lights when illuminance rises above the maximum level.
-            This allows for a gradual adjustment of lighting based on ambient light levels.
-          default: 30
+            The duration after which a saved scene is not restored after
+            area re-entry.
+          default: 00:05:00
           selector:
-            number:
-              min: 0.0
-              max: 60.0
-              unit_of_measurement: s
-              step: 1.0
-              mode: slider
+            time: {}
+        scene_timeout_helper:
+          name: Scene timeout helper (optional)
+          description:
+            A time-only datetime entity for specifying scene timeout, if
+            defined this is used instead of the timeout parameter.
+          default:
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - input_datetime
     cover_options:
       name: Cover Shading
       icon: mdi:roller-shade
@@ -408,6 +415,7 @@ trigger_variables:
   automatic_control_toggle: !input automatic_control_toggle
   physical_control_lights: !input physical_control_lights
   physical_control_transition: !input physical_control_transition
+  physical_control_latency_compensation: !input physical_control_latency_compensation
   is_control_toggleable: |
     {{ automatic_control_toggle is string and (automatic_control_toggle|contains('input_boolean.') or automatic_control_toggle|contains('switch.')) }}
   automatic_control_reset_duration: !input automatic_control_reset_duration
@@ -450,6 +458,8 @@ variables:
       {{ control_reset_transition }}
     {% elif trigger_id == 'physical_on' and physical_control_transition is not none %}
       {{ physical_control_transition }}
+    {% elif trigger_id == 'physical_on' and transition_on > 1 and physical_control_latency_compensation %}
+      {{ transition_on - physical_control_latency_compensation }}
     {% else %}
       {{ transition_on }}
     {% endif %}
@@ -458,6 +468,8 @@ variables:
       {{ illuminance_off_transition }}
     {% elif trigger_id == 'physical_off' and physical_control_transition is not none %}
       {{ physical_control_transition }}
+    {% elif trigger_id == 'physical_off' and transition_off > 1 and physical_control_latency_compensation %}
+      {{ transition_off - physical_control_latency_compensation }}
     {% else %}
       {{ transition_off }}
     {% endif %}
@@ -756,7 +768,7 @@ actions:
                 data:
                   transition: "{{ lights_on_transition }}"
                 target:
-                  entity_id: "{{ light_entities }}"
+                  entity_id: "{{ light_entities if trigger_id not in ['physical_off', 'physical_on'] else difference(light_entities, [trigger.entity_id]) }}"
           - *delete_saved_scene
 
       lights_off_action: &lights_off_action
@@ -788,7 +800,7 @@ actions:
                 data:
                   transition: "{{ lights_off_transition }}"
                 target:
-                  entity_id: "{{ light_entities }}"
+                  entity_id: "{{ light_entities if trigger_id not in ['physical_off', 'physical_on'] else difference(light_entities, [trigger.entity_id]) }}"
 
   - alias: Control lights
     choose:
