@@ -418,9 +418,11 @@ trigger_variables:
   physical_control_latency_compensation: !input physical_control_latency_compensation
   is_automatic_control_toggleable: |
     {{
-      occupancy_sensor is string
-      and automatic_control_toggle is string
-      and (automatic_control_toggle|contains('input_boolean.') or automatic_control_toggle|contains('switch.'))
+      automatic_control_toggle is string
+      and (
+        automatic_control_toggle | contains('input_boolean.')
+        or automatic_control_toggle | contains('switch.')
+      )
     }}
   automatic_control_reset_duration: !input automatic_control_reset_duration
   area_exit_control_reset_duration: !input area_exit_control_reset_duration
@@ -446,12 +448,24 @@ trigger_variables:
 variables:
   trigger_id: "{{ trigger.id | default('') | string }}"
   adaptive_lighting_entities: |
-    {{ integration_entities('adaptive_lighting') | select('in', area_entities(area)) | expand | selectattr('attributes.manual_control', 'defined') | map(attribute='entity_id') | list }}
+    {{ 
+      integration_entities('adaptive_lighting')
+      | select('in', area_entities(area))
+      | expand
+      | selectattr('attributes.manual_control', 'defined')
+      | map(attribute='entity_id') | list
+    }}
   light_entities: |
     {% if area_lights %}
       {{ area_lights }}
     {% else %}
-      {{ area_entities(area) | select('contains', 'light.') | reject('is_hidden_entity') | expand | map(attribute='entity_id') | list }}
+      {{
+        area_entities(area)
+        | select('contains', 'light.')
+        | reject('is_hidden_entity')
+        | expand
+        | map(attribute='entity_id') | list
+      }}
     {% endif %}
   is_trigger_control_reset: |
     {{ trigger_id | contains('control_reset') }}
@@ -486,7 +500,11 @@ variables:
   is_cover_shading: |
     {{
       cover_position|int(100) < cover_shading_position|int(0)
-      or (cover is string and cover_shading_when_closing and is_state(cover, 'closing') and states[cover].last_changed <= now() - timedelta(seconds=illuminance_minimum_duration))
+      or (
+        cover is string and cover_shading_when_closing
+        and is_state(cover, 'closing')
+        and states[cover].last_changed <= now() - timedelta(seconds=illuminance_minimum_duration)
+      )
     }}
   is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
   is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
@@ -503,7 +521,10 @@ variables:
     }}
   is_scene_saved: "{{ states[scene_entity].state is defined }}"
   is_scene_expired: |
-    {{ is_scene_saved and states[scene_entity].last_updated is defined and states[scene_entity].last_updated < now() - as_timedelta(scene_expiration) }}
+    {{
+      is_scene_saved and states[scene_entity].last_updated is defined
+      and states[scene_entity].last_updated < now() - as_timedelta(scene_expiration)
+    }}
 
 trigger:
   - trigger: state
@@ -566,13 +587,23 @@ trigger:
     to: "off"
     for: !input automatic_control_reset_duration
     id: control_reset
-    enabled: "{{ is_automatic_control_toggleable and automatic_control_reset_duration not in [none, '00:00:00'] }}"
+    enabled: |
+      {{
+        is_automatic_control_toggleable
+        and automatic_control_reset_duration not in [none, '00:00:00', '00:00']
+      }}
   - trigger: state
     entity_id: !input occupancy_sensor
     to: "off"
     for: !input area_exit_control_reset_duration
     id: area_exit_control_reset
-    enabled: "{{ is_automatic_control_toggleable and physical_control_lights and area_exit_control_reset_duration not in [none, '00:00:00'] }}"
+    enabled: |
+      {{
+        is_automatic_control_toggleable
+        and area_exit_control_reset_duration not in [none, '00:00:00', '00:00']
+        and occupancy_sensor
+        and physical_control_lights
+      }}
   - trigger: state
     entity_id: !input routine_sensor
     to: !input control_reset_trigger_routine_states
@@ -705,6 +736,9 @@ actions:
           - not:
               - condition: trigger
                 id: physical_off
+          - alias: If a trigger or occupancy sensor is defined
+            condition: template
+            value_template: "{{ trigger_id != '' or occupancy_sensor is string }}"
           - condition: state
             entity_id: !input occupancy_sensor
             state: "on"
@@ -845,7 +879,7 @@ actions:
           - condition: template
             value_template: "{{ is_automatic_control_toggleable and is_automatic_control_enabled }}"
           - condition: template
-            value_template: "{{ is_occupied }}"
+            value_template: "{{ is_occupied or not occupancy_sensor }}"
         sequence:
           - action: homeassistant.turn_off
             metadata: {}
