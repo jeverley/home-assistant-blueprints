@@ -13,9 +13,10 @@ blueprint:
         area:
           multiple: false
     occupancy_sensor:
-      name: Occupancy sensor
+      name: Occupancy sensor (optional)
       description: The occupancy sensor that detects presence in the area.
         This can be a binary sensor with device class occupancy, presence, or motion.
+      default: []
       selector:
         entity:
           multiple: false
@@ -26,84 +27,6 @@ blueprint:
                 - occupancy
                 - presence
                 - motion
-    area_occupied_delay:
-      name: Area occupied delay
-      description: The duration to wait before considering the area occupied.
-      default: 0
-      selector:
-        number:
-          min: 0.0
-          max: 120.0
-          unit_of_measurement: s
-          step: 1.0
-          mode: slider
-    area_unoccupied_delay:
-      name: Area unoccupied delay
-      description: The duration to wait before considering the area unoccupied.
-      default: 60
-      selector:
-        number:
-          min: 0.0
-          max: 120.0
-          unit_of_measurement: s
-          step: 1.0
-          mode: slider
-    transition_on:
-      name: Lights on transition
-      description:
-        The default transition time for turning lights on. This helps in
-        providing a smooth lighting change experience.
-      default: 1
-      selector:
-        number:
-          min: 0.0
-          max: 30.0
-          unit_of_measurement: s
-          step: 1.0
-          mode: slider
-    transition_off:
-      name: Lights off transition
-      description:
-        The default transition time for turning lights off. This helps
-        in providing a smooth lighting change experience.
-      default: 2
-      selector:
-        number:
-          min: 0.0
-          max: 30.0
-          unit_of_measurement: s
-          step: 1.0
-          mode: slider
-    automatic_control_toggle:
-      name: Automatic control toggle (optional)
-      description: A toggle/switch/binary sensor for enabling automatic lighting
-        control. If not provided, the automation will always be active.
-      default: []
-      selector:
-        entity:
-          multiple: false
-          filter:
-            - domain:
-                - input_boolean
-                - switch
-                - binary_sensor
-    automatic_control_reset_duration:
-      name: Automatic control reset (optional)
-      description: The duration after which the automatic control will be re-enabled.
-      default: 04:00:00
-      selector:
-        time: {}
-    control_reset_transition:
-      name: Control reset transition (optional)
-      description: The transition time for lights when control is reset.
-      default: 10
-      selector:
-        number:
-          min: 0.0
-          max: 60.0
-          unit_of_measurement: s
-          step: 1.0
-          mode: slider
     physical_control_lights:
       name: Physical control lights (optional)
       description:
@@ -117,65 +40,121 @@ blueprint:
           filter:
             - domain:
                 - light
-    physical_control_transition:
-      name: Physical control transition (optional)
-      description: The transition time for lights triggered by physical control.
-      default: 1
+    illuminance_sensor:
+      name: Illuminance sensor (optional)
+      description: The illuminance sensor that measures light levels in the area.
+      default: []
       selector:
-        number:
-          min: 0.0
-          max: 30.0
-          unit_of_measurement: s
-          step: 1.0
-          mode: slider
-    area_exit_control_reset_duration:
-      name: Area exit control reset duration (optional)
-      description:
-        Re-enable control if the area was unoccupied for this duration
-        after the lights were physically turned off
-      default:
+        entity:
+          multiple: false
+          filter:
+            - domain:
+                - sensor
+              device_class:
+                - illuminance
+    automatic_control_toggle:
+      name: Automatic control toggle (optional)
+      description: A toggle/switch/binary sensor for enabling automatic lighting
+        control. If not provided, the automation will always be active.
+      default: []
       selector:
-        time: {}
-    advanced_options:
-      name: Advanced Options
-      icon: mdi:cog
-      description: Advanced configuration for controlling lights behaviour.
+        entity:
+          multiple: false
+          filter:
+            - domain:
+                - input_boolean
+                - switch
+                - binary_sensor
+    transition_options:
+      name: Transition
+      icon: mdi:timer-cog-outline
+      description: Parameters for controlling lights with area occupancy.
       collapsed: true
       input:
-        area_lights:
-          name: Area lights override (optional)
-          description: Specify which lights should be controlled in the area.
-          default: []
-          selector:
-            entity:
-              multiple: true
-              filter:
-                - domain:
-                    - light
-        lights_on_scene:
-          name: Lights on scene (optional)
+        transition_on:
+          name: Lights on transition
           description:
-            A scene can be activated instead of turning on the area's lights.
-            This can be used to apply specific lighting conditions.
+            The default transition time for turning lights on. This helps in
+            providing a smooth lighting change experience.
+          default: 1
+          selector:
+            number:
+              min: 0.0
+              max: 30.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
+        transition_off:
+          name: Lights off transition
+          description:
+            The default transition time for turning lights off. This helps
+            in providing a smooth lighting change experience.
+          default: 2
+          selector:
+            number:
+              min: 0.0
+              max: 30.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
+        physical_control_transition:
+          name: Physical control transition (optional)
+          description: The transition time for lights triggered by physical control.
+          default: 1
+          selector:
+            number:
+              min: 0.0
+              max: 30.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
+        control_reset_transition:
+          name: Control reset transition (optional)
+          description: The transition time for lights when control is reset.
+          default: 10
+          selector:
+            number:
+              min: 0.0
+              max: 60.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
+    occupancy_options:
+      name: Occupancy
+      icon: mdi:motion-sensor
+      description: Parameters for controlling lights with area occupancy.
+      collapsed: true
+      input:
+        area_occupied_delay:
+          name: Area occupied delay
+          description: The duration to wait before considering the area occupied.
+          default: 0
+          selector:
+            number:
+              min: 0.0
+              max: 120.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
+        area_unoccupied_delay:
+          name: Area unoccupied delay
+          description: The duration to wait before considering the area unoccupied.
+          default: 60
+          selector:
+            number:
+              min: 0.0
+              max: 120.0
+              unit_of_measurement: s
+              step: 1.0
+              mode: slider
+        area_exit_control_reset_duration:
+          name: Area exit control reset duration (optional)
+          description:
+            Re-enable control if the area was unoccupied for this duration
+            after the lights were physically turned off
           default:
           selector:
-            entity:
-              multiple: false
-              filter:
-                - domain:
-                    - scene
-        lights_off_scene:
-          name: Lights off scene (optional)
-          description:
-            A scene can be activated instead of turning off the area's lights.
-            This can be used to apply specific lighting conditions.
-          default:
-          selector:
-            entity:
-              multiple: false
-              filter:
-                - domain:
-                    - scene
+            time: {}
     scene_options:
       name: Scene Restoration
       icon: mdi:lamps
@@ -205,25 +184,13 @@ blueprint:
                 - domain:
                     - input_datetime
     illuminance_options:
-      name: Illuminance Options
+      name: Illuminance
       icon: mdi:brightness-5
       description:
         Optional parameters for using illuminance state to influence lighting
         control.
       collapsed: true
       input:
-        illuminance_sensor:
-          name: Illuminance sensor (optional)
-          description: The illuminance sensor that measures light levels in the area.
-          default: []
-          selector:
-            entity:
-              multiple: false
-              filter:
-                - domain:
-                    - sensor
-                  device_class:
-                    - illuminance
         illuminance_minimum:
           name: Lights on illuminance
           description:
@@ -305,7 +272,7 @@ blueprint:
               step: 1.0
               mode: slider
     cover_options:
-      name: Cover Shading Options
+      name: Cover Shading
       icon: mdi:roller-shade
       description:
         Optional parameters for using cover state to influence lighting
@@ -344,7 +311,7 @@ blueprint:
           selector:
             boolean:
     routine_options:
-      name: Routine Options
+      name: Routine
       icon: mdi:clock-fast
       description:
         Optional parameters for using routine state to influence lighting
@@ -382,6 +349,52 @@ blueprint:
             text:
               multiple: true
               multiline: false
+    advanced_settings:
+      name: Advanced Settings
+      icon: mdi:cog
+      description: Advanced configuration for controlling lights behaviour.
+      collapsed: true
+      input:
+        area_lights:
+          name: Area lights override (optional)
+          description: Specify which lights should be controlled in the area.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain:
+                    - light
+        lights_on_scene:
+          name: Lights on scene (optional)
+          description:
+            A scene can be activated instead of turning on the area's lights.
+            This can be used to apply specific lighting conditions.
+          default:
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - scene
+        lights_off_scene:
+          name: Lights off scene (optional)
+          description:
+            A scene can be activated instead of turning off the area's lights.
+            This can be used to apply specific lighting conditions.
+          default:
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - scene
+        automatic_control_reset_duration:
+          name: Automatic control reset (optional)
+          description: The duration after which the automatic control will be re-enabled.
+          default: 04:00:00
+          selector:
+            time: {}
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/automatic_lighting.yaml
 
 trigger_variables:
