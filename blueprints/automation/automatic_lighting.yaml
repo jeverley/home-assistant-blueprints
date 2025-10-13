@@ -185,7 +185,7 @@ blueprint:
           description:
             Re-enable control if the area was unoccupied for this duration
             after the lights were physically turned off
-          default:
+          default: "00:00:00"
           selector:
             time: {}
     illuminance_options:
@@ -250,36 +250,8 @@ blueprint:
               unit_of_measurement: s
               step: 1.0
               mode: slider
-    scene_options:
-      name: Scene Restoration
-      icon: mdi:lamps
-      description:
-        Parameters for controlling scene restoration after someone re-enters
-        the area.
-      collapsed: true
-      input:
-        scene_timeout:
-          name: Scene timeout
-          description:
-            The duration after which a saved scene is not restored after
-            area re-entry.
-          default: 00:05:00
-          selector:
-            time: {}
-        scene_timeout_helper:
-          name: Scene timeout helper (optional)
-          description:
-            A time-only datetime entity for specifying scene timeout, if
-            defined this is used instead of the timeout parameter.
-          default:
-          selector:
-            entity:
-              multiple: false
-              filter:
-                - domain:
-                    - input_datetime
     cover_options:
-      name: Cover Shading
+      name: Cover
       icon: mdi:roller-shade
       description:
         Optional parameters for using cover state to influence lighting
@@ -317,6 +289,34 @@ blueprint:
           default: false
           selector:
             boolean:
+    scene_options:
+      name: Scene Restoration
+      icon: mdi:lamps
+      description:
+        Parameters for controlling scene restoration after someone re-enters
+        the area.
+      collapsed: true
+      input:
+        scene_timeout:
+          name: Scene timeout
+          description:
+            The duration after which a saved scene is not restored after
+            area re-entry.
+          default: 00:05:00
+          selector:
+            time: {}
+        scene_timeout_helper:
+          name: Scene timeout helper (optional)
+          description:
+            A time-only datetime entity for specifying scene timeout, if
+            defined this is used instead of the timeout parameter.
+          default: []
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - input_datetime
     routine_options:
       name: Routine
       icon: mdi:clock-fast
@@ -330,7 +330,7 @@ blueprint:
           description:
             A sensor/select entity which determines the current routine
             (e.g. waking, awake, bedtime, sleep).
-          default:
+          default: []
           selector:
             entity:
               multiple: false
@@ -377,7 +377,7 @@ blueprint:
           description:
             A scene can be activated instead of turning on the area's lights.
             This can be used to apply specific lighting conditions.
-          default:
+          default: []
           selector:
             entity:
               multiple: false
@@ -389,7 +389,7 @@ blueprint:
           description:
             A scene can be activated instead of turning off the area's lights.
             This can be used to apply specific lighting conditions.
-          default:
+          default: []
           selector:
             entity:
               multiple: false
@@ -416,8 +416,8 @@ trigger_variables:
   physical_control_lights: !input physical_control_lights
   physical_control_transition: !input physical_control_transition
   physical_control_latency_compensation: !input physical_control_latency_compensation
-  is_control_toggleable: |
-    {{ automatic_control_toggle is string and (automatic_control_toggle|contains('input_boolean.') or automatic_control_toggle|contains('switch.')) }}
+  is_automatic_control_toggleable: |
+    {{ occupancy_sensor is string and automatic_control_toggle is string and (automatic_control_toggle|contains('input_boolean.') or automatic_control_toggle|contains('switch.')) }}
   automatic_control_reset_duration: !input automatic_control_reset_duration
   area_exit_control_reset_duration: !input area_exit_control_reset_duration
   scene_id: "{{ area + '_saved' }}"
@@ -449,12 +449,12 @@ variables:
     {% else %}
       {{ area_entities(area) | select('contains', 'light.') | reject('is_hidden_entity') | expand | map(attribute='entity_id') | list }}
     {% endif %}
-  is_control_reset: |
+  is_trigger_control_reset: |
     {{ trigger_id | contains('control_reset') }}
   lights_on_transition: |
     {% if trigger_id == 'illuminance' and illuminance_on_transition is not none %}
       {{ illuminance_on_transition }}
-    {% elif is_control_reset and control_reset_transition is not none %}
+    {% elif is_trigger_control_reset and control_reset_transition is not none %}
       {{ control_reset_transition }}
     {% elif trigger_id == 'physical_on' and physical_control_transition is not none %}
       {{ physical_control_transition }}
@@ -477,7 +477,7 @@ variables:
   illuminance: "{{ states(illuminance_sensor)|int(none) if illuminance_sensor else none }}"
   scene_expiration: |
     {{ as_timedelta(states(scene_timeout_helper)) or as_timedelta(scene_timeout) }}
-  is_control_enabled: |
+  is_automatic_control_enabled: |
     {{ not automatic_control_toggle or is_state(automatic_control_toggle, 'on') }}
   is_cover_shading: |
     {{
@@ -562,18 +562,18 @@ trigger:
     to: "off"
     for: !input automatic_control_reset_duration
     id: control_reset
-    enabled: "{{ is_control_toggleable and automatic_control_reset_duration not in [none, '00:00:00'] }}"
+    enabled: "{{ is_automatic_control_toggleable and automatic_control_reset_duration not in [none, '00:00:00'] }}"
   - trigger: state
     entity_id: !input occupancy_sensor
     to: "off"
     for: !input area_exit_control_reset_duration
     id: area_exit_control_reset
-    enabled: "{{ is_control_toggleable and physical_control_lights and area_exit_control_reset_duration not in [none, '00:00:00'] }}"
+    enabled: "{{ is_automatic_control_toggleable and physical_control_lights and area_exit_control_reset_duration not in [none, '00:00:00'] }}"
   - trigger: state
     entity_id: !input routine_sensor
     to: !input control_reset_trigger_routine_states
     id: routine_control_reset
-    enabled: "{{ is_control_toggleable }}"
+    enabled: "{{ is_automatic_control_toggleable }}"
 
 condition:
   - condition: state
@@ -589,7 +589,7 @@ condition:
               - illuminance
               - occupancy
           - condition: template
-            value_template: "{{ is_control_enabled }}"
+            value_template: "{{ is_automatic_control_enabled }}"
       - and:
           - condition: trigger
             id:
@@ -599,7 +599,7 @@ condition:
             value_template: "{{ this.attributes.current == 0 }}"
       - and:
           - condition: template
-            value_template: "{{ is_control_reset }}"
+            value_template: "{{ is_trigger_control_reset }}"
           - or:
               - alias: If there are no routine restrictions
                 condition: template
@@ -621,7 +621,7 @@ condition:
                   {% set physical_control_off_time = (expand(physical_control_lights) | selectattr('state', 'eq', 'off') | sort(attribute='last_changed') | last | default({'last_changed': none})).last_changed %}
                   {{
                     physical_control_off_time
-                    and not is_control_enabled
+                    and not is_automatic_control_enabled
                     and not is_occupied
                     and states[occupancy_sensor].last_changed > states[automatic_control_toggle].last_changed >= physical_control_off_time
                   }}
@@ -754,7 +754,7 @@ actions:
               - alias: A scene is used to turn on the lights
                 conditions:
                   - condition: template
-                    value_template: "{{ lights_on_scene is not none }}"
+                    value_template: "{{ lights_on_scene is string }}"
                 sequence:
                   - action: scene.turn_on
                     metadata: {}
@@ -786,7 +786,7 @@ actions:
               - alias: A scene is used to turn off the lights
                 conditions:
                   - condition: template
-                    value_template: "{{ lights_off_scene is not none }}"
+                    value_template: "{{ lights_off_scene is string }}"
                 sequence:
                   - action: scene.turn_on
                     metadata: {}
@@ -826,7 +826,9 @@ actions:
       - alias: Automatic control toggle reset
         conditions:
           - condition: template
-            value_template: "{{ is_control_reset }}"
+            value_template: "{{ is_trigger_control_reset }}"
+          - condition: template
+            value_template: "{{ is_automatic_control_toggleable }}"
         sequence:
           - action: homeassistant.turn_on
             metadata: {}
@@ -838,7 +840,7 @@ actions:
           - condition: trigger
             id: physical_off
           - condition: template
-            value_template: "{{ is_control_enabled }}"
+            value_template: "{{ is_automatic_control_toggleable and is_automatic_control_enabled }}"
           - condition: template
             value_template: "{{ is_occupied }}"
         sequence:
@@ -852,7 +854,7 @@ actions:
           - condition: trigger
             id: physical_on
           - condition: template
-            value_template: "{{ not is_control_enabled }}"
+            value_template: "{{ is_automatic_control_toggleable and not is_automatic_control_enabled }}"
         sequence:
           - action: homeassistant.turn_on
             metadata: {}
