@@ -496,8 +496,9 @@ variables:
   scene_expiration: |
     {{ as_timedelta(states(scene_timeout_helper)) if scene_timeout_helper is string else as_timedelta(scene_timeout) }}
   is_automatic_control_enabled: |
+    {# Fall back to occupancy sensor if no toggle is configured #}
     {% if not automatic_control_toggle %}
-      {{ occupancy_sensor is string }}
+      {{ occupancy_sensor is string and has_value(occupancy_sensor) }}
     {% else %}
       {{ is_state(automatic_control_toggle, 'on') }}
     {% endif %}
