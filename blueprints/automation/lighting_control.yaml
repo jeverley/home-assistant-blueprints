@@ -8,7 +8,7 @@ blueprint:
   input:
     area:
       name: Area
-      description: This is used to determine which lights to control.
+      description: Determines which lights will be controlled, hidden lights are excluded. This can be overridden in Advanced Settings.
       selector:
         area:
           multiple: false
