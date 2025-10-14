@@ -1,5 +1,5 @@
 blueprint:
-  name: Automatic lights control
+  name: Lighting control
   description: |
     Controls lighting based on occupancy, illuminance, and physical activity. 
     Supports restoration of lighting conditions after the area is unoccupied. Designed
@@ -402,7 +402,7 @@ blueprint:
           default: 04:00:00
           selector:
             time: {}
-  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/automatic_lighting.yaml
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/lighting_control.yaml
 
 trigger_variables:
   area: !input area
