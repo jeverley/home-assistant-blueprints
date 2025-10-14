@@ -419,6 +419,7 @@ trigger_variables:
   is_automatic_control_toggleable: |
     {{
       automatic_control_toggle is string
+      and not not physical_control_lights
       and (
         automatic_control_toggle | contains('input_boolean.')
         or automatic_control_toggle | contains('switch.')
@@ -595,6 +596,7 @@ trigger:
     enabled: |
       {{
         is_automatic_control_toggleable
+        and occupancy_sensor is string
         and automatic_control_reset_duration not in [none, '00:00:00', '00:00']
       }}
   - trigger: state
@@ -605,15 +607,14 @@ trigger:
     enabled: |
       {{
         is_automatic_control_toggleable
+        and occupancy_sensor is string
         and area_exit_control_reset_duration not in [none, '00:00:00', '00:00']
-        and occupancy_sensor
-        and physical_control_lights
       }}
   - trigger: state
     entity_id: !input routine_sensor
     to: !input control_reset_trigger_routine_states
     id: routine_control_reset
-    enabled: "{{ is_automatic_control_toggleable }}"
+    enabled: "{{ is_automatic_control_toggleable and occupancy_sensor is string }}"
 
 condition:
   - condition: state
