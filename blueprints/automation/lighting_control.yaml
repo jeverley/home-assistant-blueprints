@@ -12,27 +12,11 @@ blueprint:
       selector:
         area:
           multiple: false
-    occupancy_sensor:
-      name: Occupancy sensor (optional)
-      description: The occupancy sensor that detects presence in the area.
-        This can be a binary sensor with device class occupancy, presence, or motion.
-      default: []
-      selector:
-        entity:
-          multiple: false
-          filter:
-            - domain:
-                - binary_sensor
-              device_class:
-                - occupancy
-                - presence
-                - motion
     physical_control_lights:
       name: Physical control lights (optional)
       description:
-        Physical control of these lights will pause/resume automatic control
-        if the room is occupied, this requires the automatic control toggle to be
-        an input_boolean or switch entity.
+        Physical control of these lights will turn on/off the area's lights.
+        If an automatic control toggle is specified this action also toggles automatic control.
       default: []
       selector:
         entity:
@@ -40,31 +24,52 @@ blueprint:
           filter:
             - domain:
                 - light
-    illuminance_sensor:
-      name: Illuminance sensor (optional)
-      description: The illuminance sensor that measures light levels in the area.
-      default: []
-      selector:
-        entity:
-          multiple: false
-          filter:
-            - domain:
-                - sensor
-              device_class:
-                - illuminance
-    automatic_control_toggle:
-      name: Automatic control toggle (optional)
-      description: A toggle/switch/binary sensor for enabling automatic lighting
-        control. If not provided, the automation will fall back to the occupancy sensor.
-      default: []
-      selector:
-        entity:
-          multiple: false
-          filter:
-            - domain:
-                - input_boolean
-                - switch
-                - binary_sensor
+    automatic_control:
+      name: Automatic Control
+      icon: mdi:lightbulb-auto
+      collapsed: true
+      input:
+        occupancy_sensor:
+          name: Occupancy sensor (optional)
+          description: The occupancy sensor that detects presence in the area.
+            This can be a binary sensor with device class occupancy, presence, or motion.
+          default: []
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - binary_sensor
+                  device_class:
+                    - occupancy
+                    - presence
+                    - motion
+        illuminance_sensor:
+          name: Illuminance sensor (optional)
+          description: The illuminance sensor that measures light levels in the area.
+          default: []
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - sensor
+                  device_class:
+                    - illuminance
+        automatic_control_toggle:
+          name: Automatic control toggle (optional)
+          description:
+            A toggle/switch/binary sensor for enabling automatic lighting
+            control. If not provided, the automation will fall back to the occupancy sensor.
+          default: []
+          selector:
+            entity:
+              multiple: false
+              filter:
+                - domain:
+                    - input_boolean
+                    - switch
+                    - binary_sensor
     transition_options:
       name: Transition
       icon: mdi:timer-cog-outline
