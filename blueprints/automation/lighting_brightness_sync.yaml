@@ -1,0 +1,144 @@
+blueprint:
+  name: Lighting Brightness Sync
+  description: Synchronize brightness of child lights based on a parent light's brightness changes
+  domain: automation
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/lighting_brightness_sync.yaml
+  input:
+    parent_light:
+      name: Parent light
+      description: The light whose brightness changes will trigger the sync
+      selector:
+        entity:
+          multiple: false
+          filter:
+            - domain:
+                - light
+    parent_min_pct:
+      name: Minimum brightness %
+      description: Minimum brightness percentage for the parent light range
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 100
+          unit_of_measurement: "%"
+    parent_max_pct:
+      name: Maximum brightness %
+      description: Maximum brightness percentage for the parent light range
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 100
+          unit_of_measurement: "%"
+    ignore_internal_changes:
+      name: Ignore internal changes
+      description: |
+        If enabled, changes to the parent light's brightness made within Home Assistant (e.g., automations, scripts) will be ignored.
+      default: true
+      selector:
+        boolean:
+    child_lights:
+      name: Child lights configuration
+      description: |
+        Configure child lights with their brightness ranges, maximum brightness must be greater than minimum brightness.
+      selector:
+        object:
+          label_field: light
+          multiple: true
+          fields:
+            light:
+              label: Child light
+              selector:
+                entity:
+                  multiple: false
+                  filter:
+                    - domain:
+                        - light
+            min_pct:
+              label: Minimum brightness
+              selector:
+                number:
+                  min: 1
+                  max: 100
+                  unit_of_measurement: "%"
+            max_pct:
+              label: Maximum brightness
+              selector:
+                number:
+                  min: 1
+                  max: 100
+                  unit_of_measurement: "%"
+
+triggers:
+  - trigger: state
+    entity_id: !input parent_light
+    attribute: brightness
+
+conditions:
+  - alias: If the to_state brightness is > 0 and the light was already on
+    condition: template
+    value_template: |-
+      {{
+        trigger.to_state.attributes.brightness|default(0) > 0
+        and trigger.from_state.state == 'on'
+      }}
+  - alias: If the state was changed by an external action
+    condition: template
+    value_template: >
+      {# Excludes any state changes that were instigated within Home Assistant
+      (i.e. Dashboards, Automations, Adaptive Lighting). #}
+
+      {{
+        trigger.to_state.context.user_id is none
+        and (
+          trigger.to_state.context.parent_id is none
+          and trigger.to_state.context.id is not search(':al:.*:.*:')
+        )
+      }}
+
+actions:
+  - variables:
+      parent_light: !input parent_light
+      parent_min_pct: !input parent_min_pct
+      parent_max_pct: !input parent_max_pct
+      child_lights: !input child_lights
+    alias: Config variables
+  - variables:
+      parent_brightness: |
+        {{ int(trigger.to_state.attributes.brightness|default(none), 0) }}
+      parent_brightness_adjusted: |
+        {% set min_b = (parent_min_pct|default(1) * 2.54)|round %}
+        {% set max_b = (parent_max_pct|default(100) * 2.54)|round %}
+        {% set range = max_b - min_b %}
+        {{ min(max(parent_brightness - min_b, 1) * 254 / range, 255) | round }}
+      child_target_brightness: |
+        {% set ns = namespace(targets={}) %}
+        {% for config in child_lights %}
+          {% set min_b = (config.min_pct|default(1) * 2.54)|round %}
+          {% set max_b = (config.max_pct|default(100) * 2.54)|round %}
+          {% set range = max_b - min_b %}
+          {% set target = max((parent_brightness_adjusted * range / 254) + min_b, min_b) | round %}
+          {% if int(state_attr(config.light, 'brightness'), 0) > 0 %}
+            {% set ns.targets = dict(ns.targets, **{config.light: target}) %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.targets }}
+      scene_entities: |
+        {% set ns = namespace(scene_entities={}) %}
+        {% for light, brightness in child_target_brightness.items() %}
+          {% set ns.scene_entities = dict(ns.scene_entities, **{light: {'state': 'on', 'brightness': brightness}}) %}
+        {% endfor %}
+        {{ ns.scene_entities }}
+  - if:
+      - alias: If a target scene is defined
+        condition: template
+        value_template: "{{ scene_entities | length > 0 }}"
+    then:
+      - action: scene.apply
+        metadata: {}
+        data:
+          entities: "{{ scene_entities }}"
+          transition: 0
+
+mode: restart
