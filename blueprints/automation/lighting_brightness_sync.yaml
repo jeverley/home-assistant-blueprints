@@ -80,7 +80,7 @@ conditions:
     condition: template
     value_template: |-
       {{
-        trigger.to_state.attributes.brightness|default(0) > 0
+        int(trigger.to_state.attributes.brightness|default(none), 0) > 0
         and trigger.from_state.state == 'on'
       }}
   - alias: If the state was changed by an external action
