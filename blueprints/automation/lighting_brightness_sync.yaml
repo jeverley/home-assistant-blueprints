@@ -85,6 +85,7 @@ conditions:
       }}
   - alias: If the state was changed by an external action
     condition: template
+    enabled: !input ignore_internal_changes
     value_template: >
       {# Excludes any state changes that were instigated within Home Assistant
       (i.e. Dashboards, Automations, Adaptive Lighting). #}
