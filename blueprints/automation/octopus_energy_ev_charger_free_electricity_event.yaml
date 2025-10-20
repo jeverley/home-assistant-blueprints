@@ -124,9 +124,20 @@ trigger_variables:
   pp_last_message_sensor: !input pp_last_message_sensor
   pp_override_end_sensor: !input pp_override_end_sensor
   pp_interval_minutes: !input pp_interval_minutes
+  last_update_sensor: |
+    {% if charger_type == 'PodPoint' %}
+    {{ pp_last_message_sensor }}
+    {% endif %}
+  update_interval: |
+    {% if charger_type == 'PodPoint' %}
+    {{ timedelta(minutes=pp_interval_minutes) }}
+    {% endif %}
+  charge_speed_kwh: |
+    {% if charger_type == 'PodPoint' %}
+    {{ pp_charge_speed_kwh }}
+    {% endif %}
 
 variables:
-  update_interval: "{{ timedelta(minutes=pp_interval_minutes) }}"
   min_duration: "{{ timedelta(seconds=min_duration_seconds) }}"
   end_offset: "{{ timedelta(seconds=end_offset_seconds) }}"
   event_end: |
@@ -142,32 +153,31 @@ triggers:
     value_template: >-
       {% set start = as_datetime(state_attr(event_calendar, 'start_time'), none) %}
       {% set current_kwh_cost = float(states(current_rate_sensor), none) %}
-      {% set ev_last_update = as_datetime(states(last_message_sensor)) %}
+      {% set charger_last_update = as_datetime(states(last_update_sensor), none) if last_update_sensor else none %}
 
       {% if not start %}
         {{ false }}
       {% elif start <= now() %}
         {{ true }}
-      {% elif ev_last_update and current_kwh_cost is not none %}
-        {% set ev_update_1 = ev_last_update + ev_interval %}
-        {% set ev_update_2 = ev_last_update + ev_interval * 2 %}
+      {% elif charger_last_update and current_kwh_cost is not none and charge_speed_kwh is not none %}
+        {% set ev_update_1 = charger_last_update + update_interval %}
+        {% set ev_update_2 = charger_last_update + update_interval * 2 %}
 
         {% if ev_update_1 < start < ev_update_2 %}
           {% set next_kwh_cost = float(states(next_rate_sensor), none) %}
           {% set min_kwh_cost = min(current_kwh_cost, next_kwh_cost) if next_kwh_cost is not none else current_kwh_cost %}
           {% set missed_time = ev_update_2 - start %}
-          {% set missed_kwh = missed_time.total_seconds() / 3600 * pp_charge_speed_kwh %}
+          {% set missed_kwh = missed_time.total_seconds() / 3600 * charge_speed_kwh %}
           {% set missed_min_cost = missed_kwh * min_kwh_cost %}
           {% set early_time = start - ev_update_1 %}
-          {% set early_kwh = early_time.total_seconds() / 3600 * pp_charge_speed_kwh %}
+          {% set early_kwh = early_time.total_seconds() / 3600 * charge_speed_kwh %}
           {% set early_cost = early_kwh * current_kwh_cost %}
           {{ early_cost < missed_min_cost }}
         {% else %}
           {{ false }}
         {% endif %}
       {% endif %}
-    enabled: "{{ charger_type == 'PodPoint' }}"
-  - alias: Schedule mode change trigger
+  - alias: PodPoint Schedule mode change
     id: ModeChange
     platform: state
     entity_id: !input pp_charge_mode_sensor
