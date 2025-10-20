@@ -59,7 +59,9 @@ trigger_variables:
 
 variables:
   trigger_entity_ids: |
-    {% if trigger.to_state is defined %}
+    {% if trigger is not defined %}
+    {{ [] }}
+    {% elif trigger.to_state is defined %}
       {# Single entity_id from state change trigger #}
       {{ [trigger.to_state.entity_id] }}
     {% else %}
