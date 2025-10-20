@@ -58,6 +58,14 @@ trigger_variables:
     {{ global.dict }}
 
 variables:
+  trigger_time: |
+    {% if trigger.event is defined %}
+    {{ trigger.event.time_fired }}
+    {% elif trigger.to_state is defined %}
+    {{ trigger.to_state.last_changed }}
+    {% else %}
+    {{ now() }}
+    {% endif %}
   trigger_entity_ids: |
     {% if trigger.to_state is defined %}
       {# Single entity_id from state change trigger #}
@@ -102,6 +110,8 @@ variables:
   brightness: |
     {% if trigger.to_state is defined %}
       {{ trigger.to_state.attributes.brightness|int(none) }}
+    {% elif trigger.event is not defined %}
+      {{ none }}
     {% elif trigger.event.data.service_data.brightness is defined %}
       {{ trigger.event.data.service_data.brightness|int(none) }}
     {% elif trigger.event.data.service_data.brightness_pct|default(none) is not none %}
@@ -121,11 +131,13 @@ variables:
     {{ 0 }}
     {% endif %}
   context_id: |
-    {{
-      trigger.event.context.id
-      if trigger.event is defined
-      else trigger.to_state.context.id
-    }}
+    {% if trigger.event is defined %}
+    {{ trigger.event.context.id }}
+    {% elif trigger.to_state is defined %}
+    {{ trigger.to_state.context.id }}
+    {% else %}
+    {{ '' }}
+    {% endif %}
   is_adaptive: |
     {{ context_id is search(':al:.*:.*:') }}
 
@@ -218,7 +230,7 @@ actions:
     then:
       - alias: Wait for the target states to update
         wait_template: |
-          {{ expand(entity_ids) | map(attribute='last_changed') | sort | first > trigger.event.time_fired }}
+          {{ expand(entity_ids) | map(attribute='last_changed') | sort | first > as_datetime(trigger_time) }}
         continue_on_timeout: true
         timeout: "00:00:01"
 
@@ -232,7 +244,7 @@ actions:
         {% endfor %}
         {{ global.brightness }}
       transition_remaining: |
-        {{ (timedelta(seconds=transition) - (now() - trigger.event.time_fired)).total_seconds() }}
+        {{ (timedelta(seconds=transition) - (now() - as_datetime(trigger_time))).total_seconds() }}
       transition_pct: |
         {{ min(1 - transition_remaining / transition, 1) if transition > 0 else 1 }}
       entity_ids: |
@@ -291,7 +303,7 @@ actions:
   - alias: Apply interim brightness to resume transition
     variables:
       transition_remaining: |
-        {{ (timedelta(seconds=transition) - (now() - trigger.event.time_fired)).total_seconds() }}
+        {{ (timedelta(seconds=transition) - (now() - as_datetime(trigger_time))).total_seconds() }}
       transition_pct: |
         {{ min(1 - transition_remaining / transition, 1) if transition > 0 else 1 }}
       scene_interim: |
@@ -309,7 +321,7 @@ actions:
 
   - variables:
       transition_remaining: |
-        {{ (timedelta(seconds=transition) - (now() - trigger.event.time_fired)).total_seconds() }}
+        {{ (timedelta(seconds=transition) - (now() - as_datetime(trigger_time))).total_seconds() }}
       transition: |
         {{ max(transition_remaining|round(), 0) }}
       entity_ids: |
@@ -342,7 +354,7 @@ actions:
       - alias: Wait for the original transition to complete
         delay:
           seconds: |
-            {{ max((timedelta(seconds=transition) - (now() - trigger.event.time_fired)).total_seconds(), 0) }}
+            {{ max((timedelta(seconds=transition) - (now() - as_datetime(trigger_time))).total_seconds(), 0) }}
       - action: adaptive_lighting.apply
         continue_on_error: true
         data:
