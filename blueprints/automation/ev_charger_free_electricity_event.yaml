@@ -4,6 +4,7 @@ blueprint:
     Starts a charge override during free electricity sessions if the EV charger is in Smart mode
     and the cost of starting early is lower than the cost of missing the sync window.
   domain: automation
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/ev_charger_free_electricity_event.yaml
   input:
     event_calendar:
       name: Free Electricity Session Calendar
