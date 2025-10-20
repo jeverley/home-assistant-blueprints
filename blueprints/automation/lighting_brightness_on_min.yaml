@@ -71,10 +71,10 @@ variables:
       {% set label_ids = [trigger.event.data.service_data.label_id | default([])] | flatten %}
       {% set resolved_entities =
         (
-          (target_area_ids|map('area_entities')|flatten if target_area_ids else [])
-          + (target_floor_ids|map('floor_entities')|flatten if target_floor_ids else [])
-          + (target_label_ids|map('label_entities')|flatten if target_label_ids else [])
-          + (target_label_ids|map('label_devices')|flatten|map('device_entities')|flatten if target_label_ids else [])
+          (area_ids|map('area_entities')|flatten if area_ids else [])
+          + (floor_ids|map('floor_entities')|flatten if floor_ids else [])
+          + (label_ids|map('label_entities')|flatten if label_ids else [])
+          + (label_ids|map('label_devices')|flatten|map('device_entities')|flatten if label_ids else [])
         ) | select('contains', 'light.') | list
       %}
       {{ (resolved_entities + entity_ids) | unique | list }}
