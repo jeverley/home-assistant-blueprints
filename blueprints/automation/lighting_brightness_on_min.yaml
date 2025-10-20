@@ -177,9 +177,9 @@ conditions:
                   {% set global = namespace(condition=false) %}
                   {% for entity_id in entity_ids %}                 
                     {% if brightness %}
-                      {% set global.condition = brightness < (on_minimum[entity_id] * scale_factor)|round() if not global.condition else global.condition %}
+                      {% set global.condition = brightness < on_minimum[entity_id] if not global.condition else global.condition %}
                     {% elif brightness_pct %}
-                      {% set global.condition = brightness_pct < on_minimum[entity_id] if not global.condition else global.condition %}
+                      {% set global.condition = brightness_pct < (on_minimum[entity_id] / scale_factor)|round() if not global.condition else global.condition %}
                     {% else %}
                       {% set global.condition = true %}
                     {% endif %}
