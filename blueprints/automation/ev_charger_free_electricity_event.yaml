@@ -5,11 +5,12 @@ blueprint:
     and the cost of starting early is lower than the cost of missing the sync window.
   domain: automation
   input:
-    event_sensor:
-      name: Free Electricity Session Sensor
+    event_calendar:
+      name: Free Electricity Session Calendar
       selector:
         entity:
-          domain: binary_sensor
+          domain:
+            - calendar
     ev_mode_sensor:
       name: EV Charger Mode Sensor
       selector:
@@ -73,7 +74,7 @@ blueprint:
           mode: slider
 
 trigger_variables:
-  event_sensor: !input event_sensor
+  event_calendar: !input event_calendar
   ev_mode_sensor: !input ev_mode_sensor
   current_rate_sensor: !input current_rate_sensor
   next_rate_sensor: !input next_rate_sensor
@@ -90,11 +91,10 @@ variables:
   min_duration: "{{ timedelta(seconds=min_duration_seconds) }}"
   end_offset: "{{ timedelta(seconds=end_offset_seconds) }}"
   config_entry_id: "{{ config_entry_id(ev_mode_sensor) }}"
-  event_end: >-
-    {{ as_datetime(state_attr(event_sensor, 'current_event_end'), none)
-       or as_datetime(state_attr(event_sensor, 'next_event_end'), none) }}
-  duration: >-
-    {{ (event_end - now() - end_offset) if event_end else timedelta(seconds=0) }}
+  event_end: |
+    {{ as_datetime(state_attr(event_calendar, 'end_time'), none) }}
+  duration: |
+    {{ (event_end - now() - end_offset) if event_end else timedelta(0) }}
 
 mode: single
 
@@ -103,7 +103,7 @@ triggers:
     id: Start
     platform: template
     value_template: >-
-      {% set start = state_attr(event_sensor, 'current_event_start') or state_attr(event_sensor, 'next_event_start') %}
+      {% set start = as_datetime(state_attr(event_calendar, 'start_time'), none) %}
       {% set current_kwh_cost = float(states(current_rate_sensor), none) %}
       {% set ev_last_update = as_datetime(states(last_message_sensor)) %}
 
@@ -149,7 +149,7 @@ conditions:
     conditions:
       - alias: If there is an active event
         condition: state
-        entity_id: !input event_sensor
+        entity_id: !input event_calendar
         state: "on"
       - condition: trigger
         id: Start
