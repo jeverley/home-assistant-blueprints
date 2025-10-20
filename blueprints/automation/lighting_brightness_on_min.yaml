@@ -59,12 +59,10 @@ trigger_variables:
 
 variables:
   trigger_entity_ids: |
-    {% if trigger is not defined %}
-    {{ [] }}
-    {% elif trigger.to_state is defined %}
+    {% if trigger.to_state is defined %}
       {# Single entity_id from state change trigger #}
       {{ [trigger.to_state.entity_id] }}
-    {% else %}
+    {% elif trigger.event is defined %}
       {# Determine event target lights #}
       {% set entity_ids = [trigger.event.data.service_data.entity_id | default([])] | flatten %}
       {% set device_ids = [trigger.event.data.service_data.device_id | default([])] | flatten %}
@@ -80,6 +78,8 @@ variables:
         ) | select('contains', 'light.') | list
       %}
       {{ (resolved_entities + entity_ids) | unique | list }}
+    {% else %}
+    {{ [] }}
     {% endif %}
   on_minimum: |
     {% set global = namespace(on_minimum={}) %}
