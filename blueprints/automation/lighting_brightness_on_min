@@ -206,21 +206,22 @@ conditions:
         enabled: false
 
 actions:
-  - alias: If triggered by call service and brightness is none
+  - alias: If triggered by call service and target brightness is unspecified
     if:
       - condition: trigger
         id:
           - call_service
-      - alias: If brightness is none
-        condition: template
+      - condition: template
         value_template: "{{ brightness is none }}"
     then:
-      - wait_template: |
+      - alias: Wait for the target states to update
+        wait_template: |
           {{ expand(entity_ids) | map(attribute='last_changed') | sort | first > trigger.event.time_fired }}
         continue_on_timeout: true
         timeout: "00:00:01"
 
-  - variables:
+  - alias: Determine lights with target brightness below on minimum %
+    variables:
       entity_brightness: |
         {% set global = namespace(brightness={}) %}
         {% for entity_id in entity_ids %}
@@ -241,16 +242,17 @@ actions:
           {% endif %}
         {% endfor %}
         {{ global.entity_ids }}
-  - alias: Stop if all lights are brighter than their on minimum %
+
+  - alias: Stop if all lights are above their on minimum brightness
     if:
       - condition: template
         value_template: "{{ entity_ids | count == 0 }}"
     then:
-      - stop: All lights are brighter than their on minimum %
+      - stop: All lights are above their on minimum brightness
 
   - alias: Apply the on minimum for each light
     variables:
-      scene_entities: |
+      scene_on_minimum: |
         {# Cool lights get a shorter transition #}
         {% set ns = namespace( cool={}, warm={}) %}
         {% for light in entity_ids %}
@@ -266,30 +268,31 @@ actions:
       - alias: Apply cool lights minimum brightness
         if:
           - condition: template
-            value_template: "{{ scene_entities.cool | count > 0 }}"
+            value_template: "{{ scene_on_minimum.cool | count > 0 }}"
         then:
           - action: scene.apply
             data:
-              entities: "{{ scene_entities.cool }}"
+              entities: "{{ scene_on_minimum.cool }}"
               transition: 0
       - alias: Apply warm lights minimum brightness
         if:
           - condition: template
-            value_template: "{{ scene_entities.warm | count > 0 }}"
+            value_template: "{{ scene_on_minimum.warm | count > 0 }}"
         then:
           - action: scene.apply
             data:
-              entities: "{{ scene_entities.warm }}"
+              entities: "{{ scene_on_minimum.warm }}"
               transition: 1
   - delay:
       milliseconds: 500
 
-  - variables:
+  - alias: Apply interim brightness to resume transition
+    variables:
       transition_remaining: |
         {{ (timedelta(seconds=transition) - (now() - trigger.event.time_fired)).total_seconds() }}
       transition_pct: |
         {{ min(1 - transition_remaining / transition, 1) if transition > 0 else 1 }}
-      interim_scene: |
+      scene_interim: |
         {% set ns = namespace(scene_entities={}) %}
         {% for light in entity_ids %}
           {# Determine interim brightness from remaining transition #}
@@ -299,7 +302,7 @@ actions:
         {{ ns.scene_entities }}
   - action: scene.apply
     data:
-      entities: "{{ interim_scene }}"
+      entities: "{{ scene_interim }}"
       transition: 0
 
   - variables:
@@ -324,7 +327,7 @@ actions:
             {{ entity_ids }}
     else:
       - variables:
-          scene_entities: |
+          scene_final: |
             {% set ns = namespace(scene_entities={}) %}
             {% for light in entity_ids %}
               {% set ns.scene_entities = dict(ns.scene_entities, **{light: {'state': 'on', 'brightness': entity_brightness[light]}}) %}
@@ -332,9 +335,9 @@ actions:
             {{ ns.scene_entities }}
       - action: scene.apply
         data:
-          entities: "{{ scene_entities }}"
+          entities: "{{ scene_final }}"
           transition: "{{ transition }}"
-      - alias: Wait for the transition to complete
+      - alias: Wait for the original transition to complete
         delay:
           seconds: |
             {{ max((timedelta(seconds=transition) - (now() - trigger.event.time_fired)).total_seconds(), 0) }}
