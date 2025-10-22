@@ -180,7 +180,7 @@ conditions:
           {{ global.result }}
 
 actions:
-  - alias: If triggered by call service and target brightness is unspecified
+  - alias: Wait for state updates if target brightness was unspecified in the service call
     if:
       - condition: trigger
         id:
@@ -188,8 +188,7 @@ actions:
       - condition: template
         value_template: "{{ brightness is none }}"
     then:
-      - alias: Wait for the target entity states to update
-        wait_template: |
+      - wait_template: |
           {{ expand(target_entity_ids) | map(attribute='last_changed') | sort | first > as_datetime(trigger_time) }}
         continue_on_timeout: true
         timeout: "00:00:01"
