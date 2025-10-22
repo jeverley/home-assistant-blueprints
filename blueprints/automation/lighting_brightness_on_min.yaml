@@ -9,10 +9,10 @@ blueprint:
       description: "Configure minimum brightness percentage and cooldown duration for each light"
       selector:
         object:
-          label_field: light
+          label_field: entity_id
           multiple: true
           fields:
-            light:
+            entity_id:
               label: Light
               selector:
                 entity:
@@ -49,72 +49,19 @@ blueprint:
 
 trigger_variables:
   scale_factor: 2.55
-  transition_default: !input default_transition
+  default_transition: !input default_transition
   light_config_objects: !input light_config
   light_config: |
-    {% set global = namespace(dict={}) %}
+    {% set global = namespace(config={}) %}
     {% for config in light_config_objects %}
-      {% set global.dict = dict(global.dict, **{
-        config.light: {
-          'on_minimum': (config.min_pct * scale_factor) | round,
-          'cooldown': config.cooldown
+      {% set global.config = dict(global.config, **{
+        config.entity_id: {
+          'on_minimum': (config.min_pct|default(0) * scale_factor) | round,
+          'cooldown': config.cooldown|default(0)
         }
       }) %}
     {% endfor %}
-    {{ global.dict }}
-
-variables:
-  trigger_time: |
-    {% if trigger.event is defined %}
-    {{ trigger.event.time_fired }}
-    {% elif trigger.to_state is defined %}
-    {{ trigger.to_state.last_changed }}
-    {% else %}
-    {{ now() }}
-    {% endif %}
-  trigger_entity_ids: |
-    {% if trigger.to_state is defined %}
-      {# Single entity_id from state change trigger #}
-      {{ [trigger.to_state.entity_id] }}
-    {% elif trigger.event is defined %}
-      {# Determine event target lights #}
-      {% set entity_ids = [trigger.event.data.service_data.entity_id | default([])] | flatten %}
-      {% set device_ids = [trigger.event.data.service_data.device_id | default([])] | flatten %}
-      {% set area_ids = [trigger.event.data.service_data.area_id | default([])] | flatten %}
-      {% set floor_ids = [trigger.event.data.service_data.floor_id | default([])] | flatten %}
-      {% set label_ids = [trigger.event.data.service_data.label_id | default([])] | flatten %}
-      {% set resolved_entities =
-        (
-          (area_ids|map('area_entities')|flatten if area_ids else [])
-          + (floor_ids|map('floor_entities')|flatten if floor_ids else [])
-          + (label_ids|map('label_entities')|flatten if label_ids else [])
-          + (label_ids|map('label_devices')|flatten|map('device_entities')|flatten if label_ids else [])
-        ) | select('contains', 'light.') | list
-      %}
-      {{ (resolved_entities + entity_ids) | unique | list }}
-    {% else %}
-    {{ [] }}
-    {% endif %}
-  target_entity_ids: |
-    {{ trigger_entity_ids | select('in', light_config) | list }}
-  brightness: |
-    {% if trigger.to_state is defined %}
-      {{ trigger.to_state.attributes.brightness|default(none)|int(none) }}
-    {% elif trigger.event is not defined %}
-      {{ none }}
-    {% elif trigger.event.data.service_data.brightness is defined %}
-      {{ trigger.event.data.service_data.brightness|int(none) }}
-    {% elif trigger.event.data.service_data.brightness_pct is defined %}
-      {{ (trigger.event.data.service_data.brightness_pct|int(none) * scale_factor) | round }}
-    {% else %}
-      {{ none }}
-    {% endif %}
-  transition: |
-    {{
-      trigger.event.data.service_data.transition|default(transition_default)|int(0)
-      if trigger.event is defined
-      else 0
-    }}
+    {{ global.config }}
 
 triggers:
   - alias: When call_service event is fired for light turn_on
@@ -137,54 +84,100 @@ triggers:
     event_data: {}
     enabled: false
 
+variables:
+  trigger_time: |
+    {% if trigger.event is defined %}
+      {{ trigger.event.time_fired }}
+    {% elif trigger.new_state is defined %}
+      {{ trigger.new_state.last_changed }}
+    {% else %}
+      {{ now() }}
+    {% endif %}
+  trigger_entity_ids: |
+    {% if trigger.event is defined %}
+      {# Resolve entity_ids from event targets #}
+      {% set sd = trigger.event.data.service_data %}
+      {% set entity_ids = [] if sd.entity_id is not defined else [sd.entity_id] if sd.entity_id is string else sd.entity_id %}
+      {% set device_ids = [] if sd.device_ids is not defined else [sd.device_ids] if sd.device_ids is string else sd.device_ids %}
+      {% set area_ids = [] if sd.area_ids is not defined else [sd.area_ids] if sd.area_ids is string else sd.area_ids %}
+      {% set floor_ids = [] if sd.floor_ids is not defined else [sd.floor_ids] if sd.floor_ids is string else sd.floor_ids %}
+      {% set label_ids = [] if sd.label_ids is not defined else [sd.label_ids] if sd.label_ids is string else sd.label_ids %}
+      {% set resolved_entities =
+        (
+          (area_ids | map('area_entities')|flatten if area_ids else [])
+          + (floor_ids | map('floor_entities')|flatten if floor_ids else [])
+          + (label_ids | map('label_entities')|flatten if label_ids else [])
+          + (label_ids | map('label_devices')|flatten | map('device_entities')|flatten if label_ids else [])
+        ) | select('contains', 'light.') | list
+      %}
+      {{ (resolved_entities + entity_ids) | unique | list }}
+    {% elif trigger.new_state is defined %}
+      {{ [trigger.new_state.entity_id] }}
+    {% else %}
+      {{ [] }}
+    {% endif %}
+  matched_entity_ids: |
+    {{ trigger_entity_ids | select('in', light_config) | list }}
+  matched_off_duration: |
+    {# Get the duration in seconds that each matched light was off #}
+    {% set global = namespace(off_duration={}) %}
+    {% if trigger.old_state is not defined %}
+      {% for state in expand(matched_entity_ids) %}
+        {% if state.state == 'off' %}
+          {% set global.off_duration = dict(global.off_duration, **{
+            state.entity_id: (as_datetime(trigger_time) - state.last_changed).total_seconds()
+          }) %}
+        {% endif %}
+      {% endfor %}
+    {% elif trigger.old_state.state == 'off' and matched_entity_ids %}
+      {% set global.off_duration = {trigger.entity_id: (as_datetime(trigger_time) - trigger.old_state.last_changed).total_seconds()} %}
+    {% endif %}
+    {{ global.off_duration }}
+  target_entity_ids: |
+    {{ matched_off_duration.keys() | list }}
+  brightness: |
+    {% if trigger.new_state is defined %}
+      {{ trigger.new_state.attributes.brightness|default(none)|int(none) }}
+    {% elif trigger.event is not defined %}
+      {{ none }}
+    {% elif trigger.event.data.service_data.brightness is defined %}
+      {{ trigger.event.data.service_data.brightness|int(none) }}
+    {% elif trigger.event.data.service_data.brightness_pct is defined %}
+      {{ (trigger.event.data.service_data.brightness_pct|int(none) * scale_factor) | round }}
+    {% else %}
+      {{ none }}
+    {% endif %}
+  transition: |
+    {{
+      trigger.event.data.service_data.transition|default(default_transition)|int(0)
+      if trigger.event is defined
+      else 0
+    }}
+
 conditions:
+  - alias: If the trigger has valid target lights that were off
+    condition: template
+    value_template: "{{ not not target_entity_ids }}"
   - condition: or
     conditions:
-      - alias: If triggered by call service
-        condition: and
-        conditions:
-          - condition: trigger
-            id:
-              - call_service
-          - alias: If a light with a power on minimum % was off
-            condition: template
-            value_template: |
-              {{ target_entity_ids | select('is_state', 'off') | list | count > 0 }}
-          - condition: or
-            conditions:
-              - alias: If transition > 1
-                condition: template
-                value_template: |
-                  {{ transition > 1 }}
-              - alias: |
-                  If the event brightness is unknown or below the power on minimum %
-                condition: template
-                value_template: |
-                  {% if not brightness %}
-                    {{ true }}
-                  {% else %}
-                    {% set global = namespace(result=false) %}
-                    {% for entity_id in target_entity_ids %}
-                      {% if not global.result %}
-                        {% set global.result = brightness < light_config[entity_id].on_minimum %}
-                      {% endif %}
-                    {% endfor %}
-                    {{ global.result }}
-                  {% endif %}
-
-      - alias: If triggered by state change
-        condition: and
-        conditions:
-          - condition: trigger
-            id:
-              - state_changed
-          - alias: If the trigger light has a power on minimum %
-            condition: template
-            value_template: "{{ not not target_entity_ids }}"
-          - alias: If the light was previously off and has a target brightness
-            condition: template
-            value_template: |
-              {{ trigger.from_state.state == 'off' and brightness|int(0) > 0 }}
+      - alias: If transition is long enough to perceive a delay
+        condition: template
+        value_template: |
+          {{ transition > 1 }}
+      - alias: If the target brightness is unspecified
+        condition: template
+        value_template: |
+          {{ brightness is none }}
+      - alias: If the target brightness is below a power on minimum %
+        condition: template
+        value_template: |
+          {% set global = namespace(result=false) %}
+          {% for entity_id in target_entity_ids %}
+            {% if not global.result %}
+              {% set global.result = 0 < brightness < light_config[entity_id].on_minimum %}
+            {% endif %}
+          {% endfor %}
+          {{ global.result }}
 
 actions:
   - alias: If triggered by call service and target brightness is unspecified
@@ -195,7 +188,7 @@ actions:
       - condition: template
         value_template: "{{ brightness is none }}"
     then:
-      - alias: Wait for the target states to update
+      - alias: Wait for the target entity states to update
         wait_template: |
           {{ expand(target_entity_ids) | map(attribute='last_changed') | sort | first > as_datetime(trigger_time) }}
         continue_on_timeout: true
@@ -203,7 +196,8 @@ actions:
 
   - alias: Determine lights with target brightness below on minimum %
     variables:
-      entity_brightness: |
+      target_brightness: |
+        {# Get target brightness for each light #}
         {% set global = namespace(brightness={}) %}
         {% for entity_id in target_entity_ids %}
           {% set target_brightness = brightness if brightness else state_attr(entity_id, 'brightness')|int(none) %}
@@ -211,134 +205,108 @@ actions:
         {% endfor %}
         {{ global.brightness }}
       transition_remaining: |
-        {{ (timedelta(seconds=transition) - (now() - as_datetime(trigger_time))).total_seconds() }}
+        {{ (as_datetime(trigger_time) + timedelta(seconds=transition) - now()).total_seconds() }}
       transition_pct: |
         {{ min(1 - transition_remaining / transition, 1) if transition > 0 else 1 }}
-      target_entity_ids: |
-        {# Include lights that are below their on minimum % #}
-        {% set global = namespace(entity_ids=[]) %}
-        {% for entity_id, brightness in entity_brightness.items() %}
-          {% if brightness and brightness * transition_pct < light_config[entity_id].on_minimum %}
-            {% set global.entity_ids = global.entity_ids + [entity_id] %}
+      scene_on_minimum: |
+        {% set global = namespace(scene_entities={}) %}
+        {% for entity_id, target_brightness in target_brightness.items() %}
+          {% set cooldown = light_config[entity_id].cooldown %}
+          {% set on_minimum = light_config[entity_id].on_minimum %}
+
+          {# Warm lights get a lower power on minimum #}
+          {% set fraction = min(matched_off_duration[entity_id] / (cooldown or 1), 1) %}
+          {% set adjusted_minimum = max(on_minimum * fraction, 1) | round %}
+
+          {# Add lights with brightness below the adjusted minimum to the scene #}
+          {% if target_brightness and target_brightness * transition_pct < adjusted_minimum %}
+            {% set global.scene_entities = dict(global.scene_entities, **{
+              entity_id: { 'state': 'on','brightness': adjusted_minimum}
+            }) %}
           {% endif %}
         {% endfor %}
-        {{ global.entity_ids }}
+        {{ global.scene_entities }}
 
-  - alias: Stop if all lights are above their on minimum brightness
+  - alias: Apply the power on minimum brightness for each light
     if:
       - condition: template
-        value_template: "{{ target_entity_ids | count == 0 }}"
+        value_template: "{{ not not scene_on_minimum }}"
     then:
-      - stop: All lights are above their on minimum brightness
+      - action: scene.apply
+        data:
+          entities: "{{ scene_on_minimum }}"
+          transition: 0
+      - alias: Wait during light warm-up
+        delay:
+          milliseconds: 500
+    else:
+      - stop: All lights are above their power on minimum brightness
 
-  - alias: Apply the on minimum for each light
-    variables:
-      off_duration: |
-        {% if trigger.from_state is defined %}
-          {{ {trigger.entity_id: (now() - as_datetime(trigger.from_state.last_changed))|string if trigger.from_state.state == 'off' else none} }}
-        {% else %}
-          {% set global = namespace(off_duration={}) %}
-          {% for entity_id in target_entity_ids %}
-            {% set off_duration = (now() - states[entity_id].last_changed)|string if is_state(entity_id, 'off') else none %}
-            {% set global.off_duration = dict(global.off_duration, **{entity_id: off_duration}) %}
-          {% endfor %}
-          {{ global.off_duration }}
-        {% endif %}
-      scene_on_minimum: |
-        {# Cool lights get a shorter transition #}
-        {% set global = namespace(cool={}, warm={}) %}
-        {% for entity_id in target_entity_ids %}
-          {% set cooldown = timedelta(seconds=light_config[entity_id].cooldown|default(0)) %}
-          {% if as_timedelta(off_duration[entity_id] or '0') > cooldown %}
-            {% set global.cool = dict(global.cool, **{entity_id: {'state': 'on', 'brightness': light_config[entity_id].on_minimum}}) %}
-          {% else %}
-            {% set global.warm = dict(global.warm, **{entity_id: {'state': 'on', 'brightness': light_config[entity_id].on_minimum}}) %}
-          {% endif %}
-        {% endfor %}
-        {{ {'cool': global.cool, 'warm': global.warm} }}
-  - parallel:
-      - alias: Apply cool lights minimum brightness
-        if:
-          - condition: template
-            value_template: "{{ scene_on_minimum.cool | count > 0 }}"
-        then:
-          - action: scene.apply
-            data:
-              entities: "{{ scene_on_minimum.cool }}"
-              transition: 0
-      - alias: Apply warm lights minimum brightness
-        if:
-          - condition: template
-            value_template: "{{ scene_on_minimum.warm | count > 0 }}"
-        then:
-          - action: scene.apply
-            data:
-              entities: "{{ scene_on_minimum.warm }}"
-              transition: 1
-  - delay:
-      milliseconds: 500
-
-  - alias: Apply interim brightness to resume transition
+  - alias: Apply interim brightness to resume long transitions
     variables:
       transition_remaining: |
-        {{ (timedelta(seconds=transition) - (now() - as_datetime(trigger_time))).total_seconds() }}
+        {{ (as_datetime(trigger_time) + timedelta(seconds=transition) - now()).total_seconds() }}
       transition_pct: |
         {{ min(1 - transition_remaining / transition, 1) if transition > 0 else 1 }}
       scene_interim: |
         {% set global = namespace(scene_entities={}) %}
-        {% for entity_id in target_entity_ids %}
+        {% for entity_id, minimum in scene_on_minimum.items() %}
           {# Determine interim brightness from remaining transition #}
-          {% set interim_brightness = (entity_brightness[entity_id] * transition_pct)|round() %}
-          {% set global.scene_entities = dict(global.scene_entities, **{entity_id: {'state': 'on', 'brightness': interim_brightness}}) %}
+          {% set interim_brightness = max(target_brightness[entity_id] * transition_pct, 1) | round %}
+          {% if minimum.brightness != interim_brightness != target_brightness[entity_id] %}
+            {% set global.scene_entities = dict(global.scene_entities, **{
+              entity_id: { 'state': 'on','brightness': interim_brightness}
+            }) %}
+          {% endif %}
         {% endfor %}
         {{ global.scene_entities }}
-  - action: scene.apply
-    data:
-      entities: "{{ scene_interim }}"
-      transition: 0
-
-  - variables:
-      transition_remaining: |
-        {{ (timedelta(seconds=transition) - (now() - as_datetime(trigger_time))).total_seconds() }}
-      transition: |
-        {{ max(transition_remaining|round(), 0) }}
-      target_entity_ids: |
-        {{ target_entity_ids | reject('is_state', 'off') | list }}
-  - alias: Apply the original brightness
-    if:
-      - alias: If brightness is not none
-        condition: template
-        value_template: "{{ brightness is not none }}"
+  - if:
+      - condition: template
+        value_template: "{{ not not scene_interim }}"
     then:
-      - action: light.turn_on
+      - action: scene.apply
         data:
-          brightness: "{{ brightness }}"
-          transition: "{{ transition }}"
-        target:
-          entity_id: |
-            {{ target_entity_ids }}
-    else:
-      - variables:
-          scene_final: |
-            {% set global = namespace(scene_entities={}) %}
-            {% for entity_id in target_entity_ids %}
-              {% set global.scene_entities = dict(global.scene_entities, **{entity_id: {'state': 'on', 'brightness': entity_brightness[entity_id]}}) %}
-            {% endfor %}
-            {{ global.scene_entities }}
+          entities: "{{ scene_interim }}"
+          transition: 0
+
+  - alias: Apply the final brightness with remaining transition
+    variables:
+      transition_remaining: |
+        {{ (as_datetime(trigger_time) + timedelta(seconds=transition) - now()).total_seconds() }}
+      scene_final: |
+        {% set global = namespace(scene_entities={}) %}
+        {% for entity_id, minimum in scene_on_minimum.items() %}
+          {% if target_brightness[entity_id] != minimum.brightness %}
+            {% set global.scene_entities = dict(global.scene_entities, **{
+              entity_id: {'state': 'on', 'brightness': target_brightness[entity_id]}
+            }) %}
+          {% endif %}
+        {% endfor %}
+        {{ global.scene_entities }}
+  - if:
+      - condition: template
+        value_template: "{{ not not scene_final }}"
+    then:
       - action: scene.apply
         data:
           entities: "{{ scene_final }}"
-          transition: "{{ transition }}"
-      - alias: Wait for the original transition to complete
+          transition: "{{ max(transition_remaining | round, 0) }}"
+
+  - alias: Apply Adaptive Lighting if target brightness was unspecified
+    if:
+      - condition: template
+        value_template: "{{ brightness is none and not not integration_entities('adaptive_lighting') }}"
+    then:
+      - alias: Wait for the remaining transition to complete
         delay:
           seconds: |
-            {{ max((timedelta(seconds=transition) - (now() - as_datetime(trigger_time))).total_seconds(), 0) }}
+            {{ max((as_datetime(trigger_time) + timedelta(seconds=transition) - now()).total_seconds(), 0) }}
       - action: adaptive_lighting.apply
         continue_on_error: true
         data:
-          lights: "{{ target_entity_ids }}"
+          lights: "{{ scene_on_minimum.keys() }}"
 
 mode: parallel
+max: 20
 trace:
   stored_traces: 10
-max: 20
