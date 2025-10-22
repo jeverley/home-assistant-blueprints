@@ -304,7 +304,7 @@ actions:
       - action: adaptive_lighting.apply
         continue_on_error: true
         data:
-          lights: "{{ scene_on_minimum.keys() }}"
+          lights: "{{ scene_on_minimum.keys() | list }}"
 
 mode: parallel
 max: 20
