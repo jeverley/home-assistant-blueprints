@@ -43,9 +43,14 @@ blueprint:
       selector:
         number:
           min: 0
-          max: 60
+          max: 10
           step: 1
           unit_of_measurement: s
+    state_trigger:
+      name: Detect external changes from states [EXPERIMENTAL]
+      default: false
+      selector:
+        boolean:
 
 trigger_variables:
   scale_factor: 2.55
@@ -62,39 +67,42 @@ trigger_variables:
       }) %}
     {% endfor %}
     {{ global.config }}
+  is_al_installed: |
+    {{ not not integration_entities('adaptive_lighting') }}
 
 triggers:
-  - alias: When call_service event is fired for light turn_on
-    id: call_service
+  - alias: When the light turn_on service is called
+    id: turn_on
     trigger: event
     event_type: call_service
     event_data:
       domain: light
       service: turn_on
-  - alias: When call_service event is fired for light toggle
-    id: call_service
+  - alias: When the light toggle service is called
+    id: toggle
     trigger: event
     event_type: call_service
     event_data:
       domain: light
       service: toggle
-  - trigger: event
+  - alias: When a light state changes from off to on (filtered in conditions)
     id: state_changed
+    trigger: event
     event_type: state_changed
     event_data: {}
-    enabled: false
+    enabled: !input state_trigger
 
 variables:
   trigger_time: |
     {% if trigger.event is defined %}
       {{ trigger.event.time_fired }}
-    {% elif trigger.new_state is defined %}
-      {{ trigger.new_state.last_changed }}
     {% else %}
       {{ now() }}
     {% endif %}
+  trigger_event_type: |
+    {{ trigger.event.event_type if trigger.event is defined else none }}
   trigger_entity_ids: |
-    {% if trigger.event is defined %}
+    {% if trigger_event_type == 'call_service' %}
       {# Resolve entity_ids from event targets #}
       {% set sd = trigger.event.data.service_data %}
       {% set entity_ids = [] if sd.entity_id is not defined else [sd.entity_id] if sd.entity_id is string else sd.entity_id %}
@@ -111,46 +119,62 @@ variables:
         ) | select('contains', 'light.') | list
       %}
       {{ (resolved_entities + entity_ids) | unique | list }}
-    {% elif trigger.new_state is defined %}
-      {{ [trigger.new_state.entity_id] }}
+    {% elif
+      trigger_event_type == 'state_changed'
+      and 'light.' in trigger.event.data.new_state.entity_id
+      and trigger.event.data.old_state.state == 'off'
+      and trigger.event.data.new_state.state == 'on'
+      and trigger.event.data.new_state.attributes.brightness|default(none) is not none
+    %}
+      {{ [trigger.event.data.new_state] }}
     {% else %}
       {{ [] }}
     {% endif %}
+
   matched_entity_ids: |
-    {{ trigger_entity_ids | select('in', light_config) | list }}
+    {{ intersect(trigger_entity_ids, light_config) }}
   matched_off_duration: |
     {# Get the duration in seconds that each matched light was off #}
     {% set global = namespace(off_duration={}) %}
-    {% if trigger.old_state is not defined %}
+    {% if trigger_event_type == 'call_service' %}
+      {# Determine off durations from matched entity states #}
       {% for state in expand(matched_entity_ids) %}
         {% if state.state == 'off' %}
           {% set global.off_duration = dict(global.off_duration, **{
             state.entity_id: (as_datetime(trigger_time) - state.last_changed).total_seconds()
           }) %}
+        {% elif state.state == 'on' and state.last_changed > as_datetime(trigger_time) %}
+          {% set global.off_duration = dict(global.off_duration, **{
+            state.entity_id: none
+          }) %}
         {% endif %}
       {% endfor %}
-    {% elif trigger.old_state.state == 'off' and matched_entity_ids %}
-      {% set global.off_duration = {trigger.entity_id: (as_datetime(trigger_time) - trigger.old_state.last_changed).total_seconds()} %}
+    {% elif trigger_event_type == 'state_changed' and matched_entity_ids %}
+      {# Determine off duration from the prevous state #}
+      {% set global.off_duration = {
+        trigger.event.data.new_state.entity_id: (as_datetime(trigger_time) - trigger.event.data.old_state.last_changed).total_seconds()
+      } %}
     {% endif %}
     {{ global.off_duration }}
   target_entity_ids: |
     {{ matched_off_duration.keys() | list }}
+
   brightness: |
-    {% if trigger.new_state is defined %}
-      {{ trigger.new_state.attributes.brightness|default(none)|int(none) }}
-    {% elif trigger.event is not defined %}
+    {% if trigger.event is not defined %}
       {{ none }}
+    {% elif trigger_event_type == 'state_changed' %}
+      {{ trigger.event.data.new_state.attributes.brightness|default(none)|int(none) }}
     {% elif trigger.event.data.service_data.brightness is defined %}
       {{ trigger.event.data.service_data.brightness|int(none) }}
-    {% elif trigger.event.data.service_data.brightness_pct is defined %}
-      {{ (trigger.event.data.service_data.brightness_pct|int(none) * scale_factor) | round }}
+    {% elif trigger.event.data.service_data.brightness_pct|default(none) is number %}
+      {{ (trigger.event.data.service_data.brightness_pct * scale_factor) | round }}
     {% else %}
       {{ none }}
     {% endif %}
   transition: |
     {{
       trigger.event.data.service_data.transition|default(default_transition)|int(0)
-      if trigger.event is defined
+      if trigger_event_type == 'call_service'
       else 0
     }}
 
@@ -158,6 +182,15 @@ conditions:
   - alias: If the trigger has valid target lights that were off
     condition: template
     value_template: "{{ not not target_entity_ids }}"
+  - alias: If the trigger instigated the change
+    condition: template
+    value_template: |
+      {{
+        trigger_event_type == 'call_service'
+        or trigger.context.user_id is none
+        and trigger.context.parent_id is none
+        and trigger.context.id is not search(':al:.*:.*:')
+      }}
   - condition: or
     conditions:
       - alias: If transition is long enough to perceive a delay
@@ -182,9 +215,8 @@ conditions:
 actions:
   - alias: Wait for state updates if target brightness was unspecified in the service call
     if:
-      - condition: trigger
-        id:
-          - call_service
+      - condition: template
+        value_template: "{{ trigger_event_type == 'call_service' }}"
       - condition: template
         value_template: "{{ brightness is none }}"
     then:
@@ -192,6 +224,21 @@ actions:
           {{ expand(target_entity_ids) | map(attribute='last_changed') | sort | first > as_datetime(trigger_time) }}
         continue_on_timeout: true
         timeout: "00:00:01"
+
+  - alias: Wait for subsequent state updates if Adaptive Lighting is installed
+    if:
+      - condition: template
+        value_template: "{{ trigger_event_type == 'state_changed' }}"
+      - condition: template
+        value_template: "{{ is_al_installed }}"
+    then:
+      - wait_template: |
+          {{ states[target_entity_ids|first].last_updated > as_datetime(trigger_time) }}
+        continue_on_timeout: true
+        timeout: "00:00:01"
+      - variables:
+          brightness: |
+            {{ state_attr(target_entity_ids|first, 'brightness')|int(none) }}
 
   - alias: Determine lights with target brightness below on minimum %
     variables:
@@ -214,7 +261,7 @@ actions:
           {% set on_minimum = light_config[entity_id].on_minimum %}
 
           {# Warm lights get a lower power on minimum #}
-          {% set fraction = min(matched_off_duration[entity_id] / (cooldown or 1), 1) %}
+          {% set fraction = min(matched_off_duration[entity_id]|default(cooldown) / cooldown, 1) if cooldown else 1 %}
           {% set adjusted_minimum = max(on_minimum * fraction, 1) | round %}
 
           {# Add lights with brightness below the adjusted minimum to the scene #}
@@ -294,7 +341,7 @@ actions:
   - alias: Apply Adaptive Lighting if target brightness was unspecified
     if:
       - condition: template
-        value_template: "{{ brightness is none and not not integration_entities('adaptive_lighting') }}"
+        value_template: "{{ brightness is none and is_al_installed }}"
     then:
       - alias: Wait for the remaining transition to complete
         delay:
