@@ -46,11 +46,27 @@ blueprint:
           max: 10
           step: 1
           unit_of_measurement: s
-    state_trigger:
-      name: Detect external changes from states [EXPERIMENTAL]
-      default: false
-      selector:
-        boolean:
+    advanced_settings:
+      name: Advanced Settings
+      icon: mdi:cog
+      description: Advanced configuration
+      collapsed: true
+      input:
+        state_trigger:
+          name: Apply when a light is physically turned on
+          default: false
+          selector:
+            boolean:
+        state_hold_duration:
+          name: State hold duration
+          description: Time to wait for state updates to complete when a light is physically turned on
+          default: 0.5
+          selector:
+            number:
+              min: 0
+              max: 2
+              step: 0.1
+              unit_of_measurement: s
 
 trigger_variables:
   scale_factor: 2.55
@@ -67,6 +83,7 @@ trigger_variables:
       }) %}
     {% endfor %}
     {{ global.config }}
+  state_hold_duration: !input state_hold_duration
   is_al_installed: |
     {{ not not integration_entities('adaptive_lighting') }}
 
@@ -121,12 +138,14 @@ variables:
       {{ (resolved_entities + entity_ids) | unique | list }}
     {% elif
       trigger_event_type == 'state_changed'
+      and trigger.event.data.new_state
+      and trigger.event.data.old_state
       and 'light.' in trigger.event.data.new_state.entity_id
       and trigger.event.data.old_state.state == 'off'
       and trigger.event.data.new_state.state == 'on'
       and trigger.event.data.new_state.attributes.brightness|default(none) is not none
     %}
-      {{ [trigger.event.data.new_state] }}
+      {{ [trigger.event.data.new_state.entity_id] }}
     {% else %}
       {{ [] }}
     {% endif %}
@@ -163,7 +182,10 @@ variables:
     {% if trigger.event is not defined %}
       {{ none }}
     {% elif trigger_event_type == 'state_changed' %}
-      {{ trigger.event.data.new_state.attributes.brightness|default(none)|int(none) }}
+      {{
+        trigger.event.data.new_state.attributes.brightness|default(none)|int(none)
+        if trigger.event.data.new_state else none
+      }}
     {% elif trigger.event.data.service_data.brightness is defined %}
       {{ trigger.event.data.service_data.brightness|int(none) }}
     {% elif trigger.event.data.service_data.brightness_pct|default(none) is number %}
@@ -187,9 +209,9 @@ conditions:
     value_template: |
       {{
         trigger_event_type == 'call_service'
-        or trigger.context.user_id is none
-        and trigger.context.parent_id is none
-        and trigger.context.id is not search(':al:.*:.*:')
+        or trigger.event.context.user_id is none
+        and trigger.event.context.parent_id is none
+        and trigger.event.context.id is not search(':al:.*:.*:')
       }}
   - condition: or
     conditions:
@@ -227,22 +249,27 @@ actions:
             continue_on_timeout: true
             timeout: "00:00:01"
 
-      - alias: Wait for subsequent state updates if Adaptive Lighting is installed
+      - alias: Wait for subsequent state updates to complete
         conditions:
           - condition: template
             value_template: "{{ trigger_event_type == 'state_changed' }}"
-          - condition: template
-            value_template: "{{ is_al_installed }}"
         sequence:
-          - wait_for_trigger:
-              - trigger: template
-                value_template: |
-                  {{ states[target_entity_ids|first].last_updated > as_datetime(trigger_time) }}
-            timeout:
-              milliseconds: 500
+          - repeat:
+              sequence:
+                - delay: "{{ states[trigger.event.data.new_state.entity_id].last_updated + timedelta(seconds=state_hold_duration) - now() }}"
+              until:
+                - condition: template
+                  value_template: |
+                    {% set state = states[trigger.event.data.new_state.entity_id] %}
+                    {{ state.state != 'on' or state.last_updated <= now() - timedelta(seconds=state_hold_duration) }}
           - variables:
               brightness: |
-                {{ wait.trigger.to_state.attributes.brightness|default(none)|int(none) if wait.trigger is defined else brightness }}
+                {{ state_attr(trigger.event.data.new_state.entity_id, 'brightness')|int(none) }}
+          - if:
+              - condition: template
+                value_template: "{{ not brightness }}"
+            then:
+              stop:
 
   - alias: Determine lights with target brightness below on minimum %
     variables:
@@ -345,7 +372,7 @@ actions:
   - alias: Apply Adaptive Lighting if target brightness was unspecified
     if:
       - condition: template
-        value_template: "{{ brightness is none and is_al_installed }}"
+        value_template: "{{ is_al_installed and brightness is none }}"
     then:
       - alias: Wait for the remaining transition to complete
         delay:
@@ -357,6 +384,6 @@ actions:
           lights: "{{ scene_on_minimum.keys() | list }}"
 
 mode: parallel
-max: 20
+max: 50
 trace:
-  stored_traces: 10
+  stored_traces: 0
