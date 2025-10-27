@@ -139,7 +139,7 @@ variables:
     {% if trigger_event_type == 'call_service' %}
       {# Determine off durations from matched entity states #}
       {% for state in expand(matched_entity_ids) %}
-        {% if state.state == 'off' %}
+        {% if state.state == 'off' and state.last_changed < as_datetime(trigger_time) %}
           {% set global.off_duration = dict(global.off_duration, **{
             state.entity_id: (as_datetime(trigger_time) - state.last_changed).total_seconds()
           }) %}
@@ -213,32 +213,36 @@ conditions:
           {{ global.result }}
 
 actions:
-  - alias: Wait for state updates if target brightness was unspecified in the service call
-    if:
-      - condition: template
-        value_template: "{{ trigger_event_type == 'call_service' }}"
-      - condition: template
-        value_template: "{{ brightness is none }}"
-    then:
-      - wait_template: |
-          {{ expand(target_entity_ids) | map(attribute='last_changed') | sort | first > as_datetime(trigger_time) }}
-        continue_on_timeout: true
-        timeout: "00:00:01"
+  - alias: Handle deferred trigger conditions
+    choose:
+      - alias: Wait for state updates if target brightness was unspecified in the service call
+        conditions:
+          - condition: template
+            value_template: "{{ trigger_event_type == 'call_service' }}"
+          - condition: template
+            value_template: "{{ brightness is none }}"
+        sequence:
+          - wait_template: |
+              {{ expand(target_entity_ids) | map(attribute='last_changed') | sort | first > as_datetime(trigger_time) }}
+            continue_on_timeout: true
+            timeout: "00:00:01"
 
-  - alias: Wait for subsequent state updates if Adaptive Lighting is installed
-    if:
-      - condition: template
-        value_template: "{{ trigger_event_type == 'state_changed' }}"
-      - condition: template
-        value_template: "{{ is_al_installed }}"
-    then:
-      - wait_template: |
-          {{ states[target_entity_ids|first].last_updated > as_datetime(trigger_time) }}
-        continue_on_timeout: true
-        timeout: "00:00:01"
-      - variables:
-          brightness: |
-            {{ state_attr(target_entity_ids|first, 'brightness')|int(none) }}
+      - alias: Wait for subsequent state updates if Adaptive Lighting is installed
+        conditions:
+          - condition: template
+            value_template: "{{ trigger_event_type == 'state_changed' }}"
+          - condition: template
+            value_template: "{{ is_al_installed }}"
+        sequence:
+          - wait_for_trigger:
+              - trigger: template
+                value_template: |
+                  {{ states[target_entity_ids|first].last_updated > as_datetime(trigger_time) }}
+            timeout:
+              milliseconds: 500
+          - variables:
+              brightness: |
+                {{ wait.trigger.to_state.attributes.brightness|default(none)|int(none) if wait.trigger is defined else brightness }}
 
   - alias: Determine lights with target brightness below on minimum %
     variables:
