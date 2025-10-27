@@ -38,7 +38,7 @@ blueprint:
       default: []
     default_transition:
       name: Default transition
-      description: "Default transition time when not specified in the trigger event"
+      description: This is used when a transition is not specified in the trigger event
       default: 0
       selector:
         number:
@@ -46,27 +46,22 @@ blueprint:
           max: 10
           step: 1
           unit_of_measurement: s
-    advanced_settings:
-      name: Advanced Settings
-      icon: mdi:cog
-      description: Advanced configuration
-      collapsed: true
-      input:
-        state_trigger:
-          name: Apply when a light is physically turned on
-          default: false
-          selector:
-            boolean:
-        state_hold_duration:
-          name: State hold duration
-          description: Time to wait for state updates to complete when a light is physically turned on
-          default: 0.5
-          selector:
-            number:
-              min: 0
-              max: 2
-              step: 0.1
-              unit_of_measurement: s
+    state_trigger:
+      name: Apply when lights are physically turned on
+      description: Enable to handle lights with physical switches that can be turned on outside of Home Assistant
+      default: false
+      selector:
+        boolean:
+    state_hold_duration:
+      name: Physical switch state update delay
+      description: Duration to wait for state updates after physical switch on before evaluating brightness (to allow for other automations to complete)
+      default: 0.5
+      selector:
+        number:
+          min: 0
+          max: 2
+          step: 0.1
+          unit_of_measurement: s
 
 trigger_variables:
   scale_factor: 2.55
@@ -239,8 +234,7 @@ conditions:
           {{ global.result }}
 
 actions:
-  - alias: Handle wait for deferred brightness evaluation
-    choose:
+  - choose:
       - alias: Wait for state updates if target brightness was unspecified in the service call
         conditions:
           - condition: template
