@@ -113,17 +113,24 @@ blueprint:
               mode: slider
 
 trigger_variables:
+  # Common config
   event_calendar: !input event_calendar
   current_rate_sensor: !input current_rate_sensor
   next_rate_sensor: !input next_rate_sensor
   charger_type: !input charger_type
   min_duration_seconds: !input min_duration_seconds
+  min_duration: "{{ timedelta(seconds=min_duration_seconds) }}"
   end_offset_seconds: !input end_offset_seconds
+  end_offset: "{{ timedelta(seconds=end_offset_seconds) }}"
+
+  # Charger config for PodPoint
   pp_charge_speed_kwh: !input pp_charge_speed_kwh
   pp_charge_mode_sensor: !input pp_charge_mode_sensor
   pp_last_message_sensor: !input pp_last_message_sensor
   pp_override_end_sensor: !input pp_override_end_sensor
   pp_interval_minutes: !input pp_interval_minutes
+
+  # Derived config
   last_update_sensor: |
     {% if charger_type == 'PodPoint' %}
     {{ pp_last_message_sensor }}
@@ -137,21 +144,13 @@ trigger_variables:
     {{ pp_charge_speed_kwh }}
     {% endif %}
 
-variables:
-  min_duration: "{{ timedelta(seconds=min_duration_seconds) }}"
-  end_offset: "{{ timedelta(seconds=end_offset_seconds) }}"
-  event_end: |
-    {{ as_datetime(state_attr(event_calendar, 'end_time'), none) }}
-  duration: |
-    {{ (event_end - now() - end_offset) if event_end else timedelta(0) }}
-  pp_config_entry_id: "{{ config_entry_id(pp_charge_mode_sensor) }}"
-
 triggers:
-  - alias: Cost-based sync window trigger
-    id: Start
+  - alias: Event start
+    id: event_start
     platform: template
     value_template: >-
-      {% set start = as_datetime(state_attr(event_calendar, 'start_time'), none) %}
+      {% set start_no_tz = as_datetime(state_attr(event_calendar, 'start_time'), none) %}
+      {% set start = as_local(start_no_tz) if start_no_tz else none %}
       {% set current_kwh_cost = float(states(current_rate_sensor), none) %}
       {% set charger_last_update = as_datetime(states(last_update_sensor), none) if last_update_sensor else none %}
 
@@ -160,31 +159,52 @@ triggers:
       {% elif start <= now() %}
         {{ true }}
       {% elif charger_last_update and current_kwh_cost is not none and charge_speed_kwh is not none %}
+        {# Determine if the missed potential saving is greater than the cost of starting early #}
         {% set ev_update_1 = charger_last_update + update_interval %}
         {% set ev_update_2 = charger_last_update + update_interval * 2 %}
 
         {% if ev_update_1 < start < ev_update_2 %}
+          {% set early_time = start - ev_update_1 %}
+          {% set early_kwh = early_time.total_seconds() / 3600 * charge_speed_kwh %}
+          {% set early_cost = early_kwh * current_kwh_cost %}
+
           {% set next_kwh_cost = float(states(next_rate_sensor), none) %}
           {% set min_kwh_cost = min(current_kwh_cost, next_kwh_cost) if next_kwh_cost is not none else current_kwh_cost %}
           {% set missed_time = ev_update_2 - start %}
           {% set missed_kwh = missed_time.total_seconds() / 3600 * charge_speed_kwh %}
           {% set missed_min_cost = missed_kwh * min_kwh_cost %}
-          {% set early_time = start - ev_update_1 %}
-          {% set early_kwh = early_time.total_seconds() / 3600 * charge_speed_kwh %}
-          {% set early_cost = early_kwh * current_kwh_cost %}
+
           {{ early_cost < missed_min_cost }}
         {% else %}
           {{ false }}
         {% endif %}
       {% endif %}
-  - alias: PodPoint Schedule mode change
-    id: ModeChange
+  - alias: PodPoint mode change
+    id: charger
     platform: state
     entity_id: !input pp_charge_mode_sensor
     to: Smart
     enabled: "{{ charger_type == 'PodPoint' }}"
 
+variables:
+  event_end: |
+    {% set end_no_tz = as_datetime(state_attr(event_calendar, 'end_time'), none) %}
+    {{ as_local(end_no_tz) if end_no_tz else none }}
+  duration: |
+    {{ (event_end - now() - end_offset) if event_end else timedelta(0) }}
+
 conditions:
+  - alias: If the duration is longer than the minimum
+    condition: template
+    value_template: "{{ as_timedelta(duration) > as_timedelta(min_duration) }}"
+  - condition: or
+    conditions:
+      - condition: trigger
+        id: event_start
+      - alias: If there is an active event
+        condition: state
+        entity_id: !input event_calendar
+        state: "on"
   - alias: If the EV charger is in schedule mode
     condition: state
     entity_id: !input pp_charge_mode_sensor
@@ -193,35 +213,30 @@ conditions:
   - alias: No override or event ends after current override
     condition: template
     value_template: >-
-      {% set override_end = as_datetime(states(override_end_sensor), none) %}
+      {% set override_end = as_datetime(states(pp_override_end_sensor), none) %}
       {{ override_end is none or (event_end and event_end > override_end + end_offset) }}
     enabled: "{{ charger_type == 'PodPoint' }}"
-  - condition: or
-    conditions:
-      - alias: If there is an active event
-        condition: state
-        entity_id: !input event_calendar
-        state: "on"
-      - condition: trigger
-        id: Start
 
 action:
   - alias: Start a charge override for the remainder of the free energy session
     choose:
       - conditions:
+          - alias: Duration is invalid
+            condition: template
+            value_template: "{{ not as_timedelta(duration) }}"
+        sequence:
+          - stop:
+      - conditions:
           - alias: If the charger type is PodPoint
             condition: template
             value_template: "{{ charger_type == 'PodPoint' }}"
-          - alias: If the duration is longer than the minimum
-            condition: template
-            value_template: "{{ duration > min_duration }}"
         sequence:
           - action: pod_point.charge_now
             metadata: {}
             data:
-              config_entry_id: "{{ pp_config_entry_id }}"
-              seconds: "{{ duration.total_seconds() | int % 60 }}"
-              minutes: "{{ (duration.total_seconds() | int % 3600) // 60 }}"
-              hours: "{{ duration.total_seconds() | int // 3600 }}"
+              config_entry_id: "{{ config_entry_id(pp_charge_mode_sensor) }}"
+              seconds: "{{ as_timedelta(duration).total_seconds() | round % 60 }}"
+              minutes: "{{ (as_timedelta(duration).total_seconds() | round % 3600) // 60 }}"
+              hours: "{{ as_timedelta(duration).total_seconds() | round // 3600 }}"
 
 mode: single
