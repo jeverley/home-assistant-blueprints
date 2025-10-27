@@ -95,6 +95,7 @@ triggers:
     event_data:
       domain: light
       service: turn_on
+    enabled: true
   - alias: When the light toggle service is called
     id: toggle
     trigger: event
@@ -102,6 +103,7 @@ triggers:
     event_data:
       domain: light
       service: toggle
+    enabled: true
   - alias: When a light state changes from off to on (filtered in conditions)
     id: state_changed
     trigger: event
@@ -193,6 +195,8 @@ variables:
     {% else %}
       {{ none }}
     {% endif %}
+  brightness_deferred: |
+    {{ not brightness or trigger_event_type == 'state_changed' and state_hold_duration > 0 }}
   transition: |
     {{
       trigger.event.data.service_data.transition|default(default_transition)|int(0)
@@ -235,14 +239,12 @@ conditions:
           {{ global.result }}
 
 actions:
-  - alias: Handle deferred trigger conditions
+  - alias: Handle wait for deferred brightness evaluation
     choose:
       - alias: Wait for state updates if target brightness was unspecified in the service call
         conditions:
           - condition: template
-            value_template: "{{ trigger_event_type == 'call_service' }}"
-          - condition: template
-            value_template: "{{ brightness is none }}"
+            value_template: "{{ trigger_event_type == 'call_service' and brightness_deferred }}"
         sequence:
           - wait_template: |
               {{ expand(target_entity_ids) | map(attribute='last_changed') | sort | first > as_datetime(trigger_time) }}
@@ -252,7 +254,7 @@ actions:
       - alias: Wait for subsequent state updates to complete
         conditions:
           - condition: template
-            value_template: "{{ trigger_event_type == 'state_changed' }}"
+            value_template: "{{ trigger_event_type == 'state_changed' and brightness_deferred }}"
         sequence:
           - repeat:
               sequence:
@@ -262,14 +264,6 @@ actions:
                   value_template: |
                     {% set state = states[trigger.event.data.new_state.entity_id] %}
                     {{ state.state != 'on' or state.last_updated <= now() - timedelta(seconds=state_hold_duration) }}
-          - variables:
-              brightness: |
-                {{ state_attr(trigger.event.data.new_state.entity_id, 'brightness')|int(none) }}
-          - if:
-              - condition: template
-                value_template: "{{ not brightness }}"
-            then:
-              stop:
 
   - alias: Determine lights with target brightness below on minimum %
     variables:
@@ -277,7 +271,10 @@ actions:
         {# Get target brightness for each light #}
         {% set global = namespace(brightness={}) %}
         {% for entity_id in target_entity_ids %}
-          {% set target_brightness = brightness if brightness else state_attr(entity_id, 'brightness')|int(none) %}
+          {% set target_brightness =
+            brightness if not brightness_deferred
+            else state_attr(entity_id, 'brightness')|int(none)
+          %}
           {% set global.brightness = dict(global.brightness, **{entity_id: target_brightness}) %}
         {% endfor %}
         {{ global.brightness }}
