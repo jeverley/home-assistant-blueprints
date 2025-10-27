@@ -187,6 +187,9 @@ triggers:
     enabled: "{{ charger_type == 'PodPoint' }}"
 
 variables:
+  event_start: |
+    {% set start_no_tz = as_datetime(state_attr(event_calendar, 'start_time'), none) %}
+    {{ as_local(start_no_tz) if start_no_tz else none }}
   event_end: |
     {% set end_no_tz = as_datetime(state_attr(event_calendar, 'end_time'), none) %}
     {{ as_local(end_no_tz) if end_no_tz else none }}
@@ -224,6 +227,12 @@ action:
           - alias: Duration is invalid
             condition: template
             value_template: "{{ not as_timedelta(duration) }}"
+        sequence:
+          - stop:
+      - conditions:
+          - alias: Event has not started
+            condition: template
+            value_template: "{{ trigger.id is not defined and not is_state(event_calendar, 'on') }}"
         sequence:
           - stop:
       - conditions:
