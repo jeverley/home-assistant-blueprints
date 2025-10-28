@@ -1,8 +1,8 @@
 blueprint:
-  name: Light Brightness Sync
+  name: Lights Brightness Sync
   description: Synchronize brightness of child lights based on a parent light's brightness changes
   domain: automation
-  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/light_brightness_sync.yaml
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/lights_brightness_sync.yaml
   input:
     parent_light:
       name: Parent light
