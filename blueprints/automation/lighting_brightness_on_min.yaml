@@ -1,5 +1,5 @@
 blueprint:
-  name: Dimmer Power on Minimum
+  name: Start-up Minimum Brightness
   description: "Automatically set lights to a minimum brightness when turning on, with configurable minimums per light entity"
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/lighting_brightness_on_min.yaml
