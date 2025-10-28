@@ -21,7 +21,7 @@ blueprint:
                     - domain:
                         - light
             min_pct:
-              label: Power on minimum brightness
+              label: Start-up minimum brightness
               selector:
                 number:
                   min: 1
