@@ -2,7 +2,7 @@ blueprint:
   name: Lights Start-up Minimum Brightness
   description: "Automatically set lights to a minimum brightness when turning on, with configurable minimums per light entity"
   domain: automation
-  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/light_startup_minimum_brightness.yaml
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/lights_startup_minimum_brightness.yaml
   input:
     light_config:
       name: Lights configuration
