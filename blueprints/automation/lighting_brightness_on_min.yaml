@@ -52,9 +52,9 @@ blueprint:
       default: false
       selector:
         boolean:
-    state_hold_duration:
-      name: Physical switch state update delay
-      description: Duration to wait for state updates after physical switch on before evaluating brightness (to allow for other automations to complete)
+    state_debounce_duration:
+      name: Physical switch state debounce duration
+      description: Duration to wait for subsequent state updates before evaluating target brightness (to allow for other automations to complete)
       default: 0.5
       selector:
         number:
@@ -78,7 +78,7 @@ trigger_variables:
       }) %}
     {% endfor %}
     {{ global.config }}
-  state_hold_duration: !input state_hold_duration
+  state_debounce_duration: !input state_debounce_duration
   is_al_installed: |
     {{ not not integration_entities('adaptive_lighting') }}
 
@@ -141,7 +141,8 @@ variables:
       and trigger.event.data.old_state.state == 'off'
       and trigger.event.data.new_state.state == 'on'
       and trigger.event.data.new_state.attributes.brightness|default(none) is not none
-    %}
+    %} 
+      {# Only include light entities changing from off to on with brightness #}
       {{ [trigger.event.data.new_state.entity_id] }}
     {% else %}
       {{ [] }}
@@ -191,7 +192,7 @@ variables:
       {{ none }}
     {% endif %}
   brightness_deferred: |
-    {{ not brightness or trigger_event_type == 'state_changed' and state_hold_duration > 0 }}
+    {{ not brightness or trigger_event_type == 'state_changed' and state_debounce_duration > 0 }}
   transition: |
     {{
       trigger.event.data.service_data.transition|default(default_transition)|int(0)
@@ -252,12 +253,12 @@ actions:
         sequence:
           - repeat:
               sequence:
-                - delay: "{{ states[trigger.event.data.new_state.entity_id].last_updated + timedelta(seconds=state_hold_duration) - now() }}"
+                - delay: "{{ states[trigger.event.data.new_state.entity_id].last_updated + timedelta(seconds=state_debounce_duration) - now() }}"
               until:
                 - condition: template
                   value_template: |
                     {% set state = states[trigger.event.data.new_state.entity_id] %}
-                    {{ state.state != 'on' or state.last_updated <= now() - timedelta(seconds=state_hold_duration) }}
+                    {{ state.state != 'on' or state.last_updated <= now() - timedelta(seconds=state_debounce_duration) }}
 
   - alias: Determine lights with target brightness below on minimum %
     variables:
@@ -360,10 +361,10 @@ actions:
           entities: "{{ scene_final }}"
           transition: "{{ max(transition_remaining | round, 0) }}"
 
-  - alias: Apply Adaptive Lighting if target brightness was unspecified
+  - alias: Re-apply Adaptive Lighting if target brightness was unspecified
     if:
       - condition: template
-        value_template: "{{ is_al_installed and brightness is none }}"
+        value_template: "{{ is_al_installed and brightness is none or trigger_event_type == 'state_changed' }}"
     then:
       - alias: Wait for the remaining transition to complete
         delay:
