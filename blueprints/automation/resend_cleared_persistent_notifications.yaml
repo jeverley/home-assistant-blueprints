@@ -1,7 +1,10 @@
 blueprint:
-  name: Resend Cleared Persistent Notification
-  description: Resends a cleared persistent notification to all mobile app devices associated with the person who cleared it.
+  name: Resend Cleared Persistent Notifications
+  description: >-
+    Resends a cleared persistent notification to mobile apps associated with the person that cleared it,
+    works around the [Android 14 behaviour change](https://developer.android.com/about/versions/14/behavior-changes-all#non-dismissable-notifications).
   domain: automation
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/resend_cleared_persistent_notifications.yaml
 
 trigger:
   - platform: event
