@@ -120,39 +120,38 @@ variables:
       {% set area_ids = [] if sd.area_ids is not defined else [sd.area_ids] if sd.area_ids is string else sd.area_ids %}
       {% set floor_ids = [] if sd.floor_ids is not defined else [sd.floor_ids] if sd.floor_ids is string else sd.floor_ids %}
       {% set label_ids = [] if sd.label_ids is not defined else [sd.label_ids] if sd.label_ids is string else sd.label_ids %}
-      {% set resolved_entities =
-        (
-          (area_ids | map('area_entities')|flatten if area_ids else [])
-          + (floor_ids | map('floor_entities')|flatten if floor_ids else [])
-          + (label_ids | map('label_entities')|flatten if label_ids else [])
-          + (label_ids | map('label_devices')|flatten | map('device_entities')|flatten if label_ids else [])
-        ) | select('contains', 'light.') | list
-      %}
-      {{ (resolved_entities + entity_ids) | unique | list }}
-    {% elif
-      trigger_event_type == 'state_changed'
-      and trigger.event.data.old_state
-      and trigger.event.data.old_state.state == 'off'
-      and trigger.event.data.new_state
-      and trigger.event.data.new_state.state == 'on'
-      and 'light.' in trigger.event.data.new_state.entity_id
-      and trigger.event.data.new_state.attributes.brightness|default(none) is number
-    %} 
-      {# Only include light entities changing from off to on with brightness #}
-      {{ [trigger.event.data.new_state.entity_id] }}
+      {% set resolved_entities = (
+        (device_ids | map('device_entities')|flatten if device_ids else [])
+        + (area_ids | map('area_entities')|flatten if area_ids else [])
+        + (floor_ids | map('floor_entities')|flatten if floor_ids else [])
+        + (label_ids | map('label_entities')|flatten if label_ids else [])
+        + (label_ids | map('label_devices')|flatten | map('device_entities')|flatten if label_ids else [])
+      ) %}
+      {{ intersect(resolved_entities + entity_ids, light_config) }}
+    {% elif trigger_event_type == 'state_changed' %}
+      {# Only include lights changing from off to on with brightness #}
+      {% set ed = trigger.event.data %}
+      {{
+        [ed.new_state.entity_id]
+        if ed.new_state
+        and ed.new_state.entity_id in light_config
+        and ed.old_state
+        and ed.old_state.state == 'off'
+        and ed.new_state.state == 'on'
+        and ed.new_state.attributes.brightness|default(none) is number
+        else []
+      }}
     {% else %}
       {{ [] }}
     {% endif %}
 
-  matched_entity_ids: |
-    {{ intersect(trigger_entity_ids, light_config) }}
-  matched_off_duration: |
+  off_duration: |
     {# Get the duration in seconds that each matched light was off #}
     {% set global = namespace(off_duration={}) %}
     {% set trigger_time = as_datetime(trigger_time) %}
     {% if trigger_event_type == 'call_service' %}
-      {# Determine off durations from matched entity states #}
-      {% for state in expand(matched_entity_ids) %}
+      {# Determine off durations from trigger entity states #}
+      {% for state in expand(trigger_entity_ids) %}
         {% if state.state == 'off' and state.last_changed < trigger_time %}
           {% set global.off_duration = dict(global.off_duration, **{
             state.entity_id: (trigger_time - state.last_changed).total_seconds()
@@ -163,28 +162,26 @@ variables:
           }) %}
         {% endif %}
       {% endfor %}
-    {% elif trigger_event_type == 'state_changed' and matched_entity_ids %}
-      {# Determine off duration from the prevous state #}
+    {% elif trigger_event_type == 'state_changed' and trigger_entity_ids %}
+      {# Determine off duration from the old state #}
       {% set global.off_duration = {
         trigger.event.data.new_state.entity_id: (trigger_time - trigger.event.data.old_state.last_changed).total_seconds()
       } %}
     {% endif %}
     {{ global.off_duration }}
   target_entity_ids: |
-    {{ matched_off_duration.keys() | list }}
+    {{ off_duration.keys() | list }}
 
   brightness: |
-    {% if trigger_event_type == 'state_changed' %}
+    {% if trigger_event_type == 'call_service' %}
+      {% set sd = trigger.event.data.service_data %}
       {{
-        trigger.event.data.new_state.attributes.brightness|default(none)
-        if trigger.event.data.new_state else none
-      }}
-    {% elif trigger_event_type == 'call_service' %}
-      {{
-        trigger.event.data.service_data.brightness if trigger.event.data.service_data.brightness|default(none) is number
-        else (trigger.event.data.service_data.brightness_pct * scale_factor) | round if trigger.event.data.service_data.brightness_pct|default(none) is number
+        sd.brightness if sd.brightness|default(none) is number
+        else (sd.brightness_pct * scale_factor) | round if sd.brightness_pct|default(none) is number
         else none
       }}
+    {% elif trigger_event_type == 'state_changed' and trigger_entity_ids %}
+      {{ trigger.event.data.new_state.attributes.brightness }}
     {% else %}
       {{ none }}
     {% endif %}
@@ -281,7 +278,7 @@ actions:
           {% set on_minimum = light_config[entity_id].on_minimum %}
 
           {# Warm lights get a reduced start-up minimum #}
-          {% set fraction = min(matched_off_duration[entity_id]|default(cooldown) / cooldown, 1) if cooldown else 1 %}
+          {% set fraction = min(off_duration[entity_id]|default(cooldown) / cooldown, 1) if cooldown else 1 %}
           {% set adjusted_minimum = max(on_minimum * fraction, 1) | round %}
 
           {# Add lights with brightness below the adjusted minimum to the scene #}
