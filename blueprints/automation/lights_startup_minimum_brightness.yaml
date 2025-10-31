@@ -108,11 +108,7 @@ triggers:
 
 variables:
   trigger_time: |
-    {% if trigger.event is defined %}
-      {{ trigger.event.time_fired }}
-    {% else %}
-      {{ now() }}
-    {% endif %}
+    {{ trigger.event.time_fired if trigger.event is defined else now() }}
   trigger_event_type: |
     {{ trigger.event.event_type if trigger.event is defined else none }}
   trigger_entity_ids: |
@@ -135,12 +131,12 @@ variables:
       {{ (resolved_entities + entity_ids) | unique | list }}
     {% elif
       trigger_event_type == 'state_changed'
-      and trigger.event.data.new_state
       and trigger.event.data.old_state
-      and 'light.' in trigger.event.data.new_state.entity_id
       and trigger.event.data.old_state.state == 'off'
+      and trigger.event.data.new_state
       and trigger.event.data.new_state.state == 'on'
-      and trigger.event.data.new_state.attributes.brightness|default(none) is not none
+      and 'light.' in trigger.event.data.new_state.entity_id
+      and trigger.event.data.new_state.attributes.brightness|default(none) is number
     %} 
       {# Only include light entities changing from off to on with brightness #}
       {{ [trigger.event.data.new_state.entity_id] }}
@@ -153,14 +149,15 @@ variables:
   matched_off_duration: |
     {# Get the duration in seconds that each matched light was off #}
     {% set global = namespace(off_duration={}) %}
+    {% set trigger_time = as_datetime(trigger_time) %}
     {% if trigger_event_type == 'call_service' %}
       {# Determine off durations from matched entity states #}
       {% for state in expand(matched_entity_ids) %}
-        {% if state.state == 'off' and state.last_changed < as_datetime(trigger_time) %}
+        {% if state.state == 'off' and state.last_changed < trigger_time %}
           {% set global.off_duration = dict(global.off_duration, **{
-            state.entity_id: (as_datetime(trigger_time) - state.last_changed).total_seconds()
+            state.entity_id: (trigger_time - state.last_changed).total_seconds()
           }) %}
-        {% elif state.state == 'on' and state.last_changed > as_datetime(trigger_time) %}
+        {% elif state.state == 'on' and state.last_changed > trigger_time %}
           {% set global.off_duration = dict(global.off_duration, **{
             state.entity_id: none
           }) %}
@@ -169,7 +166,7 @@ variables:
     {% elif trigger_event_type == 'state_changed' and matched_entity_ids %}
       {# Determine off duration from the prevous state #}
       {% set global.off_duration = {
-        trigger.event.data.new_state.entity_id: (as_datetime(trigger_time) - trigger.event.data.old_state.last_changed).total_seconds()
+        trigger.event.data.new_state.entity_id: (trigger_time - trigger.event.data.old_state.last_changed).total_seconds()
       } %}
     {% endif %}
     {{ global.off_duration }}
@@ -177,17 +174,17 @@ variables:
     {{ matched_off_duration.keys() | list }}
 
   brightness: |
-    {% if trigger.event is not defined %}
-      {{ none }}
-    {% elif trigger_event_type == 'state_changed' %}
+    {% if trigger_event_type == 'state_changed' %}
       {{
-        trigger.event.data.new_state.attributes.brightness|default(none)|int(none)
+        trigger.event.data.new_state.attributes.brightness|default(none)
         if trigger.event.data.new_state else none
       }}
-    {% elif trigger.event.data.service_data.brightness is defined %}
-      {{ trigger.event.data.service_data.brightness|int(none) }}
-    {% elif trigger.event.data.service_data.brightness_pct|default(none) is number %}
-      {{ (trigger.event.data.service_data.brightness_pct * scale_factor) | round }}
+    {% elif trigger_event_type == 'call_service' %}
+      {{
+        trigger.event.data.service_data.brightness if trigger.event.data.service_data.brightness|default(none) is number
+        else (trigger.event.data.service_data.brightness_pct * scale_factor) | round if trigger.event.data.service_data.brightness_pct|default(none) is number
+        else none
+      }}
     {% else %}
       {{ none }}
     {% endif %}
