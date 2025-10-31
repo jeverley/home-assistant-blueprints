@@ -238,7 +238,7 @@ actions:
           - wait_template: |
               {{ expand(target_entity_ids) | map(attribute='last_changed') | sort | first > as_datetime(trigger_time) }}
             continue_on_timeout: true
-            timeout: "00:00:01"
+            timeout: "{{ as_datetime(trigger_time) + timedelta(seconds=1) - now() }}"
 
       - alias: Wait for subsequent state updates to complete
         conditions:
