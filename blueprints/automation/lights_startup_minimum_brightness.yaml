@@ -20,12 +20,13 @@ blueprint:
                   filter:
                     - domain:
                         - light
-            min_pct:
+            minimum_pct:
               label: Start-up minimum brightness
               selector:
                 number:
                   min: 1
                   max: 100
+                  step: 1
                   unit_of_measurement: "%"
             cooldown:
               label: Cooldown duration
@@ -65,6 +66,7 @@ blueprint:
 
 trigger_variables:
   scale_factor: 2.55
+  warmup_ms: 500
   default_transition: !input default_transition
   light_config_objects: !input light_config
   light_config: |
@@ -72,7 +74,7 @@ trigger_variables:
     {% for config in light_config_objects %}
       {% set global.config = dict(global.config, **{
         config.entity_id: {
-          'on_minimum': (config.min_pct|default(0) * scale_factor) | round,
+          'minimum': (config.minimum_pct|default(0) * scale_factor) | round,
           'cooldown': config.cooldown|default(0)
         }
       }) %}
@@ -171,7 +173,6 @@ variables:
     {{ global.off_duration }}
   target_entity_ids: |
     {{ off_duration.keys() | list }}
-
   brightness: |
     {% if trigger_event_type == 'call_service' %}
       {% set sd = trigger.event.data.service_data %}
@@ -185,8 +186,6 @@ variables:
     {% else %}
       {{ none }}
     {% endif %}
-  brightness_deferred: |
-    {{ not brightness or trigger_event_type == 'state_changed' and state_debounce_duration > 0 }}
   transition: |
     {{
       trigger.event.data.service_data.transition|default(default_transition)|int(0)
@@ -223,14 +222,22 @@ conditions:
           {% set global = namespace(result=false) %}
           {% for entity_id in target_entity_ids %}
             {% if not global.result %}
-              {% set global.result = 0 < brightness < light_config[entity_id].on_minimum %}
+              {% set global.result = 0 < brightness < light_config[entity_id].minimum %}
             {% endif %}
           {% endfor %}
           {{ global.result }}
 
 actions:
-  - choose:
-      - alias: Wait for state updates if target brightness was unspecified in the service call
+  - alias: Post trigger variables
+    variables:
+      transition_end: |
+        {{ as_datetime(trigger_time) + timedelta(seconds=transition) }}
+      brightness_deferred: |
+        {{ not brightness or trigger_event_type == 'state_changed' and state_debounce_duration > 0 }}
+
+  - alias: Wait for deferred brightness evaluation
+    choose:
+      - alias: Wait for target states to change if brightness was unspecified in the service call
         conditions:
           - condition: template
             value_template: "{{ trigger_event_type == 'call_service' and brightness_deferred }}"
@@ -238,20 +245,21 @@ actions:
           - wait_template: |
               {{ expand(target_entity_ids) | map(attribute='last_changed') | sort | first > as_datetime(trigger_time) }}
             continue_on_timeout: true
-            timeout: "{{ as_datetime(trigger_time) + timedelta(seconds=1) - now() }}"
+            timeout: "{{ max(as_datetime(trigger_time) + timedelta(seconds=1) - now(), timedelta(0)) }}"
 
-      - alias: Wait for subsequent state updates to complete
+      - alias: Wait for subsequent state updates to complete (state debounce)
         conditions:
           - condition: template
             value_template: "{{ trigger_event_type == 'state_changed' and brightness_deferred }}"
         sequence:
           - repeat:
               sequence:
-                - delay: "{{ states[trigger.event.data.new_state.entity_id].last_updated + timedelta(seconds=state_debounce_duration) - now() }}"
+                - delay: |
+                    {{ max(states[target_entity_ids[0]].last_updated + timedelta(seconds=state_debounce_duration) - now(), timedelta(0)) }}
               until:
                 - condition: template
                   value_template: |
-                    {% set state = states[trigger.event.data.new_state.entity_id] %}
+                    {% set state = states[target_entity_ids[0]] %}
                     {{ state.state != 'on' or state.last_updated <= now() - timedelta(seconds=state_debounce_duration) }}
 
   - alias: Determine lights with target brightness below on minimum %
@@ -260,27 +268,25 @@ actions:
         {# Get target brightness for each light #}
         {% set global = namespace(brightness={}) %}
         {% for entity_id in target_entity_ids %}
-          {% set target_brightness =
-            brightness if not brightness_deferred
-            else state_attr(entity_id, 'brightness')|int(none)
-          %}
-          {% set global.brightness = dict(global.brightness, **{entity_id: target_brightness}) %}
+          {% set global.brightness = dict(global.brightness, **{
+            entity_id: brightness if not brightness_deferred else state_attr(entity_id, 'brightness')|int(none)
+          }) %}
         {% endfor %}
         {{ global.brightness }}
       transition_remaining: |
-        {{ (as_datetime(trigger_time) + timedelta(seconds=transition) - now()).total_seconds() }}
+        {{ (as_datetime(transition_end) - now()).total_seconds() }}
       transition_pct: |
-        {{ min(1 - transition_remaining / transition, 1) if transition > 0 else 1 }}
-      scene_on_minimum: |
+        {{ min(1 - transition_remaining / transition, 1) if transition else 1 }}
+      scene_minimum: |
         {% set global = namespace(scene_entities={}) %}
+        {% set warmup = timedelta(milliseconds=warmup_ms) %}
         {% for entity_id, target_brightness in target_brightness.items() %}
-          {% set cooldown = light_config[entity_id].cooldown %}
-          {% set on_minimum = light_config[entity_id].on_minimum %}
-
           {# Warm lights get a reduced start-up minimum #}
-          {% set fraction = min(off_duration[entity_id]|default(cooldown) / cooldown, 1) if cooldown else 1 %}
-          {% set adjusted_minimum = max(on_minimum * fraction, 1) | round %}
-
+          {% set cooldown = light_config[entity_id].cooldown %}
+          {% set off_duration = off_duration[entity_id] %}
+          {% set cool_pct = min(off_duration / cooldown, 1) if off_duration is not none and cooldown else 1 %}
+          {% set adjusted_minimum = max(light_config[entity_id].minimum * cool_pct, 1) | round %}
+          
           {# Add lights with brightness below the adjusted minimum to the scene #}
           {% if target_brightness and target_brightness * transition_pct < adjusted_minimum %}
             {% set global.scene_entities = dict(global.scene_entities, **{
@@ -293,27 +299,27 @@ actions:
   - alias: Apply the start-up minimum brightness for each light
     if:
       - condition: template
-        value_template: "{{ not not scene_on_minimum }}"
+        value_template: "{{ not not scene_minimum }}"
     then:
       - action: scene.apply
         data:
-          entities: "{{ scene_on_minimum }}"
+          entities: "{{ scene_minimum }}"
           transition: 0
       - alias: Wait during light warm-up
         delay:
-          milliseconds: 500
+          milliseconds: "{{ warmup_ms }}"
     else:
       - stop: All lights are above their start-up minimum brightness
 
   - alias: Apply interim brightness to resume long transitions
     variables:
       transition_remaining: |
-        {{ (as_datetime(trigger_time) + timedelta(seconds=transition) - now()).total_seconds() }}
+        {{ (as_datetime(transition_end) - now()).total_seconds() }}
       transition_pct: |
-        {{ min(1 - transition_remaining / transition, 1) if transition > 0 else 1 }}
+        {{ min(1 - transition_remaining / transition, 1) if transition else 1 }}
       scene_interim: |
         {% set global = namespace(scene_entities={}) %}
-        {% for entity_id, minimum in scene_on_minimum.items() %}
+        {% for entity_id, minimum in scene_minimum.items() %}
           {# Determine interim brightness from remaining transition #}
           {% set interim_brightness = max(target_brightness[entity_id] * transition_pct, 1) | round %}
           {% if minimum.brightness != interim_brightness != target_brightness[entity_id] %}
@@ -335,15 +341,13 @@ actions:
   - alias: Apply the final brightness with remaining transition
     variables:
       transition_remaining: |
-        {{ (as_datetime(trigger_time) + timedelta(seconds=transition) - now()).total_seconds() }}
+        {{ (as_datetime(transition_end) - now()).total_seconds() }}
       scene_final: |
         {% set global = namespace(scene_entities={}) %}
-        {% for entity_id, minimum in scene_on_minimum.items() %}
-          {% if target_brightness[entity_id] != minimum.brightness %}
-            {% set global.scene_entities = dict(global.scene_entities, **{
-              entity_id: {'state': 'on', 'brightness': target_brightness[entity_id]}
-            }) %}
-          {% endif %}
+        {% for entity_id in scene_minimum.keys() %}
+          {% set global.scene_entities = dict(global.scene_entities, **{
+            entity_id: {'state': 'on', 'brightness': target_brightness[entity_id]}
+          }) %}
         {% endfor %}
         {{ global.scene_entities }}
   - if:
@@ -361,13 +365,12 @@ actions:
         value_template: "{{ is_al_installed and brightness is none or trigger_event_type == 'state_changed' }}"
     then:
       - alias: Wait for the remaining transition to complete
-        delay:
-          seconds: |
-            {{ max((as_datetime(trigger_time) + timedelta(seconds=transition) - now()).total_seconds(), 0) }}
+        delay: |
+          {{ max(as_datetime(transition_end) - now(), timedelta(0)) }}
       - action: adaptive_lighting.apply
         continue_on_error: true
         data:
-          lights: "{{ scene_on_minimum.keys() | list }}"
+          lights: "{{ scene_minimum.keys() | list }}"
 
 mode: parallel
 max: 50
