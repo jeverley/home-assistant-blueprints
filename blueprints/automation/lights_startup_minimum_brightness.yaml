@@ -68,6 +68,7 @@ trigger_variables:
   scale_factor: 2.55
   warmup_ms: 500
   default_transition: !input default_transition
+  state_debounce_duration: !input state_debounce_duration
   light_config_objects: !input light_config
   light_config: |
     {% set global = namespace(config={}) %}
@@ -80,9 +81,7 @@ trigger_variables:
       }) %}
     {% endfor %}
     {{ global.config }}
-  state_debounce_duration: !input state_debounce_duration
-  is_al_installed: |
-    {{ not not integration_entities('adaptive_lighting') }}
+  is_al_installed: "{{ not not integration_entities('adaptive_lighting') }}"
 
 triggers:
   - alias: When the light turn_on service is called
@@ -273,91 +272,106 @@ actions:
           }) %}
         {% endfor %}
         {{ global.brightness }}
-      transition_remaining: |
-        {{ (as_datetime(transition_end) - now()).total_seconds() }}
-      transition_pct: |
-        {{ min(1 - transition_remaining / transition, 1) if transition else 1 }}
       scene_minimum: |
-        {% set global = namespace(scene_entities={}) %}
-        {% set warmup = timedelta(milliseconds=warmup_ms) %}
+        {% set warmup = namespace(s={}) %}
+        {% set instant = namespace(s={}) %}
+        {% set transition_remaining = (as_datetime(transition_end) - now()).total_seconds() %}
+        {% set transition_pct = min(1 - transition_remaining / transition, 1) if transition else 1 %}
+
         {% for entity_id, target_brightness in target_brightness.items() %}
           {# Warm lights get a reduced start-up minimum #}
           {% set cooldown = light_config[entity_id].cooldown %}
           {% set off_duration = off_duration[entity_id] %}
-          {% set cool_pct = min(off_duration / cooldown, 1) if off_duration is not none and cooldown else 1 %}
+          {% set cool_pct = min(off_duration / cooldown, 1) if cooldown and off_duration is not none else 1 %}
           {% set adjusted_minimum = max(light_config[entity_id].minimum * cool_pct, 1) | round %}
           
           {# Add lights with brightness below the adjusted minimum to the scene #}
-          {% if target_brightness and target_brightness * transition_pct < adjusted_minimum %}
-            {% set global.scene_entities = dict(global.scene_entities, **{
-              entity_id: { 'state': 'on','brightness': adjusted_minimum}
+          {% if not target_brightness or target_brightness * transition_pct >= adjusted_minimum %}
+            {# Brightness above minimum #}
+          {% elif transition_remaining > 1 or adjusted_minimum > target_brightness %}
+            {# Apply minimum brightness for the warmup duration #}
+            {% set warmup.s = dict(warmup.s, **{
+              entity_id: { 'state': 'on', 'brightness': adjusted_minimum}
+            }) %}
+          {% else %}
+            {# Apply minimum brightness and continue transition #}
+            {% set instant.s = dict(instant.s, **{
+              entity_id: { 'state': 'on', 'brightness': adjusted_minimum}
             }) %}
           {% endif %}
         {% endfor %}
-        {{ global.scene_entities }}
+        {{ {'warmup': warmup.s, 'instant': instant.s} }}
 
-  - alias: Apply the start-up minimum brightness for each light
+  - alias: Apply the start-up minimum for target lights
     if:
       - condition: template
-        value_template: "{{ not not scene_minimum }}"
+        value_template: "{{ not not scene_minimum.instant or not not scene_minimum.warmup }}"
     then:
-      - action: scene.apply
+      - alias: Apply the start-up minimum brightness for each light
+        action: scene.apply
         data:
-          entities: "{{ scene_minimum }}"
+          entities: "{{ combine(scene_minimum.instant, scene_minimum.warmup) }}"
           transition: 0
-      - alias: Wait during light warm-up
-        delay:
-          milliseconds: "{{ warmup_ms }}"
     else:
       - stop: All lights are above their start-up minimum brightness
 
-  - alias: Apply interim brightness to resume long transitions
-    variables:
-      transition_remaining: |
-        {{ (as_datetime(transition_end) - now()).total_seconds() }}
-      transition_pct: |
-        {{ min(1 - transition_remaining / transition, 1) if transition else 1 }}
-      scene_interim: |
-        {% set global = namespace(scene_entities={}) %}
-        {% for entity_id, minimum in scene_minimum.items() %}
-          {# Determine interim brightness from remaining transition #}
-          {% set interim_brightness = max(target_brightness[entity_id] * transition_pct, 1) | round %}
-          {% if minimum.brightness != interim_brightness != target_brightness[entity_id] %}
-            {% set global.scene_entities = dict(global.scene_entities, **{
-              entity_id: { 'state': 'on','brightness': interim_brightness}
-            }) %}
-          {% endif %}
-        {% endfor %}
-        {{ global.scene_entities }}
-  - if:
-      - condition: template
-        value_template: "{{ not not scene_interim }}"
-    then:
-      - action: scene.apply
-        data:
-          entities: "{{ scene_interim }}"
-          transition: 0
+  - parallel:
+      - alias: Apply the final brightness with remaining transition for instant lights
+        if:
+          - condition: template
+            value_template: "{{ not not scene_minimum.instant }}"
+        then:
+          action: scene.apply
+          data:
+            entities: |
+              {% set global = namespace(scene={}) %}
+              {% for entity_id in scene_minimum.instant.keys() %}
+                {% set global.scene = dict(global.scene, **{
+                  entity_id: {'state': 'on', 'brightness': target_brightness[entity_id]}
+                }) %}
+              {% endfor %}
+              {{ global.scene }}
+            transition: "{{ max((as_datetime(transition_end) - now()).total_seconds(), 0) | round }}"
 
-  - alias: Apply the final brightness with remaining transition
-    variables:
-      transition_remaining: |
-        {{ (as_datetime(transition_end) - now()).total_seconds() }}
-      scene_final: |
-        {% set global = namespace(scene_entities={}) %}
-        {% for entity_id in scene_minimum.keys() %}
-          {% set global.scene_entities = dict(global.scene_entities, **{
-            entity_id: {'state': 'on', 'brightness': target_brightness[entity_id]}
-          }) %}
-        {% endfor %}
-        {{ global.scene_entities }}
-  - if:
-      - condition: template
-        value_template: "{{ not not scene_final }}"
-    then:
-      - action: scene.apply
-        data:
-          entities: "{{ scene_final }}"
-          transition: "{{ max(transition_remaining | round, 0) }}"
+      - alias: Wait the warmup duration, then apply interim and final brightness
+        if:
+          - condition: template
+            value_template: "{{ not not scene_minimum.warmup }}"
+        then:
+          - alias: Wait during light warm-up
+            delay:
+              milliseconds: "{{ warmup_ms }}"
+          - alias: Apply interim brightness to resume long transitions
+            action: scene.apply
+            data:
+              entities: |
+                {% set global = namespace(scene={}) %}
+                {% set transition_remaining = (as_datetime(transition_end) - now()).total_seconds() %}
+                {% set transition_pct = min(1 - transition_remaining / transition, 1) if transition else 1 %}
+
+                {% for entity_id, minimum in scene_minimum.warmup.items() %}
+                  {# Determine interim brightness from remaining transition #}
+                  {% set interim_brightness = max(target_brightness[entity_id] * transition_pct, 1) | round %}
+                  {% if minimum.brightness != interim_brightness != target_brightness[entity_id] %}
+                    {% set global.scene = dict(global.scene, **{
+                      entity_id: {'state': 'on','brightness': interim_brightness}
+                    }) %}
+                  {% endif %}
+                {% endfor %}
+                {{ global.scene }}
+              transition: 0
+          - alias: Apply the final brightness with remaining transition
+            action: scene.apply
+            data:
+              entities: |
+                {% set global = namespace(scene={}) %}
+                {% for entity_id in scene_minimum.warmup.keys() %}
+                  {% set global.scene = dict(global.scene, **{
+                    entity_id: {'state': 'on', 'brightness': target_brightness[entity_id]}
+                  }) %}
+                {% endfor %}
+                {{ global.scene }}
+              transition: "{{ max((as_datetime(transition_end) - now()).total_seconds(), 0) | round }}"
 
   - alias: Re-apply Adaptive Lighting if target brightness was unspecified
     if:
@@ -370,7 +384,7 @@ actions:
       - action: adaptive_lighting.apply
         continue_on_error: true
         data:
-          lights: "{{ scene_minimum.keys() | list }}"
+          lights: "{{ union(scene_minimum.instant, scene_minimum.warmup) }}"
 
 mode: parallel
 max: 50
