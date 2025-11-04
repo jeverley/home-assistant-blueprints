@@ -354,7 +354,7 @@ actions:
                   }) %}
                 {% endfor %}
                 {{ global.scene }}
-              transition: "{{ max((as_datetime(transition_end) - now()).total_seconds(), 0) | round }}"
+              transition: "{{ max((as_datetime(transition_end) - now()).total_seconds(), 0) }}"
 
       - alias: Wait the warmup duration, then apply interim and final brightness
         if:
@@ -395,7 +395,7 @@ actions:
                   }) %}
                 {% endfor %}
                 {{ global.scene }}
-              transition: "{{ max((as_datetime(transition_end) - now()).total_seconds(), 0) | round }}"
+              transition: "{{ max((as_datetime(transition_end) - now()).total_seconds(), 0) }}"
 
   - alias: Re-apply Adaptive Lighting if target brightness was unspecified
     if:
