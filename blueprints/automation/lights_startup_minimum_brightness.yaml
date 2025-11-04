@@ -1,12 +1,12 @@
 blueprint:
   name: Lights Start-up Minimum Brightness
-  description: "Automatically set lights to a minimum brightness when turning on, with configurable minimums per light entity"
+  description: "Ensures lights turn on at a brightness level high enough to reliably activate bulbs with minimum voltage thresholds, then restores the originally requested brightness."
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/lights_startup_minimum_brightness.yaml
   input:
     light_config:
       name: Lights configuration
-      description: "Configure minimum brightness percentage and cooldown duration for each light"
+      description: Configure minimum brightness percentage and cooldown duration for each light.
       selector:
         object:
           label_field: entity_id
@@ -21,7 +21,7 @@ blueprint:
                     - domain:
                         - light
             minimum_pct:
-              label: Start-up minimum brightness
+              label: Start-up minimum brightness.
               selector:
                 number:
                   min: 1
@@ -29,7 +29,7 @@ blueprint:
                   step: 1
                   unit_of_measurement: "%"
             cooldown:
-              label: Cooldown duration
+              label: Cooldown duration.
               selector:
                 number:
                   min: 0
@@ -39,7 +39,7 @@ blueprint:
       default: []
     default_transition:
       name: Default transition
-      description: This is used when a transition is not specified in the trigger event
+      description: This is used when a transition is not specified in the trigger event. <br /><br />`Optional`
       default: 0
       selector:
         number:
@@ -49,29 +49,40 @@ blueprint:
           unit_of_measurement: s
     state_trigger:
       name: Apply after physical turn on
-      description: Enable to handle lights with physical switches that can be turned on outside of Home Assistant
+      description: Enable to handle lights with physical switches that can be turned on outside of Home Assistant. <br /><br />`Optional`
       default: false
       selector:
         boolean:
-    state_debounce_duration:
-      name: Physical switch state debounce duration
-      description: Duration to wait for subsequent state updates before evaluating target brightness (to allow for other automations to complete)
-      default: 0.5
-      selector:
-        number:
-          min: 0
-          max: 2
-          step: 0.1
-          unit_of_measurement: s
-    stored_traces:
-      name: Stored traces [WARNING]
-      description: Causes excessive logging and poor performance when used with 'Apply after physical turn on'
-      default: 0
-      selector:
-        number:
-          min: 0
-          max: 20
-          step: 1
+    advanced_settings:
+      name: Advanced Settings
+      icon: mdi:wrench-cog
+      collapsed: true
+      input:
+        state_debounce_duration:
+          name: Physical state debounce duration
+          description: "
+            Duration to wait for subsequent state updates before evaluating target brightness,\n
+            this allows other automations to complete.
+            <br /><br />`Optional`"
+          default: 0.5
+          selector:
+            number:
+              min: 0
+              max: 2
+              step: 0.1
+              unit_of_measurement: s
+        stored_traces:
+          name: Stored traces
+          description: "
+            <strong>WARNING:</strong> Non-zero values result in poor performance when used with the setting:\n
+            _'Apply after physical turn on'_.
+            <br /><br />`Optional`"
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 20
+              step: 1
 
 trigger_variables:
   scale_factor: 2.55
