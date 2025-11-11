@@ -58,6 +58,16 @@ variables:
     {{ dict(ns.pairs) }}
 
 action:
+  - if:
+      - condition: template
+        value_template: "{{ bool(trigger.event.data.when_relative|default(false)) }}"
+    then:
+      - action: system_log.write
+        metadata: {}
+        data:
+          level: warning
+          message: Unable to re-send persistent notifications with attribute 'when_relative' == true
+      - stop:
   - repeat:
       for_each: "{{ device_name_slugs }}"
       sequence:
