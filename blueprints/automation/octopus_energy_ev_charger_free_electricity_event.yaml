@@ -1,8 +1,8 @@
 blueprint:
   name: Octopus Energy - EV Charger Free Electricity Override
   description: >
-    Starts a charge override during free electricity sessions if the EV charger is in Smart mode
-    and the cost of starting early is lower than the cost of missing the sync window.
+    Starts a charge override during free electricity sessions if the EV charger is in Scheduled mode.
+    For devices with an update interval, the automation checks if starting early would be cost-effective based on current and upcoming electricity rates.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/octopus_energy_ev_charger_free_electricity_event.yaml
   input:
@@ -32,23 +32,25 @@ blueprint:
         select:
           mode: dropdown
           options:
-            - PodPoint
+            - Pod Point
 
     pod_point:
-      name: PodPoint Charger Settings
+      name: Pod Point Charger Settings
       collapsed: true
-      description: Configuration for your PodPoint EV charger
+      description: Configuration for your Pod Point EV charger
       input:
         pp_charge_speed_kwh:
-          name: Charge Speed
-          description: The charging speed of the EV charger in kilowatts per hour
-          default: 7
+          name: Charge Speed (kWh)
+          description: The charging speed supported by the EV charger
+          default: "7 kWh"
           selector:
-            number:
-              min: 1
-              max: 22
-              unit_of_measurement: kWh
-              mode: slider
+            select:
+              options:
+                - "3.6 kWh"
+                - "7 kWh"
+                - "22 kWh"
+              custom_value: true
+              sort: true
         pp_charge_mode_sensor:
           name: Charge Mode Sensor
           description: Sensor that reports the current operating mode of your EV charger (e.g., Smart, Manual)
@@ -123,7 +125,7 @@ trigger_variables:
   end_offset_seconds: !input end_offset_seconds
   end_offset: "{{ timedelta(seconds=end_offset_seconds) }}"
 
-  # Charger config for PodPoint
+  # Charger config for Pod Point
   pp_charge_speed_kwh: !input pp_charge_speed_kwh
   pp_charge_mode_sensor: !input pp_charge_mode_sensor
   pp_last_message_sensor: !input pp_last_message_sensor
@@ -132,16 +134,16 @@ trigger_variables:
 
   # Derived config
   last_update_sensor: |
-    {% if charger_type == 'PodPoint' %}
+    {% if charger_type == 'Pod Point' %}
     {{ pp_last_message_sensor }}
     {% endif %}
   update_interval: |
-    {% if charger_type == 'PodPoint' %}
+    {% if charger_type == 'Pod Point' %}
     {{ timedelta(minutes=pp_interval_minutes) }}
     {% endif %}
   charge_speed_kwh: |
-    {% if charger_type == 'PodPoint' %}
-    {{ pp_charge_speed_kwh }}
+    {% if charger_type == 'Pod Point' %}
+    {{ float(pp_charge_speed_kwh|regex_replace('^(?P<num>\d+(\.\d+)?).*', '\\g<num>')) }}
     {% endif %}
 
 triggers:
@@ -179,12 +181,12 @@ triggers:
           {{ false }}
         {% endif %}
       {% endif %}
-  - alias: PodPoint mode change
+  - alias: Pod Point mode change
     id: charger
     platform: state
     entity_id: !input pp_charge_mode_sensor
     to: Smart
-    enabled: "{{ charger_type == 'PodPoint' }}"
+    enabled: "{{ charger_type == 'Pod Point' }}"
 
 variables:
   event_start: |
@@ -212,13 +214,13 @@ conditions:
     condition: state
     entity_id: !input pp_charge_mode_sensor
     state: Smart
-    enabled: "{{ charger_type == 'PodPoint' }}"
+    enabled: "{{ charger_type == 'Pod Point' }}"
   - alias: No override or event ends after current override
     condition: template
     value_template: >-
       {% set override_end = as_datetime(states(pp_override_end_sensor), none) %}
       {{ override_end is none or (event_end and event_end > override_end + end_offset) }}
-    enabled: "{{ charger_type == 'PodPoint' }}"
+    enabled: "{{ charger_type == 'Pod Point' }}"
 
 action:
   - alias: Start a charge override for the remainder of the free energy session
@@ -230,15 +232,15 @@ action:
         sequence:
           - stop:
       - conditions:
-          - alias: Event has not started
+          - alias: Manual trigger with no active event
             condition: template
             value_template: "{{ trigger.id is not defined and not is_state(event_calendar, 'on') }}"
         sequence:
           - stop:
       - conditions:
-          - alias: If the charger type is PodPoint
+          - alias: If the charger type is Pod Point
             condition: template
-            value_template: "{{ charger_type == 'PodPoint' }}"
+            value_template: "{{ charger_type == 'Pod Point' }}"
         sequence:
           - action: pod_point.charge_now
             metadata: {}
