@@ -85,7 +85,7 @@ blueprint:
               min: 0.0
               max: 30.0
               unit_of_measurement: s
-              step: 1.0
+              step: 0.1
               mode: slider
         transition_off:
           name: Lights off transition
@@ -96,7 +96,7 @@ blueprint:
               min: 0.0
               max: 30.0
               unit_of_measurement: s
-              step: 1.0
+              step: 0.1
               mode: slider
         illuminance_on_transition:
           name: Illuminance lights on transition
@@ -109,7 +109,7 @@ blueprint:
               min: 0.0
               max: 60.0
               unit_of_measurement: s
-              step: 1.0
+              step: 0.1
               mode: slider
         illuminance_off_transition:
           name: Illuminance lights off transition
@@ -122,7 +122,7 @@ blueprint:
               min: 0.0
               max: 60.0
               unit_of_measurement: s
-              step: 1.0
+              step: 0.1
               mode: slider
         control_reset_transition:
           name: Control reset transition (optional)
@@ -133,7 +133,7 @@ blueprint:
               min: 0.0
               max: 60.0
               unit_of_measurement: s
-              step: 1.0
+              step: 0.1
               mode: slider
         physical_control_transition:
           name: Physical control transition (optional)
@@ -144,18 +144,18 @@ blueprint:
               min: 0.0
               max: 30.0
               unit_of_measurement: s
-              step: 1.0
+              step: 0.1
               mode: slider
-        physical_control_latency_compensation:
-          name: Physical control latency compensation (optional)
+        physical_control_latency:
+          name: Physical control latency (optional)
           description: The transition time is reduced by this value for physically triggered changes.
           default: 0
           selector:
             number:
               min: 0.0
-              max: 5.0
+              max: 1.0
               unit_of_measurement: s
-              step: 1.0
+              step: 0.01
               mode: slider
     occupancy_options:
       name: Occupancy
@@ -420,7 +420,7 @@ trigger_variables:
   automatic_control_toggle: !input automatic_control_toggle
   physical_control_lights: !input physical_control_lights
   physical_control_transition: !input physical_control_transition
-  physical_control_latency_compensation: !input physical_control_latency_compensation
+  physical_control_latency: !input physical_control_latency
   is_automatic_control_toggleable: |
     {{
       automatic_control_toggle is string
@@ -450,92 +450,6 @@ trigger_variables:
   cover: !input cover
   cover_shading_position: !input cover_shading_position
   cover_shading_when_closing: !input cover_shading_when_closing
-
-variables:
-  trigger_id: "{{ trigger.id | default('') | string }}"
-  adaptive_lighting_entities: |
-    {{ 
-      integration_entities('adaptive_lighting')
-      | select('in', area_entities(area))
-      | expand
-      | selectattr('attributes.manual_control', 'defined')
-      | map(attribute='entity_id') | list
-    }}
-  light_entities: |
-    {% if area_lights %}
-      {{ area_lights }}
-    {% else %}
-      {{
-        area_entities(area)
-        | select('contains', 'light.')
-        | reject('is_hidden_entity')
-        | expand
-        | map(attribute='entity_id') | list
-      }}
-    {% endif %}
-  is_trigger_control_reset: |
-    {{ trigger_id | contains('control_reset') }}
-  lights_on_transition: |
-    {% if trigger_id == 'illuminance' and illuminance_on_transition is not none %}
-      {{ illuminance_on_transition }}
-    {% elif is_trigger_control_reset and control_reset_transition is not none %}
-      {{ control_reset_transition }}
-    {% elif trigger_id == 'physical_on' and physical_control_transition is not none %}
-      {{ physical_control_transition }}
-    {% elif trigger_id == 'physical_on' and transition_on > 1 and physical_control_latency_compensation %}
-      {{ transition_on - physical_control_latency_compensation }}
-    {% else %}
-      {{ transition_on }}
-    {% endif %}
-  lights_off_transition: |
-    {% if trigger_id == 'illuminance' and illuminance_off_transition is not none %}
-      {{ illuminance_off_transition }}
-    {% elif trigger_id == 'physical_off' and physical_control_transition is not none %}
-      {{ physical_control_transition }}
-    {% elif trigger_id == 'physical_off' and transition_off > 1 and physical_control_latency_compensation %}
-      {{ transition_off - physical_control_latency_compensation }}
-    {% else %}
-      {{ transition_off }}
-    {% endif %}
-  cover_position: "{{ state_attr(cover, 'current_position')|int(none) if cover else none }}"
-  illuminance: "{{ states(illuminance_sensor)|int(none) if illuminance_sensor else none }}"
-  scene_expiration: |
-    {{ as_timedelta(states(scene_timeout_helper)) if scene_timeout_helper is string else as_timedelta(scene_timeout) }}
-  is_automatic_control_enabled: |
-    {# Fall back to occupancy sensor if no toggle is configured #}
-    {% if not automatic_control_toggle %}
-      {{ occupancy_sensor is string and has_value(occupancy_sensor) }}
-    {% else %}
-      {{ is_state(automatic_control_toggle, 'on') }}
-    {% endif %}
-  is_cover_shading: |
-    {{
-      cover_position|int(100) < cover_shading_position|int(0)
-      or (
-        cover is string and cover_shading_when_closing
-        and is_state(cover, 'closing')
-        and states[cover].last_changed <= now() - timedelta(seconds=illuminance_minimum_duration)
-      )
-    }}
-  is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
-  is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
-  is_light_on: |
-    {{ light_entities | map('states') | select('eq', 'on') | list | count > 0 }}
-  is_occupied: "{{ is_state(occupancy_sensor, 'on') if occupancy_sensor else none }}"
-  is_scene_adaptive: |
-    {{
-      expand(adaptive_lighting_entities)
-      | selectattr('attributes.manual_control', 'defined')
-      | rejectattr('attributes.manual_control', 'equalto', none)
-      | rejectattr('attributes.manual_control', 'equalto', [])
-      | list | count > 0
-    }}
-  is_scene_saved: "{{ states[scene_entity].state is defined }}"
-  is_scene_expired: |
-    {{
-      is_scene_saved and states[scene_entity].last_updated is defined
-      and states[scene_entity].last_updated < now() - as_timedelta(scene_expiration)
-    }}
 
 trigger:
   - trigger: state
@@ -620,6 +534,92 @@ trigger:
     to: !input control_reset_trigger_routine_states
     id: routine_control_reset
     enabled: "{{ is_automatic_control_toggleable and occupancy_sensor is string }}"
+
+variables:
+  trigger_id: "{{ trigger.id | default('') | string }}"
+  adaptive_lighting_entities: |
+    {{ 
+      integration_entities('adaptive_lighting')
+      | select('in', area_entities(area))
+      | expand
+      | selectattr('attributes.manual_control', 'defined')
+      | map(attribute='entity_id') | list
+    }}
+  light_entities: |
+    {% if area_lights %}
+      {{ area_lights }}
+    {% else %}
+      {{
+        area_entities(area)
+        | select('contains', 'light.')
+        | reject('is_hidden_entity')
+        | expand
+        | map(attribute='entity_id') | list
+      }}
+    {% endif %}
+  is_trigger_control_reset: |
+    {{ trigger_id | contains('control_reset') }}
+  lights_on_transition: |
+    {% if trigger_id == 'illuminance' and illuminance_on_transition is not none %}
+      {{ illuminance_on_transition }}
+    {% elif is_trigger_control_reset and control_reset_transition is not none %}
+      {{ control_reset_transition }}
+    {% elif trigger_id != 'physical_on' %}
+      {{ transition_on }}
+    {% elif physical_control_transition is not none %}
+      {{ physical_control_transition }}
+    {% else %}
+      {{ max(transition_on - physical_control_latency, 0) }}
+    {% endif %}
+  lights_off_transition: |
+    {% if trigger_id == 'illuminance' and illuminance_off_transition is not none %}
+      {{ illuminance_off_transition }}
+    {% elif trigger_id != 'physical_off' %}
+      {{ transition_off }}
+    {% elif physical_control_transition is not none %}
+      {{ physical_control_transition }}
+    {% else %}
+      {{ max(transition_off - physical_control_latency, 0) }}
+    {% endif %}
+  cover_position: "{{ state_attr(cover, 'current_position')|int(none) if cover else none }}"
+  illuminance: "{{ states(illuminance_sensor)|int(none) if illuminance_sensor else none }}"
+  scene_expiration: |
+    {{ as_timedelta(states(scene_timeout_helper)) if scene_timeout_helper is string else as_timedelta(scene_timeout) }}
+  is_automatic_control_enabled: |
+    {# Fall back to occupancy sensor if no toggle is configured #}
+    {% if not automatic_control_toggle %}
+      {{ occupancy_sensor is string and has_value(occupancy_sensor) }}
+    {% else %}
+      {{ is_state(automatic_control_toggle, 'on') }}
+    {% endif %}
+  is_cover_shading: |
+    {{
+      cover_position|int(100) < cover_shading_position|int(0)
+      or (
+        cover is string and cover_shading_when_closing
+        and is_state(cover, 'closing')
+        and states[cover].last_changed <= now() - timedelta(seconds=illuminance_minimum_duration)
+      )
+    }}
+  is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
+  is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
+  is_light_on: |
+    {{ light_entities | map('states') | select('eq', 'on') | list | count > 0 }}
+  is_occupied: "{{ is_state(occupancy_sensor, 'on') if occupancy_sensor else none }}"
+  is_scene_adaptive: |
+    {{
+      expand(adaptive_lighting_entities)
+      | selectattr('attributes.manual_control', 'defined')
+      | rejectattr('attributes.manual_control', 'equalto', none)
+      | rejectattr('attributes.manual_control', 'equalto', [])
+      | list | count > 0
+    }}
+  is_scene_saved: "{{ states[scene_entity].state is defined }}"
+  is_scene_expired: |
+    {{
+      is_scene_saved and states[scene_entity].last_updated is defined
+      and states[scene_entity].last_updated < now() - as_timedelta(scene_expiration)
+    }}
 
 condition:
   - condition: state
