@@ -1,93 +1,93 @@
 blueprint:
   name: Lights Brightness Sync
-  description: Synchronize brightness of child lights based on a parent light's brightness changes
+  description: Synchronize brightness of child lights based on a parent light's brightness changes.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/lights_brightness_sync.yaml
   input:
     parent_light:
       name: Parent light
-      description: The light whose brightness changes will trigger the sync
+      description: |
+        The light whose brightness changes will control the child lights.
       selector:
         entity:
           multiple: false
           filter:
             - domain:
                 - light
-    parent_min_pct:
-      name: Minimum brightness %
-      description: Minimum brightness percentage for the parent light range
-      default: 1
-      selector:
-        number:
-          min: 1
-          max: 100
-          unit_of_measurement: "%"
-    parent_max_pct:
-      name: Maximum brightness %
-      description: Maximum brightness percentage for the parent light range
-      default: 100
-      selector:
-        number:
-          min: 1
-          max: 100
-          unit_of_measurement: "%"
-    ignore_internal_changes:
-      name: Ignore internal changes
-      description: |
-        If enabled, changes to the parent light's brightness made within Home Assistant (e.g., automations, scripts) will be ignored.
-      default: true
-      selector:
-        boolean:
     child_lights:
-      name: Child lights configuration
+      name: Child lights
       description: |
-        Configure child lights with their brightness ranges, maximum brightness must be greater than minimum brightness.
+        Lights that will mirror the parent light's brightness changes.
       selector:
-        object:
-          label_field: light
+        entity:
           multiple: true
-          fields:
-            light:
-              label: Child light
-              selector:
-                entity:
-                  multiple: false
-                  filter:
-                    - domain:
-                        - light
-            min_pct:
-              label: Minimum brightness
-              selector:
-                number:
-                  min: 1
-                  max: 100
-                  unit_of_measurement: "%"
-            max_pct:
-              label: Maximum brightness
-              selector:
-                number:
-                  min: 1
-                  max: 100
-                  unit_of_measurement: "%"
+          filter:
+            - domain:
+                - light
+    advanced:
+      name: Advanced configuration
+      description: |
+        Optional settings for fine-tuning behavior.
+      icon: mdi:cog
+      collapsed: true
+      input:
+        ignore_internal_changes:
+          name: Ignore Home Assistent changes
+          description: |
+            Ignore brightness changes triggered within Home Assistant (e.g., automations, scripts).
+          default: true
+          selector:
+            boolean:
+        transition:
+          name: Transition
+          description: |
+            Duration it takes for child light brightness changes.
+          default: 0.1
+          selector:
+            number:
+              min: 0
+              max: 1
+              step: 0.1
+              unit_of_measurement: "s"
+        parent_min_pct:
+          name: Parent minimum brightness % (optional)
+          description: |
+            Minimum brightness percentage at which the light is visibly on.
+          default: 0
+          selector:
+            number:
+              min: 1
+              max: 100
+              unit_of_measurement: "%"
+
+trigger_variables:
+  b_max: 255
+  b_min: 1
+  b_range: "{{ b_max - b_min }}"
+  pct_to_b: "{{ b_max / 100 }}"
+  child_lights: !input child_lights
+  parent_light: !input parent_light
+  parent_min_pct: !input parent_min_pct
+  p_b_min: "{{ (parent_min_pct|default(0) * pct_to_b)|round }}"
+  p_b_range: "{{ min(max(b_max - p_b_min, b_min), b_range) }}"
 
 triggers:
   - trigger: state
     entity_id: !input parent_light
     attribute: brightness
+    not_from:
+      - null
+      - 0
+    not_to:
+      - null
+      - 0
 
 conditions:
-  - alias: If the to_state brightness is > 0 and the light was already on
-    condition: template
-    value_template: |-
-      {{
-        int(trigger.to_state.attributes.brightness|default(none), 0) > 0
-        and trigger.from_state.state == 'on'
-      }}
   - alias: If the state was changed by an external action
     condition: template
     enabled: !input ignore_internal_changes
     value_template: >
-      {# Excludes any state changes that were instigated within Home Assistant
+      {# Excludes state changes that were instigated within Home Assistant
       (i.e. Dashboards, Automations, Adaptive Lighting). #}
 
       {{
@@ -100,46 +100,47 @@ conditions:
 
 actions:
   - variables:
-      parent_light: !input parent_light
-      parent_min_pct: !input parent_min_pct
-      parent_max_pct: !input parent_max_pct
-      child_lights: !input child_lights
-    alias: Config variables
-  - variables:
-      parent_brightness: |
-        {{ int(trigger.to_state.attributes.brightness|default(none), 0) }}
-      parent_brightness_adjusted: |
-        {% set min_b = (parent_min_pct|default(1) * 2.54)|round %}
-        {% set max_b = (parent_max_pct|default(100) * 2.54)|round %}
-        {% set range = max_b - min_b %}
-        {{ min(max(parent_brightness - min_b, 1) * 254 / range, 255) | round }}
-      child_target_brightness: |
-        {% set ns = namespace(targets={}) %}
-        {% for config in child_lights %}
-          {% set min_b = (config.min_pct|default(1) * 2.54)|round %}
-          {% set max_b = (config.max_pct|default(100) * 2.54)|round %}
-          {% set range = max_b - min_b %}
-          {% set target = max((parent_brightness_adjusted * range / 254) + min_b, min_b) | round %}
-          {% if int(state_attr(config.light, 'brightness'), 0) > 0 %}
-            {% set ns.targets = dict(ns.targets, **{config.light: target}) %}
-          {% endif %}
-        {% endfor %}
-        {{ ns.targets }}
-      scene_entities: |
-        {% set ns = namespace(scene_entities={}) %}
-        {% for light, brightness in child_target_brightness.items() %}
-          {% set ns.scene_entities = dict(ns.scene_entities, **{light: {'state': 'on', 'brightness': brightness}}) %}
-        {% endfor %}
-        {{ ns.scene_entities }}
-  - if:
-      - alias: If a target scene is defined
-        condition: template
-        value_template: "{{ scene_entities | length > 0 }}"
-    then:
-      - action: scene.apply
-        metadata: {}
-        data:
-          entities: "{{ scene_entities }}"
-          transition: 0
+      from_brightness: |
+        {{ int(trigger.from_state.attributes.brightness|default(none), 0) }}
+  - repeat:
+      sequence:
+        - variables:
+            from_brightness_adj: |
+              {{ min(max(from_brightness - p_b_min, b_min) * b_range / p_b_range, b_max)|round }}
+            to_brightness: |
+              {{ int(state_attr(trigger.entity_id, 'brightness'), 0) }}
+            to_brightness_adj: |
+              {{ min(max(to_brightness - p_b_min, b_min) * b_range / p_b_range, b_max)|round }}
+            change_pct: |
+              {{ to_brightness_adj / from_brightness_adj }}
 
-mode: restart
+            child_scene: |
+              {% set ns = namespace(scene={}) %}
+              {% for entity_id in child_lights %}
+                {% set current = int(state_attr(entity_id, 'brightness'), 0) %}
+                {% if current > 0 %}
+                  {% set ns.scene = dict(ns.scene, **{entity_id: {
+                    'state': 'on',
+                    'brightness': max(min(current * change_pct, b_max), b_min)|round,
+                  }}) %}
+                {% endif %}
+              {% endfor %}
+              {{ ns.scene }}
+
+        - action: scene.apply
+          metadata: {}
+          data:
+            entities: "{{ child_scene }}"
+            transition: !input transition
+        - variables:
+            from_brightness: |
+              {{ to_brightness }}
+
+      until:
+        - alias: Repeat until brightness stops changing
+          condition: template
+          value_template: |
+            {{ state_attr(trigger.entity_id, 'brightness') in [to_brightness, none] }}
+
+mode: single
+max_exceeded: silent
