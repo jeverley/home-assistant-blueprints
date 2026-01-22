@@ -24,30 +24,31 @@ blueprint:
           filter:
             - domain:
                 - light
+    occupancy_sensor:
+      name: Occupancy sensor (optional)
+      description: The occupancy sensor detecting presence in the area.
+        This can be a binary sensor with device class occupancy, presence, or motion.
+      default: null
+      selector:
+        entity:
+          multiple: false
+          filter:
+            - domain:
+                - binary_sensor
+              device_class:
+                - occupancy
+                - presence
+                - motion
+
     automatic_control:
       name: Automatic Control
       icon: mdi:lightbulb-auto
       collapsed: true
       input:
-        occupancy_sensor:
-          name: Occupancy sensor (optional)
-          description: The occupancy sensor that detects presence in the area.
-            This can be a binary sensor with device class occupancy, presence, or motion.
-          default: []
-          selector:
-            entity:
-              multiple: false
-              filter:
-                - domain:
-                    - binary_sensor
-                  device_class:
-                    - occupancy
-                    - presence
-                    - motion
         illuminance_sensor:
           name: Illuminance sensor (optional)
           description: The illuminance sensor that measures light levels in the area.
-          default: []
+          default: null
           selector:
             entity:
               multiple: false
@@ -61,7 +62,7 @@ blueprint:
           description:
             A toggle/switch/binary sensor for enabling automatic lighting
             control. If not provided, the automation will fall back to the occupancy sensor.
-          default: []
+          default: null
           selector:
             entity:
               multiple: false
@@ -70,6 +71,7 @@ blueprint:
                     - input_boolean
                     - switch
                     - binary_sensor
+
     transition_options:
       name: Transition
       icon: mdi:timer-cog-outline
@@ -157,6 +159,7 @@ blueprint:
               unit_of_measurement: s
               step: 0.01
               mode: slider
+
     occupancy_options:
       name: Occupancy
       icon: mdi:motion-sensor
@@ -193,6 +196,7 @@ blueprint:
           default: "00:00:00"
           selector:
             time: {}
+
     illuminance_options:
       name: Illuminance
       icon: mdi:brightness-5
@@ -255,6 +259,7 @@ blueprint:
               unit_of_measurement: s
               step: 1.0
               mode: slider
+
     cover_options:
       name: Cover
       icon: mdi:roller-shade
@@ -294,6 +299,7 @@ blueprint:
           default: false
           selector:
             boolean:
+
     scene_options:
       name: Scene Restoration
       icon: mdi:lamps
@@ -302,6 +308,12 @@ blueprint:
         the area.
       collapsed: true
       input:
+        physical_restore:
+          name: Restore scene after physical control
+          description: If disabled the scene will not be persisted if lights are turned off by physical control
+          default: true
+          selector:
+            boolean:
         scene_timeout:
           name: Scene timeout
           description:
@@ -315,13 +327,14 @@ blueprint:
           description:
             A time-only datetime entity for specifying scene timeout, if
             defined this is used instead of the timeout parameter.
-          default: []
+          default: null
           selector:
             entity:
               multiple: false
               filter:
                 - domain:
                     - input_datetime
+
     routine_options:
       name: Routine
       icon: mdi:clock-fast
@@ -335,7 +348,7 @@ blueprint:
           description:
             A sensor/select entity which determines the current routine
             (e.g. waking, awake, bedtime, sleep).
-          default: []
+          default: null
           selector:
             entity:
               multiple: false
@@ -361,6 +374,7 @@ blueprint:
             text:
               multiple: true
               multiline: false
+
     advanced_settings:
       name: Advanced Settings
       icon: mdi:cog
@@ -382,7 +396,7 @@ blueprint:
           description:
             A scene can be activated instead of turning on the area's lights.
             This can be used to apply specific lighting conditions.
-          default: []
+          default: null
           selector:
             entity:
               multiple: false
@@ -394,7 +408,7 @@ blueprint:
           description:
             A scene can be activated instead of turning off the area's lights.
             This can be used to apply specific lighting conditions.
-          default: []
+          default: null
           selector:
             entity:
               multiple: false
@@ -421,6 +435,7 @@ trigger_variables:
   physical_control_lights: !input physical_control_lights
   physical_control_transition: !input physical_control_transition
   physical_control_latency: !input physical_control_latency
+  physical_restore: !input physical_restore
   is_automatic_control_toggleable: |
     {{
       automatic_control_toggle is string
@@ -553,8 +568,7 @@ variables:
         area_entities(area)
         | select('contains', 'light.')
         | reject('is_hidden_entity')
-        | expand
-        | map(attribute='entity_id') | list
+        | list
       }}
     {% endif %}
   is_trigger_control_reset: |
@@ -679,13 +693,16 @@ condition:
           - condition: template
             alias: If the state was changed by an external action
             value_template: |
-              {# Excludes any state changes that were instigated within Home Assistant (i.e. Dashboards, Automations, Adaptive Lighting). #}
+              {# Excludes any state changes instigated within Home Assistant (i.e. Dashboards, Automations, Adaptive Lighting). #}
+              {% set from_context = trigger.from_state.context %}
+              {% set to_context = trigger.to_state.context %}
               {{
-                trigger.to_state.context.user_id is none
+                to_context.user_id is none
                 and (
-                  trigger.to_state.context.parent_id is none
-                  and trigger.to_state.context.id is not search(':al:.*:.*:')
-                  or trigger.to_state.context.parent_id == trigger.from_state.context.parent_id != none
+                  to_context.parent_id is none
+                  and to_context.id is not search(':al:.*:.*:')
+                  or none != to_context.parent_id == from_context.parent_id
+                  and to_context.id != from_context.id
                 )
               }}
 
@@ -827,6 +844,9 @@ actions:
               - alias: If lighting is under manual control
                 condition: template
                 value_template: "{{ not is_scene_adaptive }}"
+              - alias: If a non-physical trigger or physical restore is enabled
+                condition: template
+                value_template: "{{ trigger_id != 'physical_off' or physical_restore }}"
             then:
               - *create_saved_scene
             else:
@@ -872,12 +892,10 @@ actions:
 
   - alias: Update control toggle
     choose:
-      - alias: Automatic control toggle reset
+      - alias: Reset automatic control
         conditions:
           - condition: template
             value_template: "{{ is_trigger_control_reset }}"
-          - condition: template
-            value_template: "{{ is_automatic_control_toggleable }}"
         sequence:
           - action: homeassistant.turn_on
             metadata: {}
