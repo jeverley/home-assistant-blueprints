@@ -28,7 +28,7 @@ blueprint:
       name: Occupancy sensor (optional)
       description: The occupancy sensor detecting presence in the area.
         This can be a binary sensor with device class occupancy, presence, or motion.
-      default: null
+      default: []
       selector:
         entity:
           multiple: false
@@ -48,7 +48,7 @@ blueprint:
         illuminance_sensor:
           name: Illuminance sensor (optional)
           description: The illuminance sensor that measures light levels in the area.
-          default: null
+          default: []
           selector:
             entity:
               multiple: false
@@ -62,7 +62,7 @@ blueprint:
           description:
             A toggle/switch/binary sensor for enabling automatic lighting
             control. If not provided, the automation will fall back to the occupancy sensor.
-          default: null
+          default: []
           selector:
             entity:
               multiple: false
@@ -327,7 +327,7 @@ blueprint:
           description:
             A time-only datetime entity for specifying scene timeout, if
             defined this is used instead of the timeout parameter.
-          default: null
+          default: []
           selector:
             entity:
               multiple: false
@@ -348,7 +348,7 @@ blueprint:
           description:
             A sensor/select entity which determines the current routine
             (e.g. waking, awake, bedtime, sleep).
-          default: null
+          default: []
           selector:
             entity:
               multiple: false
@@ -396,7 +396,7 @@ blueprint:
           description:
             A scene can be activated instead of turning on the area's lights.
             This can be used to apply specific lighting conditions.
-          default: null
+          default: []
           selector:
             entity:
               multiple: false
@@ -408,7 +408,7 @@ blueprint:
           description:
             A scene can be activated instead of turning off the area's lights.
             This can be used to apply specific lighting conditions.
-          default: null
+          default: []
           selector:
             entity:
               multiple: false
@@ -871,62 +871,65 @@ actions:
                 target:
                   entity_id: "{{ light_entities if trigger_id not in ['physical_off', 'physical_on'] else difference(light_entities, [trigger.entity_id]) }}"
 
-  - alias: Control lights
-    choose:
-      - alias: Lights on
-        conditions:
-          - or:
-              - condition: trigger
-                id: physical_on
-              - *auto_lights_on_conditions
-        sequence:
-          - *lights_on_action
-      - alias: Lights off
-        conditions:
-          - or:
-              - condition: trigger
-                id: physical_off
-              - *auto_lights_off_conditions
-        sequence:
-          - *lights_off_action
+  - parallel:
+      - sequence:
+          - alias: Control lights
+            choose:
+              - alias: Lights on
+                conditions:
+                  - or:
+                      - condition: trigger
+                        id: physical_on
+                      - *auto_lights_on_conditions
+                sequence:
+                  - *lights_on_action
+              - alias: Lights off
+                conditions:
+                  - or:
+                      - condition: trigger
+                        id: physical_off
+                      - *auto_lights_off_conditions
+                sequence:
+                  - *lights_off_action
 
-  - alias: Update control toggle
-    choose:
-      - alias: Reset automatic control
-        conditions:
-          - condition: template
-            value_template: "{{ is_trigger_control_reset }}"
-        sequence:
-          - action: homeassistant.turn_on
-            metadata: {}
-            data: {}
-            target:
-              entity_id: "{{ automatic_control_toggle }}"
-      - alias: Turn off automatic control
-        conditions:
-          - condition: trigger
-            id: physical_off
-          - condition: template
-            value_template: "{{ is_automatic_control_toggleable and is_automatic_control_enabled }}"
-          - condition: template
-            value_template: "{{ is_occupied or not occupancy_sensor }}"
-        sequence:
-          - action: homeassistant.turn_off
-            metadata: {}
-            data: {}
-            target:
-              entity_id: "{{ automatic_control_toggle }}"
-      - alias: Turn on automatic control
-        conditions:
-          - condition: trigger
-            id: physical_on
-          - condition: template
-            value_template: "{{ is_automatic_control_toggleable and not is_automatic_control_enabled }}"
-        sequence:
-          - action: homeassistant.turn_on
-            metadata: {}
-            data: {}
-            target:
-              entity_id: "{{ automatic_control_toggle }}"
+      - sequence:
+          - alias: Update control toggle
+            choose:
+              - alias: Reset automatic control
+                conditions:
+                  - condition: template
+                    value_template: "{{ is_trigger_control_reset }}"
+                sequence:
+                  - action: homeassistant.turn_on
+                    metadata: {}
+                    data: {}
+                    target:
+                      entity_id: "{{ automatic_control_toggle }}"
+              - alias: Turn off automatic control
+                conditions:
+                  - condition: trigger
+                    id: physical_off
+                  - condition: template
+                    value_template: "{{ is_automatic_control_toggleable and is_automatic_control_enabled }}"
+                  - condition: template
+                    value_template: "{{ is_occupied or not occupancy_sensor }}"
+                sequence:
+                  - action: homeassistant.turn_off
+                    metadata: {}
+                    data: {}
+                    target:
+                      entity_id: "{{ automatic_control_toggle }}"
+              - alias: Turn on automatic control
+                conditions:
+                  - condition: trigger
+                    id: physical_on
+                  - condition: template
+                    value_template: "{{ is_automatic_control_toggleable and not is_automatic_control_enabled }}"
+                sequence:
+                  - action: homeassistant.turn_on
+                    metadata: {}
+                    data: {}
+                    target:
+                      entity_id: "{{ automatic_control_toggle }}"
 
 mode: restart
