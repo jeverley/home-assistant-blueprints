@@ -102,6 +102,7 @@ actions:
   - variables:
       from_brightness: |
         {{ int(trigger.from_state.attributes.brightness|default(none), 0) }}
+
   - repeat:
       sequence:
         - variables:
@@ -111,17 +112,22 @@ actions:
               {{ int(state_attr(trigger.entity_id, 'brightness'), 0) }}
             to_brightness_adj: |
               {{ min(max(to_brightness - p_b_min, b_min) * b_range / p_b_range, b_max)|round }}
-            change_pct: |
-              {{ to_brightness_adj / from_brightness_adj }}
+            change_abs: |
+              {{ to_brightness_adj - from_brightness_adj }}
 
             child_scene: |
               {% set ns = namespace(scene={}) %}
-              {% for entity_id in child_lights %}
-                {% set current = int(state_attr(entity_id, 'brightness'), 0) %}
-                {% if current > 0 %}
-                  {% set ns.scene = dict(ns.scene, **{entity_id: {
+              {% for state in expand(child_lights) %}
+                {% set current = int(
+                  child_scene[state.entity_id].brightness
+                  if child_scene is defined and state.entity_id in child_scene
+                  else state.attributes.brightness|default(none)
+                  , 0
+                ) %}
+                {% if state.state == 'on' and current > 0 %}
+                  {% set ns.scene = dict(ns.scene, **{state.entity_id: {
                     'state': 'on',
-                    'brightness': max(min(current * change_pct, b_max), b_min)|round,
+                    'brightness': max(min(current + change_abs, b_max), b_min),
                   }}) %}
                 {% endif %}
               {% endfor %}
