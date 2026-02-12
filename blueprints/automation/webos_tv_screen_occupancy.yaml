@@ -34,8 +34,7 @@ blueprint:
         number:
           min: 0
           max: 300
-          unit_of_measurement: seconds
-          mode: box
+          unit_of_measurement: s
 
     on_delay:
       name: On delay (seconds)
@@ -45,8 +44,7 @@ blueprint:
         number:
           min: 0
           max: 300
-          unit_of_measurement: seconds
-          mode: box
+          unit_of_measurement: s
 
 mode: restart
 
@@ -57,12 +55,14 @@ trigger:
   - platform: state
     entity_id: !input occupancy_sensor
     to: "on"
-    for: "{{ '%02d:%02d:%02d' | format((!input on_delay // 3600), ((!input on_delay % 3600) // 60), (!input on_delay % 60)) }}"
+    for:
+      seconds: !input on_delay
 
   - platform: state
     entity_id: !input occupancy_sensor
     to: "off"
-    for: "{{ '%02d:%02d:%02d' | format((!input off_delay // 3600), ((!input off_delay % 3600) // 60), (!input off_delay % 60)) }}"
+    for:
+      seconds: !input off_delay
 
   - platform: state
     entity_id: !input tv_entity
