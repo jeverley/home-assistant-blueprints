@@ -42,25 +42,71 @@ blueprint:
       selector:
         duration: {}
 
+    warning_s:
+      name: Warning duration (optional)
+      description: Show an on screen warning before the screen is turned off
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 1
+          unit_of_measurement: s
+
+    warning_message:
+      name: Warning message (optional)
+      description: Specify a custom message to show in the warning
+      default: ""
+      selector:
+        text: {}
+
 mode: restart
 
 trigger_variables:
   tv_entity: !input tv_entity
+  off_delay: !input off_delay
+  warning_s: !input warning_s
+  warning_delay: |
+    {% set off_s = timedelta(
+      hours=off_delay.get('hours', 0),
+      minutes=off_delay.get('minutes', 0),
+      seconds=off_delay.get('seconds', 0),
+    ).total_seconds() | float(0) %}
+
+    {% if off_s < 1 or not warning_s %}
+      {{ none }}
+    {% else %}
+      {{ timedelta(seconds=(max(off_s - warning_s, 0))) }}
+    {% endif %}
+  warning_message: !input warning_message
 
 trigger:
-  - platform: state
+  - id: occupied
+    platform: state
     entity_id: !input occupancy_sensor
     to: "on"
     for: !input on_delay
 
-  - platform: state
+  - id: unoccupied
+    platform: state
     entity_id: !input occupancy_sensor
     to: "off"
     for: !input off_delay
 
-  - platform: state
+  - id: unoccupied_warning
+    platform: state
+    entity_id: !input occupancy_sensor
+    to: "off"
+    for: "{{ warning_delay }}"
+    enabled: "{{ warning_delay is not none }}"
+
+  - id: tv_available
+    platform: state
     entity_id: !input tv_entity
     from:
+      - unavailable
+      - unknown
+    not_to:
       - unavailable
       - unknown
 
@@ -85,35 +131,57 @@ action:
     continue_on_error: true
 
   - choose:
-      - conditions:
-          - condition: state
-            entity_id: !input occupancy_sensor
-            state:
-              - "on"
-              - unknown
-              - unavailable
-          - alias: Screen is OFF
+      - alias: Warning
+        conditions:
+          - condition: trigger
+            id: unoccupied_warning
+          - alias: Screen is ON
             condition: template
-            value_template: >
-              {{ power_state is not defined or power_state[tv_entity].state == 'Screen Off' }}
+            value_template: |
+              {{ power_state is not defined or power_state[tv_entity].state != 'Screen Off' }}
         sequence:
-          - alias: Turn ON screen
-            service: webostv.command
+          - service: "{{ 'notify.' + device_name(tv_entity)|slugify }}"
             data:
-              entity_id: !input tv_entity
-              command: com.webos.service.tvpower/power/turnOnScreen
+              message: |
+                {{
+                  warning_message if warning_message
+                  else "The screen will turn off unless movement is detected"
+                }}
 
-      - conditions:
+      - alias: Turn OFF screen
+        conditions:
           - condition: state
             entity_id: !input occupancy_sensor
             state: "off"
+            for: !input off_delay
           - alias: Screen is ON
             condition: template
-            value_template: >
+            value_template: |
               {{ power_state is not defined or power_state[tv_entity].state != 'Screen Off' }}
         sequence:
-          - alias: Turn OFF screen
-            service: webostv.command
+          - service: webostv.command
             data:
               entity_id: !input tv_entity
               command: com.webos.service.tvpower/power/turnOffScreen
+
+      - alias: Turn ON screen
+        conditions:
+          - or:
+              - condition: state
+                entity_id: !input occupancy_sensor
+                state: "on"
+                for: !input on_delay
+              - condition: state
+                entity_id: !input occupancy_sensor
+                state:
+                  - unknown
+                  - unavailable
+          - alias: Screen is OFF
+            condition: template
+            value_template: |
+              {{ power_state is not defined or power_state[tv_entity].state == 'Screen Off' }}
+        sequence:
+          - service: webostv.command
+            data:
+              entity_id: !input tv_entity
+              command: com.webos.service.tvpower/power/turnOnScreen
