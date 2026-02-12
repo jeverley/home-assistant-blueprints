@@ -1,5 +1,5 @@
 blueprint:
-  name: webOS - TV screen off/on with occupancy
+  name: LG webOS TV - Turn screen off/on with occupancy
   description: |
     Turns off an LG webOS TV screen when the area is unoccupied, turns on the screen when the area is occupied.
     This saves energy and reduces screen on time for OLED devices being used to play media in the background.
@@ -26,19 +26,19 @@ blueprint:
                 - occupancy
                 - presence
 
-    on_delay:
-      name: Occupied delay
-      description: The screen is turned on when the area is occupied for this duration
-      default:
-        seconds: 0
-      selector:
-        duration: {}
-
     off_delay:
-      name: Unoccupied delay
+      name: Off delay
       description: The screen is turned off when the area is unoccupied for this duration
       default:
         minutes: 2
+      selector:
+        duration: {}
+
+    on_delay:
+      name: On delay
+      description: The screen is turned on when the area is occupied for this duration
+      default:
+        seconds: 0
       selector:
         duration: {}
 
