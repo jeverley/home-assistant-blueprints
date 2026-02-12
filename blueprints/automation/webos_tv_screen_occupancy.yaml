@@ -27,20 +27,24 @@ blueprint:
                 - presence
 
     off_delay:
-      name: Off delay
-      description: The screen is turned off when the area is unoccupied for this duration
-      default:
-        minutes: 2
+      name: Off delay (seconds)
+      description: The screen is turned off when the area is unoccupied for this many seconds
+      default: 120
       selector:
-        duration: {}
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: s
 
     on_delay:
-      name: On delay
-      description: The screen is turned on when the area is occupied for this duration
-      default:
-        seconds: 0
+      name: On delay (seconds)
+      description: The screen is turned on when the area is occupied for this many seconds
+      default: 0
       selector:
-        duration: {}
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: s
 
 mode: restart
 
@@ -51,12 +55,14 @@ trigger:
   - platform: state
     entity_id: !input occupancy_sensor
     to: "on"
-    for: !input on_delay
+    for:
+      seconds: !input on_delay
 
   - platform: state
     entity_id: !input occupancy_sensor
     to: "off"
-    for: !input off_delay
+    for:
+      seconds: !input off_delay
 
   - platform: state
     entity_id: !input tv_entity
