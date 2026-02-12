@@ -1,0 +1,119 @@
+blueprint:
+  name: webOS - TV screen off/on with occupancy
+  description: |
+    Turns off an LG webOS TV screen when the area is unoccupied, turns on the screen when the area is occupied.
+    This saves energy and reduces screen on time for OLED devices being used to play media in the background.
+  domain: automation
+  input:
+    tv_entity:
+      name: webOS TV
+      selector:
+        entity:
+          multiple: false
+          filter:
+            - integration: webostv
+              domain: media_player
+
+    occupancy_sensor:
+      name: Occupancy / Presence sensor
+      selector:
+        entity:
+          multiple: false
+          filter:
+            - domain:
+                - binary_sensor
+              device_class:
+                - occupancy
+                - presence
+
+    on_delay:
+      name: Occupied delay
+      description: The screen is turned on when the area is occupied for this duration
+      default:
+        seconds: 0
+      selector:
+        duration: {}
+
+    off_delay:
+      name: Unoccupied delay
+      description: The screen is turned off when the area is unoccupied for this duration
+      default:
+        minutes: 2
+      selector:
+        duration: {}
+
+mode: single
+
+trigger_variables:
+  tv_entity: !input tv_entity
+
+trigger:
+  - platform: state
+    entity_id: !input occupancy_sensor
+    to: "on"
+    for: !input on_delay
+
+  - platform: state
+    entity_id: !input occupancy_sensor
+    to: "off"
+    for: !input off_delay
+
+  - platform: state
+    entity_id: !input tv_entity
+    from:
+      - unavailable
+      - unknown
+
+condition:
+  - alias: If the TV is ON
+    condition: not
+    conditions:
+      - condition: state
+        entity_id: !input tv_entity
+        state:
+          - "off"
+          - unavailable
+          - unknown
+
+action:
+  - alias: Get the current screen state (OFF / ON)
+    service: webostv.command
+    data:
+      entity_id: !input tv_entity
+      command: com.webos.service.tvpower/power/getPowerState
+    response_variable: power_state
+    continue_on_error: true
+
+  - choose:
+      - conditions:
+          - condition: state
+            entity_id: !input occupancy_sensor
+            state:
+              - "on"
+              - unknown
+              - unavailable
+          - alias: Screen is OFF
+            condition: template
+            value_template: >
+              {{ power_state is not defined or power_state[tv_entity].state == 'Screen Off' }}
+        sequence:
+          - alias: Turn ON screen
+            service: webostv.command
+            data:
+              entity_id: !input tv_entity
+              command: com.webos.service.tvpower/power/turnOnScreen
+
+      - conditions:
+          - condition: state
+            entity_id: !input occupancy_sensor
+            state: "off"
+          - alias: Screen is ON
+            condition: template
+            value_template: >
+              {{ power_state is not defined or power_state[tv_entity].state != 'Screen Off' }}
+        sequence:
+          - alias: Turn OFF screen
+            service: webostv.command
+            data:
+              entity_id: !input tv_entity
+              command: com.webos.service.tvpower/power/turnOffScreen
