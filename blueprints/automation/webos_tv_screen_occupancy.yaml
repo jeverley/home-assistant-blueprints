@@ -2,8 +2,9 @@ blueprint:
   name: LG webOS TV - Turn screen off/on with occupancy
   description: |
     Turns off an LG webOS TV screen when the area is unoccupied, turns on the screen when the area is occupied.
-    This saves energy and reduces screen on time for OLED devices being used to play media in the background.
+    Optionally shows a warning 5 seconds before turning the screen off.
   domain: automation
+
   input:
     tv_entity:
       name: webOS TV
@@ -26,25 +27,20 @@ blueprint:
                 - occupancy
                 - presence
 
-    off_delay:
+    off_delay_s:
       name: Off delay
       description: The screen is turned off when the area is unoccupied for this duration
-      default:
-        minutes: 2
+      default: 120
       selector:
-        duration: {}
+        number:
+          min: 0
+          max: 300
+          step: 1
+          unit_of_measurement: s
 
-    on_delay:
+    on_delay_s:
       name: On delay
       description: The screen is turned on when the area is occupied for this duration
-      default:
-        seconds: 0
-      selector:
-        duration: {}
-
-    warning_s:
-      name: Warning duration (optional)
-      description: Show an on screen warning before the screen is turned off
       default: 0
       selector:
         number:
@@ -53,9 +49,16 @@ blueprint:
           step: 1
           unit_of_measurement: s
 
+    show_warning:
+      name: Show warning before turning off
+      description: Displays a warning 5 seconds before the screen turns off
+      default: false
+      selector:
+        boolean: {}
+
     warning_message:
       name: Warning message (optional)
-      description: Specify a custom message to show in the warning
+      description: Custom message to show in the warning
       default: ""
       selector:
         text: {}
@@ -64,34 +67,31 @@ mode: restart
 
 trigger_variables:
   tv_entity: !input tv_entity
-  off_delay: !input off_delay
-  warning_s: !input warning_s
-  warning_delay: |
-    {% set off_s = timedelta(
-      hours=off_delay.get('hours', 0),
-      minutes=off_delay.get('minutes', 0),
-      seconds=off_delay.get('seconds', 0),
-    ).total_seconds() | float(0) %}
+  off_delay_s: !input off_delay_s
+  show_warning: !input show_warning
+  warning_message: !input warning_message
 
-    {% if off_s < 1 or not warning_s %}
+  warning_delay: |
+    {% if not show_warning or off_delay_s < 1 %}
       {{ none }}
     {% else %}
-      {{ timedelta(seconds=(max(off_s - warning_s, 0))) }}
+      {{ timedelta(seconds=(max(off_delay_s - 5, 0))) }}
     {% endif %}
-  warning_message: !input warning_message
 
 trigger:
   - id: occupied
     platform: state
     entity_id: !input occupancy_sensor
     to: "on"
-    for: !input on_delay
+    for:
+      seconds: !input on_delay_s
 
   - id: unoccupied
     platform: state
     entity_id: !input occupancy_sensor
     to: "off"
-    for: !input off_delay
+    for:
+      seconds: !input off_delay_s
 
   - id: unoccupied_warning
     platform: state
@@ -141,6 +141,7 @@ action:
               {{ power_state is not defined or power_state[tv_entity].state != 'Screen Off' }}
         sequence:
           - service: "{{ 'notify.' + device_name(tv_entity)|slugify }}"
+            continue_on_error: true
             data:
               message: |
                 {{
@@ -153,13 +154,15 @@ action:
           - condition: state
             entity_id: !input occupancy_sensor
             state: "off"
-            for: !input off_delay
+            for:
+              seconds: !input off_delay_s
           - alias: Screen is ON
             condition: template
             value_template: |
               {{ power_state is not defined or power_state[tv_entity].state != 'Screen Off' }}
         sequence:
           - service: webostv.command
+            continue_on_error: true
             data:
               entity_id: !input tv_entity
               command: com.webos.service.tvpower/power/turnOffScreen
@@ -170,7 +173,8 @@ action:
               - condition: state
                 entity_id: !input occupancy_sensor
                 state: "on"
-                for: !input on_delay
+                for:
+                  seconds: !input on_delay_s
               - condition: state
                 entity_id: !input occupancy_sensor
                 state:
@@ -182,6 +186,7 @@ action:
               {{ power_state is not defined or power_state[tv_entity].state == 'Screen Off' }}
         sequence:
           - service: webostv.command
+            continue_on_error: true
             data:
               entity_id: !input tv_entity
               command: com.webos.service.tvpower/power/turnOnScreen
