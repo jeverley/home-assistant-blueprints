@@ -42,7 +42,7 @@ blueprint:
       selector:
         duration: {}
 
-mode: single
+mode: restart
 
 trigger_variables:
   tv_entity: !input tv_entity
