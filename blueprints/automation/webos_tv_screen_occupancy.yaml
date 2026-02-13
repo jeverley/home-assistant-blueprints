@@ -2,12 +2,13 @@ blueprint:
   name: LG webOS TV - Turn screen off/on with occupancy
   description: |
     Turns off an LG webOS TV screen when the area is unoccupied, turns on the screen when the area is occupied.
+    This saves energy and reduces screen on time for OLED devices being used to play media in the background.
+
     Optionally shows a warning 5 seconds before turning the screen off.
   domain: automation
-
   input:
     tv_entity:
-      name: webOS TV
+      name: TV
       selector:
         entity:
           multiple: false
@@ -50,8 +51,8 @@ blueprint:
           unit_of_measurement: s
 
     show_warning:
-      name: Show warning before turning off
-      description: Displays a warning 5 seconds before the screen turns off
+      name: Screen off warning
+      description: Display a warning 5 seconds before the screen turns off
       default: false
       selector:
         boolean: {}
@@ -59,7 +60,7 @@ blueprint:
     warning_message:
       name: Warning message (optional)
       description: Custom message to show in the warning
-      default: ""
+      default: "The screen will turn off unless movement is detected"
       selector:
         text: {}
 
@@ -122,6 +123,17 @@ condition:
           - unknown
 
 action:
+  - alias: Stop if TV is OFF / unavailable
+    if:
+      - condition: state
+        entity_id: !input tv_entity
+        state:
+          - "off"
+          - unavailable
+          - unknown
+    then:
+      - stop: "The TV is not ON"
+
   - alias: Get the current screen state (OFF / ON)
     service: webostv.command
     data:
@@ -129,25 +141,28 @@ action:
       command: com.webos.service.tvpower/power/getPowerState
     response_variable: power_state
     continue_on_error: true
+  - variables:
+      power_state: |
+        {% if power_state is not defined or not power_state[tv_entity].returnValue %}
+          {{ none }}
+        {% else %}
+          {{ power_state[tv_entity].state != 'Screen Off' }}
+        {% endif %}
 
   - choose:
       - alias: Warning
         conditions:
           - condition: trigger
             id: unoccupied_warning
-          - alias: Screen is ON
+          - alias: Screen is ON / unknown
             condition: template
             value_template: |
-              {{ power_state is not defined or power_state[tv_entity].state != 'Screen Off' }}
+              {{ power_state in [true, none] }}
         sequence:
           - service: "{{ 'notify.' + device_name(tv_entity)|slugify }}"
             continue_on_error: true
             data:
-              message: |
-                {{
-                  warning_message if warning_message
-                  else "The screen will turn off unless movement is detected"
-                }}
+              message: !input warning_message
 
       - alias: Turn OFF screen
         conditions:
@@ -156,10 +171,10 @@ action:
             state: "off"
             for:
               seconds: !input off_delay_s
-          - alias: Screen is ON
+          - alias: Screen is ON / unknown
             condition: template
             value_template: |
-              {{ power_state is not defined or power_state[tv_entity].state != 'Screen Off' }}
+              {{ power_state in [true, none] }}
         sequence:
           - service: webostv.command
             continue_on_error: true
@@ -180,10 +195,10 @@ action:
                 state:
                   - unknown
                   - unavailable
-          - alias: Screen is OFF
+          - alias: Screen is OFF / unknown
             condition: template
             value_template: |
-              {{ power_state is not defined or power_state[tv_entity].state == 'Screen Off' }}
+              {{ not power_state }}
         sequence:
           - service: webostv.command
             continue_on_error: true
