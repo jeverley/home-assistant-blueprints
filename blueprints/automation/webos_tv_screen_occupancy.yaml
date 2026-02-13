@@ -70,8 +70,6 @@ trigger_variables:
   tv_entity: !input tv_entity
   off_delay_s: !input off_delay_s
   show_warning: !input show_warning
-  warning_message: !input warning_message
-
   warning_delay: |
     {% if not show_warning or off_delay_s < 1 %}
       {{ none }}
