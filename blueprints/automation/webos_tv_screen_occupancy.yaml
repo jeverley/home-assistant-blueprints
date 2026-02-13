@@ -6,6 +6,7 @@ blueprint:
 
     Optionally shows a warning 5 seconds before turning the screen off.
   domain: automation
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/webos_tv_screen_occupancy.yaml
   input:
     tv_entity:
       name: TV
