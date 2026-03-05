@@ -549,17 +549,22 @@ trigger:
     to: !input control_reset_trigger_routine_states
     id: routine_control_reset
     enabled: "{{ is_automatic_control_toggleable and occupancy_sensor is string }}"
+  - trigger: template
+    value_template: |
+      {% if states[scene_entity].state is defined %}
+        {% set scene_expiration = as_timedelta(
+          states(scene_timeout_helper)
+          if scene_timeout_helper is string
+          else scene_timeout
+        ) %}
+        {{ states[scene_entity].last_updated < now() - scene_expiration }}
+      {% else %}
+        {{ false }}
+      {% endif %}
+    id: scene_expired
 
 variables:
   trigger_id: "{{ trigger.id | default('') | string }}"
-  adaptive_lighting_entities: |
-    {{ 
-      integration_entities('adaptive_lighting')
-      | select('in', area_entities(area))
-      | expand
-      | selectattr('attributes.manual_control', 'defined')
-      | map(attribute='entity_id') | list
-    }}
   light_entities: |
     {% if area_lights %}
       {{ area_lights }}
@@ -620,13 +625,17 @@ variables:
   is_light_on: |
     {{ light_entities | map('states') | select('eq', 'on') | list | count > 0 }}
   is_occupied: "{{ is_state(occupancy_sensor, 'on') if occupancy_sensor else none }}"
-  is_scene_adaptive: |
+  is_scene_manual: |
+    {% set adaptive_entities =
+      integration_entities('adaptive_lighting')
+      | select('in', area_entities(area)) | list
+    %}
     {{
-      expand(adaptive_lighting_entities)
-      | selectattr('attributes.manual_control', 'defined')
-      | rejectattr('attributes.manual_control', 'equalto', none)
-      | rejectattr('attributes.manual_control', 'equalto', [])
-      | list | count > 0
+      not adaptive_entities or
+      adaptive_entities
+      | map('state_attr', 'manual_control') | flatten
+      | select('in', light_entities) | list
+      | count > 0
     }}
   is_scene_saved: "{{ states[scene_entity].state is defined }}"
   is_scene_expired: |
@@ -636,75 +645,78 @@ variables:
     }}
 
 condition:
-  - condition: state
-    entity_id: !input occupancy_sensor
-    state:
-      - "on"
-      - "off"
-  - condition: or
-    conditions:
+  - or:
+      - condition: trigger
+        id: "scene_expired"
       - and:
-          - condition: trigger
-            id:
-              - illuminance
-              - occupancy
-          - condition: template
-            value_template: "{{ is_automatic_control_enabled }}"
-      - and:
-          - condition: trigger
-            id:
-              - control_enabled
-          - alias: If the automation is not runnning
-            condition: template
-            value_template: "{{ this.attributes.current == 0 }}"
-      - and:
-          - condition: template
-            value_template: "{{ is_trigger_control_reset }}"
+          - condition: state
+            entity_id: !input occupancy_sensor
+            state:
+              - "on"
+              - "off"
           - or:
-              - alias: If there are no routine restrictions
-                condition: template
-                value_template: |
-                  {# The routine sensor or reset states are undefined #}
-                  {{ routine_sensor is none or union(control_reset_permitted_routine_states or [], control_reset_trigger_routine_states or []) == [] }}
-              - alias: If the routine is in a permitted reset state
-                condition: template
-                value_template: |
-                  {{ is_state(routine_sensor, union(control_reset_permitted_routine_states or [], control_reset_trigger_routine_states or [])) }}
-          - or:
-              - not:
+              - and:
                   - condition: trigger
                     id:
-                      - area_exit_control_reset
-              - alias: The occupancy sensor turned off after the physical light and control toggle was turned off
-                condition: template
-                value_template: |
-                  {% set physical_control_off_time = (expand(physical_control_lights) | selectattr('state', 'eq', 'off') | sort(attribute='last_changed') | last | default({'last_changed': none})).last_changed %}
-                  {{
-                    physical_control_off_time
-                    and not is_automatic_control_enabled
-                    and not is_occupied
-                    and states[occupancy_sensor].last_changed > states[automatic_control_toggle].last_changed >= physical_control_off_time
-                  }}
-      - and:
-          - condition: trigger
-            id:
-              - physical_on
-              - physical_off
-          - condition: template
-            alias: If the state was changed by an external action
-            value_template: |
-              {# Excludes any state changes instigated within Home Assistant (i.e. Dashboards, Automations, Adaptive Lighting). #}
-              {% set from_context = trigger.from_state.context %}
-              {% set to_context = trigger.to_state.context %}
-              {{
-                to_context.user_id is none
-                and (
-                  to_context.parent_id is none
-                  and to_context.id is not search(':al:.*:.*:')
-                  or none != to_context.parent_id == from_context.parent_id
-                  and to_context.id != from_context.id
-                )
-              }}
+                      - illuminance
+                      - occupancy
+                  - condition: template
+                    value_template: "{{ is_automatic_control_enabled }}"
+              - and:
+                  - condition: trigger
+                    id:
+                      - control_enabled
+                  - alias: If the automation is not runnning
+                    condition: template
+                    value_template: "{{ this.attributes.current == 0 }}"
+              - and:
+                  - condition: template
+                    value_template: "{{ is_trigger_control_reset }}"
+                  - or:
+                      - alias: If there are no routine restrictions
+                        condition: template
+                        value_template: |
+                          {# The routine sensor or reset states are undefined #}
+                          {{ routine_sensor is none or union(control_reset_permitted_routine_states or [], control_reset_trigger_routine_states or []) == [] }}
+                      - alias: If the routine is in a permitted reset state
+                        condition: template
+                        value_template: |
+                          {{ is_state(routine_sensor, union(control_reset_permitted_routine_states or [], control_reset_trigger_routine_states or [])) }}
+                  - or:
+                      - not:
+                          - condition: trigger
+                            id:
+                              - area_exit_control_reset
+                      - alias: The occupancy sensor turned off after the physical light and control toggle was turned off
+                        condition: template
+                        value_template: |
+                          {% set physical_control_off_time = (expand(physical_control_lights) | selectattr('state', 'eq', 'off') | sort(attribute='last_changed') | last | default({'last_changed': none})).last_changed %}
+                          {{
+                            physical_control_off_time
+                            and not is_automatic_control_enabled
+                            and not is_occupied
+                            and states[occupancy_sensor].last_changed > states[automatic_control_toggle].last_changed >= physical_control_off_time
+                          }}
+              - and:
+                  - condition: trigger
+                    id:
+                      - physical_on
+                      - physical_off
+                  - condition: template
+                    alias: If the state was changed by an external action
+                    value_template: |
+                      {# Excludes any state changes instigated within Home Assistant (i.e. Dashboards, Automations, Adaptive Lighting). #}
+                      {% set from_context = trigger.from_state.context %}
+                      {% set to_context = trigger.to_state.context %}
+                      {{
+                        to_context.user_id is none
+                        and (
+                          to_context.parent_id is none
+                          and to_context.id is not search(':al:.*:.*:')
+                          or none != to_context.parent_id == from_context.parent_id
+                          and to_context.id != from_context.id
+                        )
+                      }}
 
 actions:
   - variables:
@@ -843,7 +855,7 @@ actions:
             if:
               - alias: If lighting is under manual control
                 condition: template
-                value_template: "{{ not is_scene_adaptive }}"
+                value_template: "{{ is_scene_manual }}"
               - alias: If a non-physical trigger or physical restore is enabled
                 condition: template
                 value_template: "{{ trigger_id != 'physical_off' or physical_restore }}"
@@ -871,65 +883,73 @@ actions:
                 target:
                   entity_id: "{{ light_entities if trigger_id not in ['physical_off', 'physical_on'] else difference(light_entities, [trigger.entity_id]) }}"
 
-  - parallel:
-      - sequence:
-          - alias: Control lights
-            choose:
-              - alias: Lights on
-                conditions:
-                  - or:
-                      - condition: trigger
-                        id: physical_on
-                      - *auto_lights_on_conditions
-                sequence:
-                  - *lights_on_action
-              - alias: Lights off
-                conditions:
-                  - or:
+  - choose:
+      - alias: "Delete expired scene"
+        conditions:
+          - condition: trigger
+            id: scene_expired
+        sequence:
+          - *delete_saved_scene
+    default:
+      - parallel:
+          - sequence:
+              - alias: Control lights
+                choose:
+                  - alias: Lights on
+                    conditions:
+                      - or:
+                          - condition: trigger
+                            id: physical_on
+                          - *auto_lights_on_conditions
+                    sequence:
+                      - *lights_on_action
+                  - alias: Lights off
+                    conditions:
+                      - or:
+                          - condition: trigger
+                            id: physical_off
+                          - *auto_lights_off_conditions
+                    sequence:
+                      - *lights_off_action
+
+          - sequence:
+              - alias: Update control toggle
+                choose:
+                  - alias: Reset automatic control
+                    conditions:
+                      - condition: template
+                        value_template: "{{ is_trigger_control_reset }}"
+                    sequence:
+                      - action: homeassistant.turn_on
+                        metadata: {}
+                        data: {}
+                        target:
+                          entity_id: "{{ automatic_control_toggle }}"
+                  - alias: Turn off automatic control
+                    conditions:
                       - condition: trigger
                         id: physical_off
-                      - *auto_lights_off_conditions
-                sequence:
-                  - *lights_off_action
-
-      - sequence:
-          - alias: Update control toggle
-            choose:
-              - alias: Reset automatic control
-                conditions:
-                  - condition: template
-                    value_template: "{{ is_trigger_control_reset }}"
-                sequence:
-                  - action: homeassistant.turn_on
-                    metadata: {}
-                    data: {}
-                    target:
-                      entity_id: "{{ automatic_control_toggle }}"
-              - alias: Turn off automatic control
-                conditions:
-                  - condition: trigger
-                    id: physical_off
-                  - condition: template
-                    value_template: "{{ is_automatic_control_toggleable and is_automatic_control_enabled }}"
-                  - condition: template
-                    value_template: "{{ is_occupied or not occupancy_sensor }}"
-                sequence:
-                  - action: homeassistant.turn_off
-                    metadata: {}
-                    data: {}
-                    target:
-                      entity_id: "{{ automatic_control_toggle }}"
-              - alias: Turn on automatic control
-                conditions:
-                  - condition: trigger
-                    id: physical_on
-                  - condition: template
-                    value_template: "{{ is_automatic_control_toggleable and not is_automatic_control_enabled }}"
-                sequence:
-                  - action: homeassistant.turn_on
-                    metadata: {}
-                    data: {}
-                    target:
-                      entity_id: "{{ automatic_control_toggle }}"
+                      - condition: template
+                        value_template: "{{ is_automatic_control_toggleable and is_automatic_control_enabled }}"
+                      - condition: template
+                        value_template: "{{ is_occupied or not occupancy_sensor }}"
+                    sequence:
+                      - action: homeassistant.turn_off
+                        metadata: {}
+                        data: {}
+                        target:
+                          entity_id: "{{ automatic_control_toggle }}"
+                  - alias: Turn on automatic control
+                    conditions:
+                      - condition: trigger
+                        id: physical_on
+                      - condition: template
+                        value_template: "{{ is_automatic_control_toggleable and not is_automatic_control_enabled }}"
+                    sequence:
+                      - action: homeassistant.turn_on
+                        metadata: {}
+                        data: {}
+                        target:
+                          entity_id: "{{ automatic_control_toggle }}"
 
 mode: restart
