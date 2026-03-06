@@ -576,7 +576,7 @@ trigger:
 
 variables:
   trigger_id: "{{ trigger.id | default('') | string }}"
-  light_entities: |
+  target_lights: |
     {% if area_lights %}
       {{ area_lights }}
     {% else %}
@@ -587,12 +587,21 @@ variables:
         | list
       }}
     {% endif %}
-  is_trigger_control_reset: |
-    {{ trigger_id | contains('control_reset') }}
+  manual_lights: |
+    {% set adaptive_entities =
+      integration_entities('adaptive_lighting')
+      | select('in', area_entities(area)) | list
+    %}
+    {{
+      [] if not adaptive_entities else
+      adaptive_entities
+      | map('state_attr', 'manual_control') | flatten
+      | select('in', target_lights) | list
+    }}
   lights_on_transition: |
     {% if trigger_id == 'illuminance' and illuminance_on_transition is not none %}
       {{ illuminance_on_transition }}
-    {% elif is_trigger_control_reset and control_reset_transition is not none %}
+    {% elif trigger_id | contains('control_reset') and control_reset_transition is not none %}
       {{ control_reset_transition }}
     {% elif trigger_id != 'physical_on' %}
       {{ transition_on }}
@@ -611,10 +620,14 @@ variables:
     {% else %}
       {{ max(transition_off - physical_control_latency, 0) }}
     {% endif %}
-  cover_position: "{{ state_attr(cover, 'current_position')|int(none) if cover else none }}"
-  illuminance: "{{ states(illuminance_sensor)|int(none) if illuminance_sensor else none }}"
   scene_expiration: |
     {{ as_timedelta(states(scene_timeout_helper)) if scene_timeout_helper is string else as_timedelta(scene_timeout) }}
+
+  # Illuminance vars
+  cover_position: "{{ state_attr(cover, 'current_position')|int(none) if cover else none }}"
+  illuminance: "{{ states(illuminance_sensor)|int(none) if illuminance_sensor else none }}"
+
+  # Bool vars
   is_automatic_control_enabled: |
     {# Fall back to occupancy sensor if no toggle is configured #}
     {% if not automatic_control_toggle %}
@@ -634,26 +647,16 @@ variables:
   is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
   is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
   is_light_on: |
-    {{ light_entities | map('states') | select('eq', 'on') | list | count > 0 }}
+    {{ target_lights | map('states') | select('eq', 'on') | list | count > 0 }}
   is_occupied: "{{ is_state(occupancy_sensor, 'on') if occupancy_sensor else none }}"
-  is_scene_manual: |
-    {% set adaptive_entities =
-      integration_entities('adaptive_lighting')
-      | select('in', area_entities(area)) | list
-    %}
-    {{
-      not adaptive_entities or
-      adaptive_entities
-      | map('state_attr', 'manual_control') | flatten
-      | select('in', light_entities) | list
-      | count > 0
-    }}
   is_scene_saved: "{{ states[scene_entity].state is defined }}"
   is_scene_expired: |
     {{
       is_scene_saved and states[scene_entity].last_updated is defined
       and states[scene_entity].last_updated < now() - as_timedelta(scene_expiration)
     }}
+  is_trigger_control_reset: |
+    {{ trigger_id | contains('control_reset') }}
 
 condition:
   - or:
@@ -735,40 +738,39 @@ actions:
         action: scene.create
         metadata: {}
         data:
-          snapshot_entities: |
-            {# Excludes the physical control light from the light_entities list #}
-            {{ light_entities | reject('eq', trigger.entity_id | default('')) | list if trigger_id == 'physical_off' else light_entities }}
-          entities: |
-            {# Sanitize a single value and return JSON-safe string #}
-            {% macro sanitize_value(value) %}
-              {% if value is string or value is number or value is boolean or value is none %}
-                {{ value | to_json }}
-              {% elif value is iterable and value is not mapping %}
-                {{ value | map('string') | list | to_json }}
-              {% elif value is mapping %}
-                {{ sanitize_mapping(value) }}
-              {% else %}
-                {{ value | string | to_json }}
-              {% endif %}
-            {% endmacro %}
-
-            {# Recursively sanitize a dict and return JSON string #}
-            {% macro sanitize_mapping(map) %}
-              {% set out = namespace(clean={}) %}
-              {% for k, v in map.items() %}
-                {% set out.clean = dict(out.clean, **{k: sanitize_value(v) | from_json}) %}
-              {% endfor %}
-              {{ out.clean | to_json }}
-            {% endmacro %}
-
-            {# Save the previous state and attributes of the physical control light #}
-            {% if trigger_id == 'physical_off' and trigger.entity_id | default('') in light_entities %}
-              {% set attrs = sanitize_mapping(trigger.from_state.attributes) | from_json %}
-              {{ {trigger.entity_id: dict(attrs, state=trigger.from_state.state)} }}
-            {% else %}
-              {{ {} }}
-            {% endif %}
           scene_id: "{{ scene_id }}"
+          snapshot_entities: |
+            {# Snapshot manually controlled Adaptive Lights #}
+            {{ target_lights | select('in', manual_lights) | reject('eq', trigger.entity_id | default('')) | list }}
+          entities: |
+            {# Create scene states dict #}
+            {% set ns = namespace(scene={}) %}
+
+            {# Handle non-trigger lights #}
+            {% for entity_id in target_lights | reject('in', manual_lights) | reject('eq', trigger.entity_id | default('')) | select('is_state', 'on') | list %}
+              {% set ns.scene = dict(ns.scene, **{entity_id: {
+                'state': 'on',
+              }}) %}
+            {% endfor %}
+
+            {# Handle the trigger light #}
+            {% if trigger_id == "physical_off" and trigger.entity_id | default('') in target_lights %}
+              {% if trigger.entity_id in manual_lights or trigger.from_state.context.id is not search(':al:.*:.*:') %}
+                {# Save the previous state and attributes of the physical control light #}
+                {% set ns.scene = dict(ns.scene, **{trigger.entity_id: dict(
+                  trigger.from_state.attributes | to_json | from_json,
+                  state=trigger.from_state.state
+                )}) %}
+              {% else %}
+                {# Save the 'on' state of the physical control light #}
+                {% set ns.scene = dict(ns.scene, **{trigger.entity_id: {
+                  'state': 'on',
+                }}) %}
+              {% endif %}
+            {% endif %}
+
+            {# Return scene #}
+            {{ ns.scene }}
 
       delete_saved_scene: &delete_saved_scene
         if:
@@ -857,16 +859,13 @@ actions:
                 data:
                   transition: "{{ lights_on_transition }}"
                 target:
-                  entity_id: "{{ light_entities if trigger_id not in ['physical_off', 'physical_on'] else difference(light_entities, [trigger.entity_id]) }}"
+                  entity_id: "{{ target_lights if trigger_id not in ['physical_off', 'physical_on'] else difference(target_lights, [trigger.entity_id]) }}"
           - *delete_saved_scene
 
       lights_off_action: &lights_off_action
         sequence:
-          - alias: Save the scene if lights are manually controlled
+          - alias: Save the current scene
             if:
-              - alias: If lighting is under manual control
-                condition: template
-                value_template: "{{ is_scene_manual }}"
               - alias: If a non-physical trigger or physical restore is enabled
                 condition: template
                 value_template: "{{ trigger_id != 'physical_off' or physical_restore }}"
@@ -892,7 +891,7 @@ actions:
                 data:
                   transition: "{{ lights_off_transition }}"
                 target:
-                  entity_id: "{{ light_entities if trigger_id not in ['physical_off', 'physical_on'] else difference(light_entities, [trigger.entity_id]) }}"
+                  entity_id: "{{ target_lights if trigger_id not in ['physical_off', 'physical_on'] else difference(target_lights, [trigger.entity_id]) }}"
 
   - choose:
       - alias: "Delete expired scene"
