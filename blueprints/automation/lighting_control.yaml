@@ -467,6 +467,7 @@ trigger_variables:
   cover_shading_when_closing: !input cover_shading_when_closing
 
 trigger:
+  # Occupancy triggers
   - trigger: state
     entity_id: !input occupancy_sensor
     to: "on"
@@ -479,10 +480,8 @@ trigger:
     for:
       seconds: !input area_unoccupied_delay
     id: occupancy
-  - trigger: state
-    entity_id: !input automatic_control_toggle
-    to: "on"
-    id: control_enabled
+
+  # Illuminance triggers
   - trigger: numeric_state
     entity_id: !input illuminance_sensor
     above: !input illuminance_maximum
@@ -495,6 +494,8 @@ trigger:
     for:
       seconds: !input illuminance_minimum_duration
     id: illuminance
+
+  # Cover illuminance triggers
   - trigger: numeric_state
     entity_id: !input cover
     attribute: current_position
@@ -512,6 +513,8 @@ trigger:
       seconds: !input illuminance_minimum_duration
     id: illuminance
     enabled: !input cover_shading_when_closing
+
+  # Physical control triggers
   - trigger: state
     entity_id: !input physical_control_lights
     to: "on"
@@ -522,6 +525,12 @@ trigger:
     to: "off"
     from: "on"
     id: physical_off
+
+  # Toggle triggers
+  - trigger: state
+    entity_id: !input automatic_control_toggle
+    to: "on"
+    id: control_enabled
   - trigger: state
     entity_id: !input automatic_control_toggle
     to: "off"
@@ -549,9 +558,11 @@ trigger:
     to: !input control_reset_trigger_routine_states
     id: routine_control_reset
     enabled: "{{ is_automatic_control_toggleable and occupancy_sensor is string }}"
+
+  # Scene expiration trigger
   - trigger: template
     value_template: |
-      {% if states[scene_entity].state is defined %}
+      {% if states[scene_entity].state is defined and this.attributes.current == 0 %}
         {% set scene_expiration = as_timedelta(
           states(scene_timeout_helper)
           if scene_timeout_helper is string
@@ -646,8 +657,8 @@ variables:
 
 condition:
   - or:
-      - condition: trigger
-        id: "scene_expired"
+      - condition: template
+        value_template: '{{ trigger.id == "scene_expired" and this.attributes.current == 0 }}'
       - and:
           - condition: state
             entity_id: !input occupancy_sensor
