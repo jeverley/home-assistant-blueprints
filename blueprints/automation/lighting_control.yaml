@@ -562,7 +562,7 @@ trigger:
   # Scene expiration trigger
   - trigger: template
     value_template: |
-      {% if states[scene_entity].state is defined and this.attributes.current == 0 %}
+      {% if states[scene_entity].state is defined and state_attr(this.entity_id, 'current') == 0 %}
         {% set scene_expiration = as_timedelta(
           states(scene_timeout_helper)
           if scene_timeout_helper is string
