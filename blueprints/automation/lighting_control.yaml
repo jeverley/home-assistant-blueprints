@@ -568,7 +568,7 @@ trigger:
           if scene_timeout_helper is string
           else scene_timeout
         ) %}
-        {{ states[scene_entity].last_updated < now() - scene_expiration }}
+        {{ (states[scene_entity].last_updated|default(state_attr(this.entity_id, 'last_triggered'))) < now() - scene_expiration }}
       {% else %}
         {{ false }}
       {% endif %}
@@ -651,10 +651,7 @@ variables:
   is_occupied: "{{ is_state(occupancy_sensor, 'on') if occupancy_sensor else none }}"
   is_scene_saved: "{{ states[scene_entity].state is defined }}"
   is_scene_expired: |
-    {{
-      is_scene_saved and states[scene_entity].last_updated is defined
-      and states[scene_entity].last_updated < now() - as_timedelta(scene_expiration)
-    }}
+    {{ is_scene_saved and (states[scene_entity].last_updated|default(this.attributes.last_triggered)) < now() - as_timedelta(scene_expiration) }}
   is_trigger_control_reset: |
     {{ trigger_id | contains('control_reset') }}
 
@@ -736,7 +733,6 @@ actions:
   - variables:
       create_saved_scene: &create_saved_scene
         action: scene.create
-        metadata: {}
         data:
           scene_id: "{{ scene_id }}"
           snapshot_entities: |
@@ -779,8 +775,7 @@ actions:
             value_template: "{{ is_scene_saved }}"
         then:
           - action: scene.delete
-            metadata: {}
-            data: {}
+            continue_on_error: true
             target:
               entity_id: "{{ scene_entity }}"
 
@@ -837,7 +832,6 @@ actions:
                     value_template: "{{ not is_scene_expired }}"
                 sequence:
                   - action: scene.turn_on
-                    metadata: {}
                     target:
                       entity_id: "{{ scene_entity }}"
                     data:
@@ -848,14 +842,12 @@ actions:
                     value_template: "{{ lights_on_scene is string }}"
                 sequence:
                   - action: scene.turn_on
-                    metadata: {}
                     target:
                       entity_id: "{{ lights_on_scene }}"
                     data:
                       transition: "{{ lights_on_transition }}"
             default:
               - action: light.turn_on
-                metadata: {}
                 data:
                   transition: "{{ lights_on_transition }}"
                 target:
@@ -880,14 +872,12 @@ actions:
                     value_template: "{{ lights_off_scene is string }}"
                 sequence:
                   - action: scene.turn_on
-                    metadata: {}
                     target:
                       entity_id: "{{ lights_off_scene }}"
                     data:
                       transition: "{{ lights_off_transition }}"
             default:
               - action: light.turn_off
-                metadata: {}
                 data:
                   transition: "{{ lights_off_transition }}"
                 target:
@@ -931,8 +921,6 @@ actions:
                         value_template: "{{ is_trigger_control_reset }}"
                     sequence:
                       - action: homeassistant.turn_on
-                        metadata: {}
-                        data: {}
                         target:
                           entity_id: "{{ automatic_control_toggle }}"
                   - alias: Turn off automatic control
@@ -945,8 +933,6 @@ actions:
                         value_template: "{{ is_occupied or not occupancy_sensor }}"
                     sequence:
                       - action: homeassistant.turn_off
-                        metadata: {}
-                        data: {}
                         target:
                           entity_id: "{{ automatic_control_toggle }}"
                   - alias: Turn on automatic control
@@ -957,8 +943,6 @@ actions:
                         value_template: "{{ is_automatic_control_toggleable and not is_automatic_control_enabled }}"
                     sequence:
                       - action: homeassistant.turn_on
-                        metadata: {}
-                        data: {}
                         target:
                           entity_id: "{{ automatic_control_toggle }}"
 
