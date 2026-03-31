@@ -1,0 +1,84 @@
+blueprint:
+  name: Adaptive Lighting – Trigger Scenes
+  description: |
+    Re‑enable Adaptive Lighting for an area when an 'Adaptive' scene is activated.
+  domain: automation
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/al_trigger_scene.yaml
+  input:
+    adaptive_scenes:
+      name: Adaptive scenes
+      description: |
+        Specify scenes that should re-enable an area's Adaptive Lighting.
+
+        **Each scene and its target Adaptive Lighting switches must be associated with the same area.**
+      selector:
+        entity:
+          domain: scene
+          multiple: true
+
+trigger_variables:
+  adaptive_scenes: !input adaptive_scenes
+
+trigger:
+  - platform: event
+    event_type: call_service
+    event_data:
+      domain: scene
+      service: turn_on
+
+variables:
+  trigger_scenes: |
+    {% set entity_id =
+      trigger.event.data.service_data.entity_id
+      if trigger.event is defined
+      else none
+    %}
+    {% if entity_id is string %}
+      {{ [entity_id] }}
+    {% elif entity_id is list %}
+      {{ entity_id }}
+    {% else %}
+      {{ [] }}
+    {% endif %}
+
+  matched_scenes: |
+    {{ trigger_scenes | select('in', adaptive_scenes) | list }}
+
+condition:
+  - condition: template
+    value_template: |
+      {{ matched_scenes | count > 0 }}
+
+action:
+  - variables:
+      target_areas: |
+        {{
+          matched_scenes
+          | map('area_id')
+          | reject('equalto', none)
+          | unique
+          | list
+        }}
+
+      adaptive_lighting_switches: |
+        {% set ns = namespace(items=[]) %}
+        {% set al_entities = integration_entities('adaptive_lighting') %}
+        {% for area in target_areas %}
+          {% set area_switches =
+            intersect(al_entities, area_entities(area))
+            | expand
+            | selectattr('attributes.manual_control', 'defined')
+            | map(attribute='entity_id')
+            | list
+          %}
+          {% set ns.items = ns.items + area_switches %}
+        {% endfor %}
+        {{ ns.items }}
+
+  - repeat:
+      for_each: "{{ adaptive_lighting_switches }}"
+      sequence:
+        - service: adaptive_lighting.set_manual_control
+          data:
+            manual_control: false
+            entity_id: "{{ repeat.item }}"
