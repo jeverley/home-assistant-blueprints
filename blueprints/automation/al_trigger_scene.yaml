@@ -82,3 +82,6 @@ action:
           data:
             manual_control: false
             entity_id: "{{ repeat.item }}"
+
+mode: parallel
+max: 50
