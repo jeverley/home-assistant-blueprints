@@ -42,12 +42,12 @@ variables:
     {% endif %}
 
   matched_scenes: |
-    {{ trigger_scenes | select('in', adaptive_scenes) | list }}
+    {{ intersect(trigger_scenes, adaptive_scenes) }}
 
 condition:
   - condition: template
     value_template: |
-      {{ matched_scenes | count > 0 }}
+      {{ not not matched_scenes }}
 
 action:
   - variables:
