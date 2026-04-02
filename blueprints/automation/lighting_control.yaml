@@ -39,38 +39,31 @@ blueprint:
                 - occupancy
                 - presence
                 - motion
-
-    automatic_control:
-      name: Automatic Control
-      icon: mdi:lightbulb-auto
-      collapsed: true
-      input:
-        illuminance_sensor:
-          name: Illuminance sensor (optional)
-          description: The illuminance sensor that measures light levels in the area.
-          default: []
-          selector:
-            entity:
-              multiple: false
-              filter:
-                - domain:
-                    - sensor
-                  device_class:
-                    - illuminance
-        automatic_control_toggle:
-          name: Automatic control toggle (optional)
-          description:
-            A toggle/switch/binary sensor for enabling automatic lighting
-            control. If not provided, the automation will fall back to the occupancy sensor.
-          default: []
-          selector:
-            entity:
-              multiple: false
-              filter:
-                - domain:
-                    - input_boolean
-                    - switch
-                    - binary_sensor
+    illuminance_sensor:
+      name: Illuminance sensor (optional)
+      description: The illuminance sensor that measures light levels in the area.
+      default: []
+      selector:
+        entity:
+          multiple: false
+          filter:
+            - domain:
+                - sensor
+              device_class:
+                - illuminance
+    automatic_control_toggle:
+      name: Automatic control toggle (optional)
+      description: A toggle/switch/binary sensor for enabling automatic lighting
+        control. If not provided, the automation will fall back to the occupancy sensor.
+      default: []
+      selector:
+        entity:
+          multiple: false
+          filter:
+            - domain:
+                - input_boolean
+                - switch
+                - binary_sensor
 
     transition_options:
       name: Transition
@@ -151,7 +144,7 @@ blueprint:
         physical_control_latency:
           name: Physical control latency (optional)
           description: The transition time is reduced by this value for physically triggered changes.
-          default: 0
+          default: 0.2
           selector:
             number:
               min: 0.0
