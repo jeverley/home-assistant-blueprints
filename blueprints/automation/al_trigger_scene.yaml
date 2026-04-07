@@ -76,7 +76,7 @@ action:
         {{ ns.items }}
 
       transition: |
-        {{ trigger.event.data.service_data.transition|default(none)|float(none) }}
+        {{ trigger.event.data.service_data.transition|default(none)|float(none) if trigger.event is defined else none }}
 
   - repeat:
       for_each: "{{ adaptive_lighting_switches }}"
