@@ -1,0 +1,202 @@
+blueprint:
+  name: Media Scene Control
+  description: |
+    Activates specific scenes based on media source and reverts to a default scene when playback ends.
+    
+    Includes 'Quick Resume' logic to maintain continuity during short pauses.
+  domain: automation
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/media_scene_control.yaml
+  input:
+    target_player:
+      name: Media Player
+      description: The device to monitor for playback and source changes.
+      selector:
+        entity:
+          filter:
+            - domain: media_player
+    default_scene:
+      name: Default Scene
+      description: The scene to activate when media stops or an unmapped app is opened.
+      selector:
+        entity:
+          filter:
+            - domain: scene
+    history_sensor:
+      name: Playback Tracker
+      description: |
+        A 'history_stats' sensor tracking 'playing' time for this player
+        The sensor must capture history greater/equal to the `Quick Resume Threshold`.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              integration: history_stats
+              device_class: duration
+    quick_resume_mins:
+      name: Quick Resume Threshold
+      description: |
+        Minutes played before 'Quick Resume' is enabled.
+      default: 2
+      selector:
+        number:
+          mode: box
+          min: 1
+          max: 20
+          unit_of_measurement: min
+    scene_mappings:
+      name: Scene Mappings
+      description: Map senes to media sources.
+      selector:
+        object:
+          multiple: true
+          fields:
+            scene:
+              label: "Scene"
+              selector:
+                entity:
+                  domain: scene
+            sources:
+              label: "Media source"
+              selector:
+                select:
+                  multiple: true
+                  custom_value: true
+                  options:
+                    - label: Netflix
+                      value: netflix
+                    - label: Plex
+                      value: plex
+                    - label: YouTube
+                      value: youtube
+                    - label: Spotify
+                      value: spotify
+                    - label: Disney+
+                      value: disney
+                    - label: Prime Video
+                      value: prime
+                    - label: Apple TV
+                      value: apple
+                    - label: PlayStation
+                      value: playstation
+                    - label: Xbox
+                      value: xbox
+
+mode: restart
+
+trigger_variables:
+  scene_mappings: !input scene_mappings
+  player_id: !input target_player
+  history_sensor: !input history_sensor
+  default_scene: !input default_scene
+  quick_resume_mins: !input quick_resume_mins
+
+trigger:
+  - trigger: state
+    entity_id: !input target_player
+    id: "StandardActive"
+    to: playing
+    for: "00:00:30"
+  - trigger: state
+    entity_id: !input target_player
+    id: "QuickResume"
+    to: playing
+    for: "00:00:03"
+  - trigger: state
+    entity_id: !input target_player
+    attribute: source
+    id: "SourceChange"
+    for: "00:00:03"
+  - trigger: state
+    entity_id: !input target_player
+    id: "Reset"
+    to:
+      - "off"
+      - "standby"
+      - "idle"
+      - "unavailable"
+      - "unknown"
+    for: "00:00:30"
+  - trigger: state
+    entity_id: !input target_player
+    id: "Paused"
+    to: "paused"
+    for: "00:00:10"
+  - trigger: template
+    id: "LightsOn"
+    value_template: |
+      {{ area_entities(area_id(player_id)) 
+      | select('search', '^light.')
+      | reject('is_hidden_entity')
+      | select('is_state', 'on')
+      | list | count > 0
+      }}
+    for: "00:00:01"
+
+variables:
+  player_area: "{{ area_id(player_id) }}"
+  trigger_id: "{{ trigger.id | default('') | string }}"
+
+  # Quick Resume Logic
+  played_duration: |
+    {% set u = state_attr(history_sensor, 'unit_of_measurement') %}
+    {% set u_factors = {'d': 86400, 'h': 3600, 'min': 60, 's': 1, 'ms': 0.001, 'μs': 0.000001} %}
+    {{ timedelta(seconds = states(history_sensor)|float(0) * u_factors[u]|default(0)) }}
+  is_active_session: |
+    {{ as_timedelta(played_duration) >= timedelta(minutes = quick_resume_mins) }}
+
+  # Context & Trigger Logic
+  current_source: |
+    {{ state_attr(player_id, 'source') }}
+  matched_scene: |
+    {% if current_source %}
+      {% set match =
+        scene_mappings | selectattr('sources', 'defined') 
+        | selectattr('sources', 'search', current_source) 
+        | first | default(none)
+      %}
+      {{ match.scene if match else none }}
+    {% else %}
+      {{ none }}
+    {% endif %}
+
+  # Target Determination
+  target_scene: |
+    {% if trigger_id in ['QuickResume', 'StandardActive', 'LightOn'] and matched_scene is not none %}
+      {{ matched_scene }}
+    {% elif trigger_id == 'Reset' %}
+      {{ default_scene }}
+    {% elif trigger_id == 'SourceChange' and matched_scene is none %}
+      {{ default_scene }}
+    {% elif trigger_id == 'Paused' and matched_scene is not none %}
+      {{ default_scene }}
+    {% else %}
+      {{ none }}
+    {% endif %}
+
+  # Stateful Scenes & Guard Logic
+  is_valid_trigger: "{{ trigger_id != 'QuickResume' or is_active_session }}"
+  stateful_switch: |
+    {% set switch = (target_scene | replace('scene.', 'switch.')) ~ '_stateful_scene' if target_scene else none %}
+    {{ switch if switch and states[switch].state is defined else none }}
+  area_lights_on: |
+    {{ area_entities(player_area) 
+      | select('search', '^light.')
+      | reject('is_hidden_entity')
+      | select('is_state', 'on')
+      | list | count > 0
+    }}
+
+condition:
+  - condition: template
+    value_template: "{{ target_scene is not none }}"
+  - condition: template
+    value_template: "{{ is_state(stateful_switch, 'off') if stateful_switch else true }}"
+  - condition: template
+    value_template: "{{ area_lights_on }}"
+
+action:
+  - action: scene.turn_on
+    target:
+      entity_id: "{{ target_scene }}"
+    data:
+      transition: 10
