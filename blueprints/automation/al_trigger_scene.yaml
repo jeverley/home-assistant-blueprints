@@ -83,8 +83,8 @@ action:
       sequence:
         - action: adaptive_lighting.apply
           data: |
-            {% set global = namespace(data={'entity_id': repeat.item}) %}
-            {{ global.data if transition is none else dict(global.data, **{'transition': transition}) }}
+            {% set data={'entity_id': repeat.item}) %}
+            {{ data if transition is none else dict(data, **{'transition': transition}) }}
 
 mode: parallel
 max: 50
