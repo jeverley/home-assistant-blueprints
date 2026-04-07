@@ -83,7 +83,7 @@ action:
       sequence:
         - action: adaptive_lighting.apply
           data: |
-            {% set data={'entity_id': repeat.item}) %}
+            {% set data={'entity_id': repeat.item} %}
             {{ data if transition is none else dict(data, **{'transition': transition}) }}
 
 mode: parallel
