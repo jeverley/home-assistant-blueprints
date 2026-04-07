@@ -75,13 +75,16 @@ action:
         {% endfor %}
         {{ ns.items }}
 
+      transition: |
+        {{ trigger.event.data.service_data.transition|default(none)|float(none) }}
+
   - repeat:
       for_each: "{{ adaptive_lighting_switches }}"
       sequence:
-        - service: adaptive_lighting.set_manual_control
-          data:
-            manual_control: false
-            entity_id: "{{ repeat.item }}"
+        - action: adaptive_lighting.apply
+          data: |
+            {% set global = namespace(data={'entity_id': repeat.item}) %}
+            {{ global.data if transition is none else dict(global.data, **{'transition': transition}) }}
 
 mode: parallel
 max: 50
