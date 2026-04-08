@@ -78,13 +78,14 @@ action:
       transition: |
         {{ trigger.event.data.service_data.transition|default(none)|float(none) if trigger.event is defined else none }}
 
-  - repeat:
-      for_each: "{{ adaptive_lighting_switches }}"
-      sequence:
-        - action: adaptive_lighting.apply
-          data: |
-            {% set data={'entity_id': repeat.item} %}
-            {{ data if transition is none else dict(data, **{'transition': transition}) }}
+  - if:
+      - condition: template
+        value_template: "{{ not not adaptive_lighting_switches }}"
+    then:
+      - action: adaptive_lighting.apply
+        data: |
+          {% set data={'entity_id': adaptive_lighting_switches} %}
+          {{ data if transition is none else dict(data, **{'transition': transition}) }}
 
 mode: parallel
 max: 50
