@@ -1,0 +1,198 @@
+blueprint:
+  name: Tado CE – Window Mode Sensors
+  description: |
+    Control Tado CE Window Mode using window and door sensors.
+  domain: automation
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/tado_ce_window_mode_sensors.yaml
+
+  input:
+    zones:
+      name: Zones
+      description: |
+        Configure each Tado room and its sensors.
+      selector:
+        object:
+          label_field: climate_entity
+          multiple: true
+          fields:
+
+            climate_entity:
+              label: Room
+              selector:
+                entity:
+                  domain: climate
+                  integration: tado_ce
+
+            openings:
+              label: Openings
+              selector:
+                entity:
+                  domain: binary_sensor
+                  device_class:
+                    - window
+                    - door
+                    - opening
+                  multiple: true
+
+            nearby_openings:
+              label: Nearby openings
+              selector:
+                entity:
+                  domain: binary_sensor
+                  device_class:
+                    - window
+                    - door
+                    - opening
+                  multiple: true
+
+            open_delay:
+              label: Open delay (default 15s)
+              selector:
+                number:
+                  min: 0
+                  max: 120
+                  mode: slider
+
+            nearby_open_delay:
+              label: Nearby open delay (default 300s)
+              selector:
+                number:
+                  min: 0
+                  max: 900
+                  mode: slider
+
+            close_delay:
+              label: Close delay (default 30s)
+              selector:
+                number:
+                  min: 0
+                  max: 300
+                  mode: slider
+
+mode: parallel
+max: 100
+
+trace:
+  stored_traces: 0
+
+trigger_variables:
+  zones: !input zones
+  default_open_delay: 15
+  default_nearby_open_delay: 300
+  default_close_delay: 30
+
+  all_openings: |
+    {% set ns = namespace(o=[]) %}
+    {% for z in zones %}
+      {% set ns.o = ns.o + (z.openings | default([])) + (z.nearby_openings | default([])) %}
+    {% endfor %}
+    {{ ns.o | unique | list }}
+
+trigger:
+  - platform: event
+    event_type: state_changed
+  - platform: event
+    event_type: tado_ce_window_action
+
+condition:
+  - condition: template
+    value_template: |
+      {{
+        trigger.event.event_type != 'state_changed'
+        or trigger.event.data.entity_id in all_openings
+      }}
+
+action:
+  - choose:
+      - alias: Fire window actions for configured zones
+        conditions: "{{ trigger.event is defined and trigger.event.event_type == 'state_changed' }}"
+        sequence:
+          - variables:
+              sensor: "{{ trigger.event.data.entity_id }}"
+              state: "{{ trigger.event.data.new_state.state }}"
+              matched_zones: |
+                {% set ns = namespace(z=[]) %}
+                {% for z in zones %}
+                  {% if sensor in z.openings|default([]) or sensor in z.nearby_openings|default([]) %}
+                    {% set ns.z = ns.z + [z] %}
+                  {% endif %}
+                {% endfor %}
+                {{ ns.z }}
+
+          - repeat:
+              for_each: "{{ matched_zones }}"
+              sequence:
+                - event: tado_ce_window_action
+                  event_data:
+                    sensor: "{{ sensor }}"
+                    state: "{{ state }}"
+                    zone: "{{ repeat.item }}"
+
+      - alias: Handle window action events
+        conditions: "{{ trigger.event is defined and trigger.event.event_type == 'tado_ce_window_action' }}"
+        sequence:
+          - variables:
+              zone: "{{ trigger.event.data.zone }}"
+              sensor: "{{ trigger.event.data.sensor }}"
+              state: "{{ trigger.event.data.state }}"
+              is_open: "{{ state == 'on' }}"
+              is_closed: "{{ state != 'on' }}"
+              is_zone: "{{ sensor in zone.openings|default([]) }}"
+              is_nearby: "{{ sensor in zone.nearby_openings|default([]) }}"
+              action_wait: |
+                {% if is_closed %}
+                  {% set s = zone.close_delay|default(default_close_delay) %}
+                {% elif is_zone %}
+                  {% set s = zone.open_delay|default(default_open_delay) %}
+                {% elif is_nearby %}
+                  {% set s = zone.nearby_open_delay|default(default_nearby_open_delay) %}
+                {% else %}
+                  {% set s = 0 %}
+                {% endif %}
+                {{ timedelta(seconds=s|float) }}
+
+          - wait_template: |
+              {% if is_open %}
+                {{ not is_state(sensor, 'on') }}
+              {% else %}
+                {{
+                  union(zone.openings|default([]), zone.nearby_openings|default([]))
+                    | select('is_state', 'on')
+                    | list
+                    | count > 0
+                }}
+              {% endif %}
+            timeout: "{{ action_wait }}"
+
+          - choose:
+              - conditions: "{{ is_open and not wait.completed }}"
+                sequence:
+                  - action: tado_ce.set_open_window_mode
+                    target:
+                      entity_id: "{{ zone.climate_entity }}"
+                    data:
+                      capture_state: true
+                      duration: 0
+
+              - conditions: "{{ is_closed and not wait.completed }}"
+                sequence:
+                  - action: tado_ce.resume_schedule
+                    target:
+                      entity_id: "{{ zone.climate_entity }}"
+
+          - action: system_log.write
+            data:
+              level: info
+              message: |
+                {{ this.entity_id ~ ' event:' }}
+                {{ {
+                  'zone': zone,
+                  'sensor': sensor,
+                  'state': state,
+                  'action_wait': action_wait,
+                  'is_open': is_open,
+                  'is_closed': is_closed,
+                  'is_zone': is_zone,
+                  'is_nearby': is_nearby,
+                  'is_aborted': wait.completed,
+                }|to_json }}
