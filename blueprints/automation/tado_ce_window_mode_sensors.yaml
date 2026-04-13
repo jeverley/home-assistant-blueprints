@@ -164,9 +164,9 @@ action:
                 {% else %}
                   {% set s = 0 %}
                 {% endif %}
-                {{ timedelta(seconds=max(s, 0)) }}
-              duration: "{{ max(zone.duration|default(0), 0) }}"
-              indefinite: "{{ zone.indefinite|default(false) }}"
+                {{ timedelta(seconds=max(s|float, 0)) }}
+              duration: "{{ max(zone.duration|default(0)|float, 0) }}"
+              indefinite: "{{ zone.indefinite|default(false)|bool }}"
 
           - wait_template: |
               {% if is_open %}
