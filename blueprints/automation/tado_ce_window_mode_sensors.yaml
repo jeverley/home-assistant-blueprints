@@ -165,7 +165,7 @@ action:
                   {% set s = 0 %}
                 {% endif %}
                 {{ timedelta(seconds=max(s|float, 0)) }}
-              duration: "{{ max(zone.duration|default(0)|float, 0) }}"
+              duration: "{{ zone.duration|default(none) }}"
               indefinite: "{{ zone.indefinite|default(false)|bool }}"
 
           - wait_template: |
@@ -189,9 +189,9 @@ action:
                       entity_id: "{{ zone.climate_entity }}"
                     data: |
                       {% set data = {'capture_state': true} %}
-                      {% if indefinite %}
+                      {% if indefinite or duration == 0 %}
                         {{ dict(data, **{'duration': 0}) }}
-                      {% elif duration %}
+                      {% elif duration and duration > 0 %}
                         {{ dict(data, **{'duration': duration * 60}) }}
                       {% else %}
                         {{ data }}
