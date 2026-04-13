@@ -7,7 +7,7 @@ blueprint:
 
   input:
     zones:
-      name: Zones
+      name: Rooms
       description: |
         Configure each Tado room and its sensors.
       selector:
