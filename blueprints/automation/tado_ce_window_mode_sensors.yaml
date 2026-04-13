@@ -15,7 +15,6 @@ blueprint:
           label_field: climate_entity
           multiple: true
           fields:
-
             climate_entity:
               label: Room
               selector:
@@ -51,7 +50,8 @@ blueprint:
                 number:
                   min: 0
                   max: 120
-                  mode: slider
+                  unit_of_measurement: s
+                  mode: box
 
             nearby_open_delay:
               label: Nearby open delay (default 300s)
@@ -59,7 +59,8 @@ blueprint:
                 number:
                   min: 0
                   max: 900
-                  mode: slider
+                  unit_of_measurement: s
+                  mode: box
 
             close_delay:
               label: Close delay (default 30s)
@@ -67,7 +68,21 @@ blueprint:
                 number:
                   min: 0
                   max: 300
-                  mode: slider
+                  unit_of_measurement: s
+                  mode: box
+
+            duration:
+              label: Window mode duration (default is the Tado timeout)
+              selector:
+                number:
+                  min: 1
+                  unit_of_measurement: min
+                  mode: box
+
+            indefinite:
+              label: Indefinite duration
+              selector:
+                boolean:
 
 mode: parallel
 max: 100
@@ -149,7 +164,9 @@ action:
                 {% else %}
                   {% set s = 0 %}
                 {% endif %}
-                {{ timedelta(seconds=s|float) }}
+                {{ timedelta(seconds=max(s, 0)) }}
+              duration: "{{ max(zone.duration|default(0), 0) }}"
+              indefinite: "{{ zone.indefinite|default(false) }}"
 
           - wait_template: |
               {% if is_open %}
@@ -170,9 +187,15 @@ action:
                   - action: tado_ce.set_open_window_mode
                     target:
                       entity_id: "{{ zone.climate_entity }}"
-                    data:
-                      capture_state: true
-                      duration: 0
+                    data: |
+                      {% set data = {'capture_state': true} %}
+                      {% if indefinite %}
+                        {{ dict(data, **{'duration': 0}) }}
+                      {% elif duration %}
+                        {{ dict(data, **{'duration': duration * 60}) }}
+                      {% else %}
+                        {{ data }}
+                      {% endif %}
 
               - conditions: "{{ is_closed and not wait.completed }}"
                 sequence:
