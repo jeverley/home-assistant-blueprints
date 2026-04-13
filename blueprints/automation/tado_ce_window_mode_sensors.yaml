@@ -213,6 +213,8 @@ action:
                   'sensor': sensor,
                   'state': state,
                   'action_wait': action_wait,
+                  'duration': duration,
+                  'indefinite': indefinite,
                   'is_open': is_open,
                   'is_closed': is_closed,
                   'is_zone': is_zone,
