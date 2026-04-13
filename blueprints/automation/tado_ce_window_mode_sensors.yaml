@@ -72,7 +72,7 @@ blueprint:
                   mode: box
 
             duration:
-              label: Window mode duration (default is the Tado timeout)
+              label: Duration (default is the Tado timeout)
               selector:
                 number:
                   min: 1
@@ -188,18 +188,17 @@ action:
                     target:
                       entity_id: "{{ zone.climate_entity }}"
                     data: |
-                      {% set data = {'capture_state': true} %}
                       {% if indefinite or duration == 0 %}
-                        {{ dict(data, **{'duration': 0}) }}
+                        {{ {'duration': 0} }}
                       {% elif duration and duration > 0 %}
-                        {{ dict(data, **{'duration': duration * 60}) }}
+                        {{ {'duration': duration * 60} }}
                       {% else %}
-                        {{ data }}
+                        {{ {} }}
                       {% endif %}
 
               - conditions: "{{ is_closed and not wait.completed }}"
                 sequence:
-                  - action: tado_ce.resume_schedule
+                  - action: tado_ce.restore_previous_state
                     target:
                       entity_id: "{{ zone.climate_entity }}"
 
