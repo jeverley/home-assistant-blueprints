@@ -119,8 +119,30 @@ condition:
 
 action:
   - choose:
+      - alias: Fire manual resync event for all zones
+        conditions: "{{ trigger.event is not defined }}"
+        sequence:
+          - repeat:
+              for_each: "{{ zones }}"
+              sequence:
+                - variables:
+                    zone: "{{ repeat.item }}"
+                    state: |
+                      {% set any_open = 
+                        union(zone.openings|default([]), zone.nearby_openings|default([]))
+                          | select('is_state', 'on')
+                          | list | count > 0
+                      %}
+                      {{ 'on' if any_open else 'off' }}
+
+                - event: tado_ce_window_action
+                  event_data:
+                    sensor: null
+                    state: "{{ state }}"
+                    zone: "{{ zone }}"
+
       - alias: Fire window actions for configured zones
-        conditions: "{{ trigger.event is defined and trigger.event.event_type == 'state_changed' }}"
+        conditions: "{{ trigger.event.event_type == 'state_changed' }}"
         sequence:
           - variables:
               sensor: "{{ trigger.event.data.entity_id }}"
@@ -144,7 +166,7 @@ action:
                     zone: "{{ repeat.item }}"
 
       - alias: Handle window action events
-        conditions: "{{ trigger.event is defined and trigger.event.event_type == 'tado_ce_window_action' }}"
+        conditions: "{{ trigger.event.event_type == 'tado_ce_window_action' }}"
         sequence:
           - variables:
               zone: "{{ trigger.event.data.zone }}"
@@ -155,7 +177,9 @@ action:
               is_zone: "{{ sensor in zone.openings|default([]) }}"
               is_nearby: "{{ sensor in zone.nearby_openings|default([]) }}"
               action_wait: |
-                {% if is_closed %}
+                {% if not sensor %}
+                  {% set s = none %}
+                {% elif is_closed %}
                   {% set s = zone.close_delay|default(default_close_delay) %}
                 {% elif is_zone %}
                   {% set s = zone.open_delay|default(default_open_delay) %}
@@ -164,25 +188,26 @@ action:
                 {% else %}
                   {% set s = 0 %}
                 {% endif %}
-                {{ timedelta(seconds=max(s|float, 0)) }}
+                {{ none if s is none else timedelta(seconds=max(s|float, 0)) }}
               duration: "{{ zone.duration|default(none) }}"
               indefinite: "{{ zone.indefinite|default(false)|bool }}"
 
-          - wait_template: |
-              {% if is_open %}
-                {{ not is_state(sensor, 'on') }}
-              {% else %}
-                {{
-                  union(zone.openings|default([]), zone.nearby_openings|default([]))
-                    | select('is_state', 'on')
-                    | list
-                    | count > 0
-                }}
-              {% endif %}
-            timeout: "{{ action_wait }}"
+          - if: "{{ action_wait is not none }}"
+            then:
+              - wait_template: |
+                  {% if is_open %}
+                    {{ not is_state(sensor, 'on') }}
+                  {% else %}
+                    {{
+                      union(zone.openings|default([]), zone.nearby_openings|default([]))
+                        | select('is_state', 'on')
+                        | list | count > 0
+                    }}
+                  {% endif %}
+                timeout: "{{ action_wait }}"
 
           - choose:
-              - conditions: "{{ is_open and not wait.completed }}"
+              - conditions: "{{ is_open and (action_wait is none or not wait.completed) }}"
                 sequence:
                   - action: tado_ce.set_open_window_mode
                     target:
@@ -196,7 +221,7 @@ action:
                         {{ {} }}
                       {% endif %}
 
-              - conditions: "{{ is_closed and not wait.completed }}"
+              - conditions: "{{ is_closed and (action_wait is none or not wait.completed) }}"
                 sequence:
                   - action: tado_ce.restore_previous_state
                     target:
@@ -218,5 +243,5 @@ action:
                   'is_closed': is_closed,
                   'is_zone': is_zone,
                   'is_nearby': is_nearby,
-                  'is_aborted': wait.completed,
+                  'is_aborted': false if action_wait is none else wait.completed,
                 }|to_json }}
