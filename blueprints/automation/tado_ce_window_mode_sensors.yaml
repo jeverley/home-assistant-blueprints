@@ -119,7 +119,7 @@ condition:
 
 action:
   - choose:
-      - alias: Fire manual resync event for all zones
+      - alias: Fire manual window action resync for all zones
         conditions: "{{ trigger.event is not defined }}"
         sequence:
           - repeat:
@@ -141,7 +141,7 @@ action:
                     state: "{{ state }}"
                     zone: "{{ zone }}"
 
-      - alias: Fire window actions for configured zones
+      - alias: Fire window action for matched zones
         conditions: "{{ trigger.event.event_type == 'state_changed' }}"
         sequence:
           - variables:
