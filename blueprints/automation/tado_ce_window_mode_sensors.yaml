@@ -45,7 +45,7 @@ blueprint:
                   multiple: true
 
             open_delay:
-              label: Open delay (default 15s)
+              label: Open delay (default 15)
               selector:
                 number:
                   min: 0
@@ -54,7 +54,7 @@ blueprint:
                   mode: box
 
             nearby_open_delay:
-              label: Nearby open delay (default 300s)
+              label: Nearby open delay (default 300)
               selector:
                 number:
                   min: 0
@@ -63,7 +63,7 @@ blueprint:
                   mode: box
 
             close_delay:
-              label: Close delay (default 30s)
+              label: Close delay (default 30)
               selector:
                 number:
                   min: 0
