@@ -25,16 +25,6 @@ blueprint:
       selector:
         time:
 
-    duration_minutes:
-      name: Sunrise duration
-      default: 45
-      selector:
-        number:
-          min: 10
-          max: 120
-          step: 5
-          unit_of_measurement: min
-
     helper_entity:
       name: "Helper (input_text)"
       description: |
@@ -62,21 +52,24 @@ blueprint:
 
     nautical_phase_section:
       name: Nautical Dawn
+      description: |
+        Dim, long-wavelength light to begin melatonin suppression whilst sleep is deepest.
       icon: mdi:weather-sunset
       collapsed: true
       input:
-        nautical_weight_pct:
-          name: Wake duration proportion (%)
-          default: 30
+        nautical_duration_min:
+          name: Phase duration
+          default: 15
           selector:
             number:
-              min: 10
-              max: 50
+              min: 5
+              max: 25
               step: 5
-              unit_of_measurement: "%"
+              unit_of_measurement: min
+              mode: slider
 
         nautical_brightness_end:
-          name: Nautical phase end brightness (%)
+          name: Phase end brightness (%)
           default: 15
           selector:
             number:
@@ -86,32 +79,45 @@ blueprint:
               unit_of_measurement: "%"
 
         nautical_kelvin_end:
-          name: Nautical phase end kelvin
-          default: 2300
+          name: Phase end Kelvin
+          default: 2200
           selector:
             number:
               min: 1500
-              max: 3500
+              max: 2500
               step: 50
               unit_of_measurement: K
 
+        nautical_brightness_exponent:
+          name: Brightness exponent
+          default: 1.6
+          selector:
+            number:
+              min: 1
+              max: 2.5
+              step: 0.1
+              unit_of_measurement: curve
+
     civil_phase_section:
       name: Civil Dawn
+      description: |
+        Increasing intensity and shifting spectrum to move the brain from REM/deep sleep into light sleep.
       icon: mdi:weather-sunset-up
       collapsed: true
       input:
-        civil_weight_pct:
-          name: Wake duration proportion (%)
-          default: 50
+        civil_duration_min:
+          name: Phase duration
+          default: 20
           selector:
             number:
-              min: 30
-              max: 70
+              min: 10
+              max: 35
               step: 5
-              unit_of_measurement: "%"
+              unit_of_measurement: min
+              mode: slider
 
         civil_brightness_end:
-          name: Civil phase end brightness (%)
+          name: Phase end brightness (%)
           default: 70
           selector:
             number:
@@ -121,32 +127,45 @@ blueprint:
               unit_of_measurement: "%"
 
         civil_kelvin_end:
-          name: Civil phase end kelvin
+          name: Phase end Kelvin
           default: 3500
           selector:
             number:
-              min: 2000
+              min: 2500
               max: 4500
               step: 50
               unit_of_measurement: K
 
+        civil_brightness_exponent:
+          name: Brightness exponent
+          default: 1.8
+          selector:
+            number:
+              min: 1.2
+              max: 2.2
+              step: 0.1
+              unit_of_measurement: curve
+
     sunrise_phase_section:
       name: Sunrise
+      description: |
+        High-intensity, blue-enriched light to stimulate the Cortisol Awakening Response (CAR) for alertness.
       icon: mdi:weather-sunny
       collapsed: true
       input:
-        sunrise_weight_pct:
-          name: Wake duration proportion (%)
-          default: 20
+        sunrise_duration_min:
+          name: Phase duration
+          default: 15
           selector:
             number:
-              min: 10
-              max: 40
+              min: 5
+              max: 25
               step: 5
-              unit_of_measurement: "%"
+              unit_of_measurement: min
+              mode: slider
 
         sunrise_brightness_end:
-          name: Sunrise phase end brightness (%)
+          name: Phase end brightness (%)
           default: 100
           selector:
             number:
@@ -156,14 +175,42 @@ blueprint:
               unit_of_measurement: "%"
 
         sunrise_kelvin_end:
-          name: Sunrise phase end kelvin
-          default: 5000
+          name: Phase end Kelvin
+          default: 5500
           selector:
             number:
-              min: 3000
+              min: 4500
               max: 6500
               step: 50
               unit_of_measurement: K
+
+        sunrise_brightness_exponent:
+          name: Brightness exponent
+          default: 1.0
+          selector:
+            number:
+              min: 0.8
+              max: 1.5
+              step: 0.1
+              unit_of_measurement: curve
+
+    maintenance_phase_section:
+      name: Maintenance
+      description: |
+        Pre-alarm plateau at peak intensity to reduce sleep inertia.
+      icon: mdi:alarm
+      collapsed: true
+      input:
+        maintenance_duration_min:
+          name: Phase duration
+          default: 15
+          selector:
+            number:
+              min: 5
+              max: 20
+              step: 1
+              unit_of_measurement: min
+              mode: slider
 
     advanced_section:
       name: Advanced
@@ -184,25 +231,30 @@ mode: restart
 trigger_variables:
   alarm_sensor: !input alarm_sensor
   fallback_time: !input fallback_time
-  duration_minutes: !input duration_minutes
   helper_entity: !input helper_entity
   target_lights: !input target_lights
   max_brightness_step: !input max_brightness_step
 
-  nautical_weight_pct: !input nautical_weight_pct
-  civil_weight_pct: !input civil_weight_pct
-  sunrise_weight_pct: !input sunrise_weight_pct
+  nautical_duration_min: !input nautical_duration_min
+  civil_duration_min: !input civil_duration_min
+  sunrise_duration_min: !input sunrise_duration_min
+  maintenance_duration_min: !input maintenance_duration_min
 
   nautical_brightness_end: !input nautical_brightness_end
   civil_brightness_end: !input civil_brightness_end
   sunrise_brightness_end: !input sunrise_brightness_end
 
+  nautical_brightness_exponent: !input nautical_brightness_exponent
+  civil_brightness_exponent: !input civil_brightness_exponent
+  sunrise_brightness_exponent: !input sunrise_brightness_exponent
+
   nautical_kelvin_end: !input nautical_kelvin_end
   civil_kelvin_end: !input civil_kelvin_end
   sunrise_kelvin_end: !input sunrise_kelvin_end
 
-  duration: "{{ timedelta(minutes=duration_minutes | float) }}"
-  duration_s: "{{ duration_minutes * 60 }}"
+  duration_min: "{{ nautical_duration_min|int + civil_duration_min|int + sunrise_duration_min|int }}"
+  duration_s: "{{ duration_min|int * 60 }}"
+  duration: "{{ timedelta(minutes=duration_min|int) }}"
 
 trigger:
   - platform: template
@@ -211,7 +263,7 @@ trigger:
       {% set last_alarm = as_datetime(h.last_alarm | default(none), none) %}
       {% set active = h.active | default(false) %}
 
-      {% set started_today = last_alarm and last_alarm.date() == now().date() %}
+      {% set started_today = not not last_alarm and last_alarm.date() == now().date() %}
 
       {% set sensor_state = states[alarm_sensor].state|default('unavailable') %}
       {% if sensor_state == 'unavailable' %}
@@ -234,7 +286,7 @@ trigger:
       {% endif %}
 
       {% if alarm_dt %}
-        {% set start_dt = alarm_dt - as_timedelta(duration) %}
+        {% set start_dt = alarm_dt - timedelta(minutes=duration_min + maintenance_duration_min) %}
         {% set end_dt = alarm_dt %}
       {% else %}
         {% set start_dt = none %}
@@ -243,9 +295,12 @@ trigger:
 
       {{
         alarm_dt and start_dt <= now() < end_dt
-        and state_attr(this.entity_id, 'current')|int(0) == 0
         and (not started_today or active)
       }}
+
+conditions:
+  - condition: template
+    value_template: "{{ state_attr(this.entity_id, 'current')|int(0) == 0 }}"
 
 action:
   # --- RUNTIME VARIABLES ---
@@ -255,7 +310,7 @@ action:
       active: "{{ h.active | default(false) }}"
       aborted: "{{ h.aborted | default(false) }}"
 
-      started_today: "{{ last_alarm and as_datetime(last_alarm).date() == now().date() }}"
+      started_today: "{{ not not last_alarm and as_datetime(last_alarm).date() == now().date() }}"
 
       sensor_dt: |
         {% set s = states[alarm_sensor].state|default('unavailable') %}
@@ -272,7 +327,7 @@ action:
       alarm_dt: |
         {% if trigger.id is not defined %}
           {# manual trigger executes a test sunrise #}
-          {{ now() + as_timedelta(duration) }}
+          {{ now() + timedelta(minutes=duration_min + maintenance_duration_min) }}
         {% elif started_today %}
           {{ last_alarm }}
         {% elif sensor_dt == 'unavailable' %}
@@ -283,8 +338,37 @@ action:
           {{ none }}
         {% endif %}
 
-      start_dt: "{{ as_datetime(alarm_dt) - timedelta(minutes=duration_minutes) if alarm_dt else none }}"
+      start_dt: "{{ as_datetime(alarm_dt) - timedelta(minutes=duration_min + maintenance_duration_min) if alarm_dt else none }}"
       end_dt: "{{ as_datetime(alarm_dt) if alarm_dt else none }}"
+
+      # Phase weights
+      w1: "{{ nautical_duration_min / duration_min }}"
+      w2: "{{ civil_duration_min / duration_min }}"
+      w3: "{{ sunrise_duration_min / duration_min }}"
+
+      # Phase boundaries
+      p1_end: "{{ w1 }}"
+      p2_end: "{{ w1 + w2 }}"
+
+      # Brightness boundaries in %
+      b0: "{{ 1 / 255 * 100 }}"
+      b1: "{{ nautical_brightness_end }}"
+      b2: "{{ civil_brightness_end }}"
+      b3: "{{ sunrise_brightness_end }}"
+
+      # Kelvin boundaries
+      k0: 1800
+      k1: "{{ nautical_kelvin_end }}"
+      k2: "{{ civil_kelvin_end }}"
+      k3: "{{ sunrise_kelvin_end }}"
+
+      # Phase exponents
+      e1: "{{ nautical_brightness_exponent }}"
+      e2: "{{ civil_brightness_exponent }}"
+      e3: "{{ sunrise_brightness_exponent }}"
+
+      # Max brightness step in %
+      max_step_pct: "{{ max(max_brightness_step, 1) / 255 * 100 }}"
 
   # --- START CONDITIONS ---
   - if: !input start_conditions
@@ -314,42 +398,8 @@ action:
       value: |
         {{ {"last_alarm": alarm_dt, "active": trigger.id is defined, "aborted": false} | to_json }}
 
-  # --- SUNRISE PARAMETERS ---
-  - variables:
-      # Phase weights
-      w1: "{{ nautical_weight_pct * 0.01 }}"
-      w2: "{{ civil_weight_pct * 0.01 }}"
-      w3: "{{ sunrise_weight_pct * 0.01 }}"
-
-      # Phase boundaries
-      p1_end: "{{ w1 }}"
-      p2_end: "{{ w1 + w2 }}"
-
-      # Brightness boundaries in %
-      b0: "{{ 1 / 255 * 100 }}"
-      b1: "{{ nautical_brightness_end }}"
-      b2: "{{ civil_brightness_end }}"
-      b3: "{{ sunrise_brightness_end }}"
-
-      # Kelvin boundaries
-      k0: 1800
-      k1: "{{ nautical_kelvin_end }}"
-      k2: "{{ civil_kelvin_end }}"
-      k3: "{{ sunrise_kelvin_end }}"
-
-      # Phase exponents
-      e1: 1.6
-      e2: 2.2
-      e3: 1.3
-
-      # Max brightness step in %
-      max_step_pct: "{{ max(max_brightness_step, 1) / 255 * 100 }}"
-
   # --- MAIN LOOP ---
   - repeat:
-      while:
-        - condition: template
-          value_template: "{{ now() < as_datetime(end_dt) }}"
       sequence:
         # --- LOOP VARIABLES ---
         - variables:
@@ -411,7 +461,7 @@ action:
             brightness_pct: |
               {{ phase.b_start + (phase.b_end - phase.b_start) * (x|float ** phase.e) }}
 
-            # Current kelvin (linear ramp)
+            # Current Kelvin (linear ramp)
             kelvin: |
               {{ (phase.k_start + (phase.k_end - phase.k_start) * x|float)|round }}
 
@@ -483,10 +533,13 @@ action:
           target: !input target_lights
           data:
             brightness_pct: "{{ max(target_brightness_pct, b0) }}"
-            color_temp_kelvin: "{{ target_kelvin }}"
+            color_temp_kelvin: "{{ max(target_kelvin, k0) }}"
             transition: "{{ interval }}"
         - delay:
             seconds: "{{ interval }}"
+      until:
+        - condition: template
+          value_template: "{{ target_p >= 1 }}"
 
   # --- FINAL WRITEBACK ---
   - service: input_text.set_value
