@@ -525,7 +525,7 @@ action:
 
         # --- USER OVERRIDE DETECTION ---
         - if: |
-            {{ not repeat.first and (state.is_off or state.b_max - 1 > target_brightness_pct) }}
+            {{ (not repeat.first and state.is_off) or state.b_max - 1 > target_brightness_pct }}
           then:
             - service: input_text.set_value
               target:
