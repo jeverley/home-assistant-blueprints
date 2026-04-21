@@ -45,7 +45,7 @@ blueprint:
     start_conditions:
       name: Start conditions
       description: |
-        Prevent sunrise from starting until specific conditions are satisfied.
+        Prevent sunrise from starting until these conditions are true
       default: []
       selector:
         condition: {}
@@ -294,7 +294,7 @@ trigger:
       {% endif %}
 
       {{
-        alarm_dt and start_dt <= now() < end_dt
+        alarm_dt and start_dt <= now() < alarm_dt
         and (not started_today or active)
       }}
 
@@ -349,12 +349,12 @@ action:
       # Phase boundaries
       p1_end: "{{ w1 }}"
       p2_end: "{{ w1 + w2 }}"
+      p3_end: 1
 
-      # Brightness boundaries in %
-      b0: "{{ 1 / 255 * 100 }}"
-      b1: "{{ nautical_brightness_end }}"
-      b2: "{{ civil_brightness_end }}"
-      b3: "{{ sunrise_brightness_end }}"
+      # Phase durations
+      p1_dur_s: "{{ nautical_duration_min * 60 }}"
+      p2_dur_s: "{{ civil_duration_min * 60 }}"
+      p3_dur_s: "{{ sunrise_duration_min * 60 }}"
 
       # Kelvin boundaries
       k0: 1800
@@ -367,7 +367,13 @@ action:
       e2: "{{ civil_brightness_exponent }}"
       e3: "{{ sunrise_brightness_exponent }}"
 
-      # Max brightness step in %
+      # Brightness boundaries (%)
+      b0: "{{ 1 / 255 * 100 }}"
+      b1: "{{ nautical_brightness_end }}"
+      b2: "{{ civil_brightness_end }}"
+      b3: "{{ sunrise_brightness_end }}"
+
+      # Max brightness step (%)
       max_step_pct: "{{ max(max_brightness_step, 1) / 255 * 100 }}"
 
   # --- START CONDITIONS ---
@@ -379,7 +385,7 @@ action:
             - or:
                 - and: !input start_conditions
                 - condition: template
-                  value_template: "{{ now() >= as_datetime(end_dt) }}"
+                  value_template: "{{ now() >= as_datetime(alarm_dt) }}"
                 - condition: template
                   value_template: "{{ trigger.id is not defined }}"
           sequence:
@@ -403,6 +409,13 @@ action:
       sequence:
         # --- LOOP VARIABLES ---
         - variables:
+            state: |
+              {% set b = target_lights.entity_id | map('state_attr', 'brightness') | reject('eq', none) | list %}
+              {{ {
+                "is_off": target_lights.entity_id | select('is_state', 'off') | list | count > 0,
+                "b_max": b|max / 255 * 100 if b else 0
+              } }}
+
             # Normalised progress 0–1
             p: |
               {{ min(max((now().timestamp() - as_datetime(start_dt).timestamp()) / duration_s, 0), 1) }}
@@ -419,7 +432,8 @@ action:
                   "k_end": k1,
                   "e": e1,
                   "p_start": 0,
-                  "p_end": p1_end
+                  "p_end": p1_end,
+                  "p_dur_s": p1_dur_s
                 } }}
               {% elif p <= p2_end %}
                 {{ {
@@ -430,7 +444,8 @@ action:
                   "k_end": k2,
                   "e": e2,
                   "p_start": p1_end,
-                  "p_end": p2_end
+                  "p_end": p2_end,
+                  "p_dur_s": p2_dur_s
                 } }}
               {% else %}
                 {{ {
@@ -441,13 +456,10 @@ action:
                   "k_end": k3,
                   "e": e3,
                   "p_start": p2_end,
-                  "p_end": 1
+                  "p_end": p3_end,
+                  "p_dur_s": p3_dur_s
                 } }}
               {% endif %}
-
-            # Phase duration (seconds)
-            phase_duration_s: |
-              {{ (phase.p_end - phase.p_start) * duration_s }}
 
             # Remaining time in this phase
             phase_remaining_s: |
@@ -468,7 +480,7 @@ action:
             # --- INTERVAL: time until brightness reaches (current + max_step_pct) ---
             interval: |
               {% set pbr = phase.b_end - phase.b_start %}
-              {% set pd = phase_duration_s|float %}
+              {% set pd = phase.p_dur_s|float %}
               {% set pr = phase_remaining_s|float %}
               {% set b_now = brightness_pct|float %}
               {% set b_target = b_now + max_step_pct|float %}
@@ -513,12 +525,7 @@ action:
 
         # --- USER OVERRIDE DETECTION ---
         - if: |
-            {{
-              not repeat.first
-              and target_lights.entity_id
-              | select('is_state', 'off')
-              | list | count > 0
-            }}
+            {{ not repeat.first and (state.is_off or state.b_max - 1 > target_brightness_pct) }}
           then:
             - service: input_text.set_value
               target:
