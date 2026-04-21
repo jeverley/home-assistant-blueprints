@@ -50,8 +50,22 @@ blueprint:
       selector:
         condition: {}
 
+    advanced_section:
+      name: Advanced
+      icon: mdi:cog
+      collapsed: true
+      input:
+        max_brightness_step:
+          name: Maximum brightness step per transition (uses the intenal 1–255 range)
+          default: 3
+          selector:
+            number:
+              min: 1
+              max: 10
+              step: 1
+
     nautical_phase_section:
-      name: Nautical Dawn
+      name: 1 - Nautical Dawn
       description: |
         Dim, long-wavelength light to begin melatonin suppression whilst sleep is deepest.
       icon: mdi:weather-sunset
@@ -69,7 +83,7 @@ blueprint:
               mode: slider
 
         nautical_brightness_end:
-          name: Phase end brightness (%)
+          name: End brightness (%)
           default: 15
           selector:
             number:
@@ -79,7 +93,7 @@ blueprint:
               unit_of_measurement: "%"
 
         nautical_kelvin_end:
-          name: Phase end Kelvin
+          name: End colour temperature (K)
           default: 2200
           selector:
             number:
@@ -89,17 +103,17 @@ blueprint:
               unit_of_measurement: K
 
         nautical_brightness_exponent:
-          name: Brightness exponent
+          name: Brightness slope (exponent)
           default: 1.6
           selector:
             number:
               min: 1
               max: 2.5
               step: 0.1
-              unit_of_measurement: curve
+              unit_of_measurement: "^"
 
     civil_phase_section:
-      name: Civil Dawn
+      name: 2 - Civil Dawn
       description: |
         Increasing intensity and shifting spectrum to move the brain from REM/deep sleep into light sleep.
       icon: mdi:weather-sunset-up
@@ -117,7 +131,7 @@ blueprint:
               mode: slider
 
         civil_brightness_end:
-          name: Phase end brightness (%)
+          name: End brightness (%)
           default: 70
           selector:
             number:
@@ -127,7 +141,7 @@ blueprint:
               unit_of_measurement: "%"
 
         civil_kelvin_end:
-          name: Phase end Kelvin
+          name: End colour temperature (K)
           default: 3500
           selector:
             number:
@@ -137,17 +151,17 @@ blueprint:
               unit_of_measurement: K
 
         civil_brightness_exponent:
-          name: Brightness exponent
+          name: Brightness slope (exponent)
           default: 1.8
           selector:
             number:
               min: 1.2
               max: 2.2
               step: 0.1
-              unit_of_measurement: curve
+              unit_of_measurement: "^"
 
     sunrise_phase_section:
-      name: Sunrise
+      name: 3 - Sunrise
       description: |
         High-intensity, blue-enriched light to stimulate the Cortisol Awakening Response (CAR) for alertness.
       icon: mdi:weather-sunny
@@ -165,7 +179,7 @@ blueprint:
               mode: slider
 
         sunrise_brightness_end:
-          name: Phase end brightness (%)
+          name: End brightness (%)
           default: 100
           selector:
             number:
@@ -175,7 +189,7 @@ blueprint:
               unit_of_measurement: "%"
 
         sunrise_kelvin_end:
-          name: Phase end Kelvin
+          name: End colour temperature (K)
           default: 5500
           selector:
             number:
@@ -185,17 +199,17 @@ blueprint:
               unit_of_measurement: K
 
         sunrise_brightness_exponent:
-          name: Brightness exponent
+          name: Brightness slope (exponent)
           default: 1.0
           selector:
             number:
               min: 0.8
               max: 1.5
               step: 0.1
-              unit_of_measurement: curve
+              unit_of_measurement: "^"
 
     maintenance_phase_section:
-      name: Maintenance
+      name: 4 - Maintenance
       description: |
         Pre-alarm plateau at peak intensity to reduce sleep inertia.
       icon: mdi:alarm
@@ -211,20 +225,6 @@ blueprint:
               step: 1
               unit_of_measurement: min
               mode: slider
-
-    advanced_section:
-      name: Advanced
-      icon: mdi:cog
-      collapsed: true
-      input:
-        max_brightness_step:
-          name: Maximum brightness step per transition (uses the intenal 1–255 range)
-          default: 3
-          selector:
-            number:
-              min: 1
-              max: 10
-              step: 1
 
 mode: restart
 
