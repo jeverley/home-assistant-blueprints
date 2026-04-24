@@ -13,54 +13,80 @@ trigger:
       persistent: "true"
 
 variables:
-  person_entity: >-
-    {{ integration_entities('person') | select('is_state_attr', 'user_id', trigger.event.context.user_id) | list | first }}
-  mobile_app_entities: >-
-    {{ state_attr(person_entity, 'device_trackers') | select('in', integration_entities('mobile_app')) | list }}
-  device_name_slugs: >-
-    {{ mobile_app_entities | map('device_attr', 'name') | map('slugify', separator='_') | list }}
-
-  actions: >
-    {% set source = trigger.event.data %}
-    {% set ns = namespace(actions=[], indices=[]) %}
-    {% for key in source %}
-      {% if key.startswith('action_') and key.split('_') | length > 2 %}
-        {% set idx = key.split('_')[1] %}
-        {% if idx not in ns.indices %}
-          {% set ns.indices = ns.indices + [idx] %}
-        {% endif %}
-      {% endif %}
-    {% endfor %}
-    {% for idx in ns.indices | sort %}
-      {% set action_ns = namespace(pairs=[]) %}
-      {% for key in source %}
-        {% if key.startswith('action_' ~ idx ~ '_') %}
-          {% set field = key[('action_' ~ idx ~ '_') | length:] %}
-          {% set field = 'action' if field == 'key' else field %}
-          {% set value = source[key] %}
-          {% set action_ns.pairs = action_ns.pairs + [[field, value]] %}
-        {% endif %}
-      {% endfor %}
-      {% set ns.actions = ns.actions + [dict(action_ns.pairs)] %}
-    {% endfor %}
-    {{ ns.actions }}
-
-  data: >
-    {% set source = trigger.event.data %}
-    {% set ns = namespace(pairs=[]) %}
-    {% for key, value in source.items() %}
-      {% if not key.startswith('action_') %}
-        {% set ns.pairs = ns.pairs + [[key, value]] %}
-      {% endif %}
-    {% endfor %}
-    {% set ns.pairs = ns.pairs + [['actions', actions]] %}
-    {% set ns.pairs = ns.pairs + [['alert_once', true]] %}
-    {{ dict(ns.pairs) }}
+  data_excluded:
+    - title
+    - message
+    - device_id
+    - webhook_id
 
 action:
+  - variables:
+      person_entity: |
+        {{ integration_entities('person') | select('is_state_attr', 'user_id', trigger.event.context.user_id) | list | first }}
+      mobile_app_entities: |
+        {{ state_attr(person_entity, 'device_trackers') | select('in', integration_entities('mobile_app')) | list }}
+      device_name_slugs: |
+        {{ mobile_app_entities | map('device_attr', 'name') | map('slugify', separator='_') | list }}
+
+      title: "{{ trigger.event.data.title|default(none) }}"
+      message: "{{ trigger.event.data.message }}"
+
+      actions: |
+        {% set source = trigger.event.data %}
+        {% set ns = namespace(actions=[], indices=[]) %}
+        {% for key in source %}
+          {% if key.startswith('action_') and key.split('_') | length > 2 %}
+            {% set idx = key.split('_')[1] %}
+            {% if idx not in ns.indices %}
+              {% set ns.indices = ns.indices + [idx] %}
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+        {% for idx in ns.indices | sort %}
+          {% set action_ns = namespace(pairs=[]) %}
+          {% for key in source %}
+            {% if key.startswith('action_' ~ idx ~ '_') %}
+              {% set field = key[('action_' ~ idx ~ '_') | length:] %}
+              {% set field = 'action' if field == 'key' else field %}
+              {% set value = source[key] %}
+              {% set action_ns.pairs = action_ns.pairs + [[field, value]] %}
+            {% endif %}
+          {% endfor %}
+          {% set ns.actions = ns.actions + [dict(action_ns.pairs)] %}
+        {% endfor %}
+        {{ ns.actions }}
+
+      data: |
+        {% set source = trigger.event.data %}
+        {% set ns = namespace(pairs=[]) %}
+        {% for key, value in source.items() %}
+          {% if not key.startswith('action_') and key not in data_excluded %}
+            {% set ns.pairs = ns.pairs + [[key, value]] %}
+          {% endif %}
+        {% endfor %}
+        {% set ns.pairs = ns.pairs + [['actions', actions]] %}
+        {% set ns.pairs = ns.pairs + [['alert_once', true]] %}
+        {{ dict(ns.pairs) }}
+
+  - alias: Handle message meta content
+    variables:
+      message_meta: |
+        {{ message | regex_findall('<!--meta>(.*?)<\/meta-->') | first | from_json(default={}) }}
+        
+      data: |
+        {% set data = data %}
+        {% set ts = now().timestamp() %}
+        {% if message_meta.timeout_end|default(none) is not none %}
+            {% set data = dict(data, **{"timeout": max(message_meta.timeout_end|float - ts, 0)}) %}
+        {% endif %}
+        {% if message_meta.when_end|default(none) is not none %}
+            {% set data = dict(data, **{"when": message_meta.when_end|float - ts}) %}
+        {% endif %}
+        {{ data }}
+
   - if:
       - condition: template
-        value_template: "{{ bool(trigger.event.data.when_relative|default(false)) }}"
+        value_template: "{{ trigger.event.data.when_relative|default(false)|bool and not message_meta.when_end|default(none) }}"
     then:
       - action: system_log.write
         metadata: {}
@@ -73,8 +99,8 @@ action:
       sequence:
         - service: "{{ 'notify.mobile_app_' ~ repeat.item }}"
           data:
-            title: "{{ data.title|default(none) }}"
-            message: "{{ data.message }}"
+            title: "{{ title }}"
+            message: "{{ message }}"
             data: "{{ data }}"
 
 mode: parallel
