@@ -206,8 +206,11 @@ action:
                   {% endif %}
                 timeout: "{{ action_wait }}"
 
+          - variables:
+              is_aborted: "{{ false if action_wait is none else wait.completed }}"
+
           - choose:
-              - conditions: "{{ is_open and (action_wait is none or not wait.completed) }}"
+              - conditions: "{{ is_open and not is_aborted }}"
                 sequence:
                   - action: tado_ce.set_open_window_mode
                     target:
@@ -221,7 +224,7 @@ action:
                         {{ {} }}
                       {% endif %}
 
-              - conditions: "{{ is_closed and (action_wait is none or not wait.completed) }}"
+              - conditions: "{{ is_closed and not is_aborted }}"
                 sequence:
                   - action: tado_ce.restore_previous_state
                     target:
@@ -243,5 +246,5 @@ action:
                   'is_closed': is_closed,
                   'is_zone': is_zone,
                   'is_nearby': is_nearby,
-                  'is_aborted': false if action_wait is none else wait.completed,
+                  'is_aborted': is_aborted,
                 }|to_json }}
