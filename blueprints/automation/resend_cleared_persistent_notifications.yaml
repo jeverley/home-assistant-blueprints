@@ -1,5 +1,5 @@
 blueprint:
-  name: Resend Cleared Persistent Notifications
+  name: Resend cleared persistent notifications
   description: >-
     Resends a cleared persistent notification to mobile apps associated with the person that cleared it,
     works around the [Android 14 behaviour change](https://developer.android.com/about/versions/14/behavior-changes-all#non-dismissable-notifications).
@@ -61,6 +61,7 @@ action:
         {% set ns = namespace(pairs=[]) %}
         {% for key, value in source.items() %}
           {% if not key.startswith('action_') and key not in data_excluded %}
+            {% set value = value if value not in ['true', 'false'] else value|bool %}
             {% set ns.pairs = ns.pairs + [[key, value]] %}
           {% endif %}
         {% endfor %}
@@ -86,14 +87,19 @@ action:
 
   - if:
       - condition: template
-        value_template: "{{ trigger.event.data.when_relative|default(false)|bool and not message_meta.when_end|default(none) }}"
+        value_template: |
+          {{ 
+            (trigger.event.data.when_relative|default(false)|bool and not message_meta.when_end|default(none))
+            or (trigger.event.data.timeout|default(none) and not message_meta.timeout_end|default(none))
+          }}
     then:
       - action: system_log.write
         metadata: {}
         data:
           level: warning
-          message: Unable to re-send persistent notifications with attribute 'when_relative' == true
+          message: Unable to re-send persistent notifications with a 'timeout', or attribute 'when_relative' == true.
       - stop:
+
   - repeat:
       for_each: "{{ device_name_slugs }}"
       sequence:
