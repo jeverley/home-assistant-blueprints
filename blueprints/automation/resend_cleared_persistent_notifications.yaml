@@ -20,6 +20,10 @@ variables:
     - webhook_id
 
 action:
+  - if: "{{ trigger.id is not defined }}"
+    then:
+      - stop: Manual trigger unsupported
+
   - variables:
       person_entity: |
         {{ integration_entities('person') | select('is_state_attr', 'user_id', trigger.event.context.user_id) | list | first }}
@@ -85,20 +89,18 @@ action:
         {% endif %}
         {{ data }}
 
-  - if:
-      - condition: template
-        value_template: |
-          {{ 
-            (trigger.event.data.when_relative|default(false)|bool and not message_meta.when_end|default(none))
-            or (trigger.event.data.timeout|default(none) and not message_meta.timeout_end|default(none))
-          }}
+  - if: |
+      {{ 
+        (trigger.event.data.when_relative|default(false)|bool and not message_meta.when_end|default(none))
+        or (trigger.event.data.timeout|default(none) and not message_meta.timeout_end|default(none))
+      }}
     then:
       - action: system_log.write
         metadata: {}
         data:
           level: warning
           message: Unable to re-send persistent notifications with a 'timeout', or attribute 'when_relative' == true.
-      - stop:
+      - stop: Notification unsupported
 
   - repeat:
       for_each: "{{ device_name_slugs }}"
