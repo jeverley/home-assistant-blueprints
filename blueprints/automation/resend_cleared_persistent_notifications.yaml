@@ -18,6 +18,7 @@ variables:
     - message
     - device_id
     - webhook_id
+    - server_id
 
 action:
   - if: "{{ trigger.id is not defined }}"
