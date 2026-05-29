@@ -61,7 +61,7 @@ blueprint:
     warning_message:
       name: Warning message (optional)
       description: Custom message to show in the warning
-      default: "The screen will turn off unless movement is detected"
+      default: "The screen will turn off unless movement is detected."
       selector:
         text: {}
 
