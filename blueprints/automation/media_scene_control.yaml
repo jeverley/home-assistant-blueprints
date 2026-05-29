@@ -84,11 +84,19 @@ blueprint:
 mode: restart
 
 trigger_variables:
-  scene_mappings: !input scene_mappings
+  scene_mappings_raw: !input scene_mappings
   player_id: !input target_player
   history_sensor: !input history_sensor
   default_scene: !input default_scene
   quick_resume_mins: !input quick_resume_mins
+  scene_mappings: |
+    {% set ns = namespace(items = []) %}
+    {% for m in scene_mappings_raw %}
+      {% set lower_sources = m.sources | map('lower') | list %}
+      {% set new = dict(scene=m.scene, sources=lower_sources) %}
+      {% set ns.items = ns.items + [new] %}
+    {% endfor %}
+    {{ ns.items }}
 
 trigger:
   - trigger: state
@@ -100,7 +108,7 @@ trigger:
     entity_id: !input target_player
     id: "QuickResume"
     to: playing
-    for: "00:00:03"
+    for: "00:00:00"
   - trigger: state
     entity_id: !input target_player
     attribute: source
@@ -120,7 +128,8 @@ trigger:
     entity_id: !input target_player
     id: "Paused"
     to: "paused"
-    for: "00:00:10"
+    for:
+      milliseconds: 500
   - trigger: template
     id: "LightsOn"
     value_template: |
@@ -145,29 +154,47 @@ variables:
     {{ as_timedelta(played_duration) >= timedelta(minutes = quick_resume_mins) }}
 
   # Context & Trigger Logic
-  current_source: |
+  prev_source: |
+    {{ trigger.from_state.attributes.source|default(none) if trigger.from_state else none }}
+  prev_matched_scene: >
+    {% set match = namespace(scene = none) %}
+    {% if prev_source %}
+      {% set src = prev_source | lower %}
+      {% for m in scene_mappings %}
+        {% for s in m.sources %}
+          {% if s in src %}
+            {% set match.scene = m.scene %}
+          {% endif %}
+        {% endfor %}
+      {% endfor %}
+    {% endif %}
+    {{ match.scene }}
+    
+  source: |
     {{ state_attr(player_id, 'source') }}
   matched_scene: |
-    {% if current_source %}
-      {% set match =
-        scene_mappings | selectattr('sources', 'defined') 
-        | selectattr('sources', 'search', current_source) 
-        | first | default(none)
-      %}
-      {{ match.scene if match else none }}
-    {% else %}
-      {{ none }}
+    {% set match = namespace(scene = none) %}
+    {% if source %}
+      {% set src = source | lower %}
+      {% for m in scene_mappings %}
+        {% for s in m.sources %}
+          {% if s in src %}
+            {% set match.scene = m.scene %}
+          {% endif %}
+        {% endfor %}
+      {% endfor %}
     {% endif %}
+    {{ match.scene }}
 
   # Target Determination
   target_scene: |
-    {% if trigger_id in ['QuickResume', 'StandardActive', 'LightOn'] and matched_scene is not none %}
+    {% if trigger_id in ['QuickResume', 'StandardActive', 'LightOn'] and matched_scene %}
       {{ matched_scene }}
-    {% elif trigger_id == 'Reset' %}
+    {% elif trigger_id == 'SourceChange' and not matched_scene and prev_matched_scene %}
       {{ default_scene }}
-    {% elif trigger_id == 'SourceChange' and matched_scene is none %}
+    {% elif trigger_id == 'Reset' and prev_matched_scene %}
       {{ default_scene }}
-    {% elif trigger_id == 'Paused' and matched_scene is not none %}
+    {% elif trigger_id == 'Paused' and matched_scene %}
       {{ default_scene }}
     {% else %}
       {{ none }}
@@ -199,4 +226,4 @@ action:
     target:
       entity_id: "{{ target_scene }}"
     data:
-      transition: 10
+      transition: "{{ 30 if trigger.id == 'Paused' else 10 }}"
