@@ -204,7 +204,7 @@ blueprint:
             The minimum illuminance level, below which the lights will
             be turned on. This helps in ensuring that the area is adequately lit when
             it is dark.
-          default: 1500
+          default: 300
           selector:
             number:
               min: 0.0
@@ -231,7 +231,7 @@ blueprint:
             The maximum illuminance level, above which the lights will
             be turned off. This helps in preventing over-illumination when there is
             sufficient natural light.
-          default: 3000
+          default: 350
           selector:
             number:
               min: 0.0
