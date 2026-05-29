@@ -208,7 +208,7 @@ variables:
     {% endif %}
   transition: |
     {{
-      trigger.event.data.service_data.transition|default(default_transition)|int(0)
+      trigger.event.data.service_data.transition|default(default_transition)|float(0)
       if trigger_event_type == 'call_service'
       else 0
     }}
