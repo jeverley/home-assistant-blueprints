@@ -709,17 +709,14 @@ condition:
                   - condition: template
                     alias: If the state was changed by an external action
                     value_template: |
-                      {# Excludes any state changes instigated within Home Assistant (i.e. Dashboards, Automations, Adaptive Lighting). #}
+                      {# Excludes any state changes instigated within Home Assistant (i.e. Automations, Adaptive Lighting). #}
                       {% set from_context = trigger.from_state.context %}
                       {% set to_context = trigger.to_state.context %}
                       {{
-                        to_context.user_id is none
-                        and (
-                          to_context.parent_id is none
-                          and to_context.id is not search(':al:.*:.*:')
-                          or none != to_context.parent_id == from_context.parent_id
-                          and to_context.id != from_context.id
-                        )
+                        to_context.parent_id is none
+                        and to_context.id is not search(':al:.*:.*:')
+                        or none != to_context.parent_id == from_context.parent_id
+                        and to_context.id != from_context.id
                       }}
 
 actions:
