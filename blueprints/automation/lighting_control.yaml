@@ -587,22 +587,6 @@ trigger:
 
 variables:
   trigger_id: "{{ trigger.id | default('') | string }}"
-  target_lights: |
-    {% if area_lights %}
-      {{ area_lights }}
-    {% else %}
-      {{
-        area_entities(area)
-        | select('contains', 'light.')
-        | reject('is_hidden_entity')
-        | list
-      }}
-    {% endif %}
-  # Illuminance vars
-  cover_position: "{{ state_attr(cover, 'current_position')|int(none) if cover else none }}"
-  illuminance: "{{ states(illuminance_sensor)|int(none) if illuminance_sensor else none }}"
-
-  # Bool vars
   is_automatic_control_enabled: |
     {# Fall back to occupancy sensor if no toggle is configured #}
     {% if not automatic_control_toggle %}
@@ -610,25 +594,25 @@ variables:
     {% else %}
       {{ is_state(automatic_control_toggle, 'on') }}
     {% endif %}
-  is_cover_shading: |
-    {{
-      cover_position|int(100) < cover_shading_position|int(0)
-      or (
-        cover is string and cover_shading_when_closing
-        and is_state(cover, 'closing')
-        and states[cover].last_changed <= now() - timedelta(seconds=illuminance_minimum_duration)
-      )
-    }}
-  is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
-  is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
-  is_light_on: |
-    {{ target_lights | map('states') | select('eq', 'on') | list | count > 0 }}
   is_occupied: "{{ is_state(occupancy_sensor, 'on') if occupancy_sensor else none }}"
-  is_trigger_control_reset: |
-    {{ trigger_id | contains('control_reset') }}
-  user_action_state: |
-    {% if trigger_id == 'user_action' and trigger.event.data.new_state is not none %}
-      {{ trigger.event.data.new_state.state }}
+  user_action: |
+    {% set data = trigger.event.data if trigger_id == 'user_action' else none %}
+    {% if data is not none
+      and data.new_state is not none
+      and data.new_state.context.user_id is not none
+      and data.old_state is not none %}
+      {% set target_lights = area_lights if area_lights
+        else area_entities(area) | select('contains', 'light.') | reject('is_hidden_entity') | list %}
+      {% if data.entity_id in target_lights
+        and data.old_state.state in ('on', 'off')
+        and data.new_state.state in ('on', 'off')
+        and data.new_state.state != data.old_state.state %}
+        {{ 'light_on' if data.new_state.state == 'on'
+          else 'light_off' if not target_lights | select('is_state', 'on') | list
+          else none }}
+      {% else %}
+        {{ none }}
+      {% endif %}
     {% else %}
       {{ none }}
     {% endif %}
@@ -655,12 +639,15 @@ condition:
                   - condition: trigger
                     id:
                       - control_enabled
-                  - alias: If the automation is not runnning
+                  - alias: If the automation is not running
                     condition: template
                     value_template: "{{ this.attributes.current == 0 }}"
               - and:
-                  - condition: template
-                    value_template: "{{ is_trigger_control_reset }}"
+                  - condition: trigger
+                    id:
+                      - control_reset
+                      - area_exit_control_reset
+                      - routine_control_reset
                   - or:
                       - alias: If there are no routine restrictions
                         condition: template
@@ -692,48 +679,54 @@ condition:
                       - physical_on
                       - physical_off
                   - condition: template
-                    alias: If the state was changed by an external action
+                    alias: Physical press only
                     value_template: |
-                      {# Excludes any state changes instigated within Home Assistant (i.e. Automations, Adaptive Lighting). #}
+                      {# Excludes HA-instigated state changes (Automations, Adaptive Lighting) and UI/voice actions (user_id present). #}
                       {% set from_context = trigger.from_state.context %}
                       {% set to_context = trigger.to_state.context %}
                       {{
-                        to_context.parent_id is none
-                        and to_context.id is not search(':al:.*:.*:')
-                        or none != to_context.parent_id == from_context.parent_id
-                        and to_context.id != from_context.id
+                        to_context.user_id is none
+                        and (
+                          to_context.parent_id is none
+                          and to_context.id is not search(':al:.*:.*:')
+                          or none != to_context.parent_id == from_context.parent_id
+                          and to_context.id != from_context.id
+                        )
                       }}
-                  - or:
-                      - condition: trigger
-                        id: physical_on
-                      - alias: physical_off — physical press only
-                        condition: template
-                        value_template: |
-                          {{ trigger.to_state.context.user_id is none }}
               - and:
                   - condition: trigger
                     id: user_action
                   - condition: template
                     alias: If a target light was turned on/off by a user via UI or voice
-                    value_template: |
-                      {% set data = trigger.event.data %}
-                      {{
-                        data.entity_id in target_lights
-                        and data.old_state is not none
-                        and data.new_state is not none
-                        and data.new_state.context.user_id is not none
-                        and (
-                          (user_action_state == 'on'
-                            and data.old_state.state == 'off'
-                            and data.entity_id not in physical_control_lights)
-                          or (user_action_state == 'off'
-                            and data.old_state.state == 'on'
-                            and not is_light_on)
-                        )
-                      }}
+                    value_template: "{{ user_action is not none }}"
 
 actions:
   - variables:
+      target_lights: |
+        {% if area_lights %}
+          {{ area_lights }}
+        {% else %}
+          {{
+            area_entities(area)
+            | select('contains', 'light.')
+            | reject('is_hidden_entity')
+            | list
+          }}
+        {% endif %}
+      is_light_on: "{{ not not target_lights | select('is_state', 'on') | list }}"
+      cover_position: "{{ state_attr(cover, 'current_position')|int(none) if cover else none }}"
+      illuminance: "{{ states(illuminance_sensor)|int(none) if illuminance_sensor else none }}"
+      is_cover_shading: |
+        {{
+          cover_position|int(100) < cover_shading_position|int(0)
+          or (
+            cover is string and cover_shading_when_closing
+            and is_state(cover, 'closing')
+            and states[cover].last_changed <= now() - timedelta(seconds=illuminance_minimum_duration)
+          )
+        }}
+      is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
+      is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
       manual_lights: |
         {% set adaptive_entities =
           integration_entities('adaptive_lighting')
@@ -962,8 +955,11 @@ actions:
                 choose:
                   - alias: Reset automatic control
                     conditions:
-                      - condition: template
-                        value_template: "{{ is_trigger_control_reset }}"
+                      - condition: trigger
+                        id:
+                          - control_reset
+                          - area_exit_control_reset
+                          - routine_control_reset
                     sequence:
                       - action: homeassistant.turn_on
                         target:
@@ -975,7 +971,7 @@ actions:
                           - physical_off
                           - user_action
                       - condition: template
-                        value_template: "{{ user_action_state != 'on' }}"
+                        value_template: "{{ user_action != 'light_on' }}"
                       - condition: template
                         value_template: "{{ is_automatic_control_toggleable and is_automatic_control_enabled }}"
                       - condition: template
@@ -991,7 +987,7 @@ actions:
                           - physical_on
                           - user_action
                       - condition: template
-                        value_template: "{{ user_action_state != 'off' }}"
+                        value_template: "{{ user_action != 'light_off' }}"
                       - condition: template
                         value_template: "{{ is_automatic_control_toggleable and not is_automatic_control_enabled }}"
                     sequence:
