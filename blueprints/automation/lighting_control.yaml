@@ -414,6 +414,14 @@ blueprint:
           default: 04:00:00
           selector:
             time: {}
+        partial_off_keeps_control:
+          name: Partial off keeps control
+          description: |
+            When enabled, turning off a single light via UI or voice (e.g. Google Home)
+            while other lights remain on will not disable automatic control.
+          default: true
+          selector:
+            boolean:
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/lighting_control.yaml
 
 trigger_variables:
@@ -458,6 +466,7 @@ trigger_variables:
   cover: !input cover
   cover_shading_position: !input cover_shading_position
   cover_shading_when_closing: !input cover_shading_when_closing
+  partial_off_keeps_control: !input partial_off_keeps_control
 
 trigger:
   # Occupancy triggers
@@ -518,6 +527,14 @@ trigger:
     to: "off"
     from: "on"
     id: physical_off
+  - trigger: state
+    entity_id: !input physical_control_lights
+    to: "off"
+    from: "on"
+    for:
+      milliseconds: 200
+    id: physical_off_delayed
+    enabled: !input partial_off_keeps_control
 
   # Toggle triggers
   - trigger: state
@@ -606,7 +623,7 @@ variables:
   lights_off_transition: |
     {% if trigger_id == 'illuminance' and illuminance_off_transition is not none %}
       {{ illuminance_off_transition }}
-    {% elif trigger_id != 'physical_off' %}
+    {% elif trigger_id not in ['physical_off', 'physical_off_delayed'] %}
       {{ transition_off }}
     {% elif physical_control_transition is not none %}
       {{ physical_control_transition }}
@@ -706,6 +723,7 @@ condition:
                     id:
                       - physical_on
                       - physical_off
+                      - physical_off_delayed
                   - condition: template
                     alias: If the state was changed by an external action
                     value_template: |
@@ -718,6 +736,30 @@ condition:
                         or none != to_context.parent_id == from_context.parent_id
                         and to_context.id != from_context.id
                       }}
+                  - or:
+                      - condition: trigger
+                        id: physical_on
+                      - alias: physical_off — physical press, feature disabled, or all lights off
+                        condition: template
+                        value_template: |
+                          {% set to_context = trigger.to_state.context %}
+                          {{
+                            trigger.id == 'physical_off'
+                            and (
+                              to_context.user_id is none
+                              or not partial_off_keeps_control
+                              or not is_light_on
+                            )
+                          }}
+                      - alias: physical_off_delayed — UI/voice triggered and all lights now off
+                        condition: template
+                        value_template: |
+                          {% set to_context = trigger.to_state.context %}
+                          {{
+                            trigger.id == 'physical_off_delayed'
+                            and to_context.user_id is not none
+                            and not is_light_on
+                          }}
 
 actions:
   - variables:
@@ -740,7 +782,7 @@ actions:
             {% endfor %}
 
             {# Handle the trigger light #}
-            {% if trigger_id == "physical_off" and trigger.entity_id | default('') in target_lights %}
+            {% if trigger_id in ["physical_off", "physical_off_delayed"] and trigger.entity_id | default('') in target_lights %}
               {% if trigger.entity_id in manual_lights or trigger.from_state.context.id is not search(':al:.*:.*:') %}
                 {# Save the previous state and attributes of the physical control light #}
                 {% set ns.scene = dict(ns.scene, **{trigger.entity_id: dict(
@@ -773,7 +815,9 @@ actions:
         and:
           - not:
               - condition: trigger
-                id: physical_off
+                id:
+                  - physical_off
+                  - physical_off_delayed
           - condition: template
             value_template: "{{ is_automatic_control_enabled }}"
           - condition: state
@@ -841,7 +885,7 @@ actions:
                 data:
                   transition: "{{ lights_on_transition }}"
                 target:
-                  entity_id: "{{ target_lights if trigger_id not in ['physical_off', 'physical_on'] else difference(target_lights, [trigger.entity_id]) }}"
+                  entity_id: "{{ target_lights if trigger_id not in ['physical_off', 'physical_off_delayed', 'physical_on'] else difference(target_lights, [trigger.entity_id]) }}"
           - *delete_saved_scene
 
       lights_off_action: &lights_off_action
@@ -850,7 +894,7 @@ actions:
             if:
               - alias: If a non-physical trigger or physical restore is enabled
                 condition: template
-                value_template: "{{ trigger_id != 'physical_off' or physical_restore }}"
+                value_template: "{{ trigger_id not in ['physical_off', 'physical_off_delayed'] or physical_restore }}"
             then:
               - *create_saved_scene
             else:
@@ -871,7 +915,7 @@ actions:
                 data:
                   transition: "{{ lights_off_transition }}"
                 target:
-                  entity_id: "{{ target_lights if trigger_id not in ['physical_off', 'physical_on'] else difference(target_lights, [trigger.entity_id]) }}"
+                  entity_id: "{{ target_lights if trigger_id not in ['physical_off', 'physical_off_delayed', 'physical_on'] else difference(target_lights, [trigger.entity_id]) }}"
 
   - choose:
       - alias: "Delete expired scene"
@@ -897,7 +941,9 @@ actions:
                     conditions:
                       - or:
                           - condition: trigger
-                            id: physical_off
+                            id:
+                              - physical_off
+                              - physical_off_delayed
                           - *auto_lights_off_conditions
                     sequence:
                       - *lights_off_action
@@ -916,7 +962,9 @@ actions:
                   - alias: Turn off automatic control
                     conditions:
                       - condition: trigger
-                        id: physical_off
+                        id:
+                          - physical_off
+                          - physical_off_delayed
                       - condition: template
                         value_template: "{{ is_automatic_control_toggleable and is_automatic_control_enabled }}"
                       - condition: template
