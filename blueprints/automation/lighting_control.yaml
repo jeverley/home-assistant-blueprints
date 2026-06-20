@@ -719,20 +719,6 @@ actions:
             | list
           }}
         {% endif %}
-      is_light_on: "{{ not not target_lights | select('is_state', 'on') | list }}"
-      cover_position: "{{ state_attr(cover, 'current_position')|int(none) if cover else none }}"
-      illuminance: "{{ states(illuminance_sensor)|int(none) if illuminance_sensor else none }}"
-      is_cover_shading: |
-        {{
-          cover_position|int(100) < cover_shading_position|int(0)
-          or (
-            cover is string and cover_shading_when_closing
-            and is_state(cover, 'closing')
-            and states[cover].last_changed <= now() - timedelta(seconds=illuminance_minimum_duration)
-          )
-        }}
-      is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
-      is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
       manual_lights: |
         {% set adaptive_entities =
           integration_entities('adaptive_lighting')
@@ -744,6 +730,9 @@ actions:
           | map('state_attr', 'manual_control') | flatten
           | select('in', target_lights) | list
         }}
+      cover_position: "{{ state_attr(cover, 'current_position')|int(none) if cover else none }}"
+      illuminance: "{{ states(illuminance_sensor)|int(none) if illuminance_sensor else none }}"
+
       lights_on_transition: |
         {% if trigger_id == 'illuminance' and illuminance_on_transition is not none %}
           {{ illuminance_on_transition }}
@@ -768,9 +757,23 @@ actions:
         {% endif %}
       scene_expiration: |
         {{ as_timedelta(states(scene_timeout_helper)) if scene_timeout_helper is string else as_timedelta(scene_timeout) }}
+
+      is_cover_shading: |
+        {{
+          cover_position|int(100) < cover_shading_position|int(0)
+          or (
+            cover is string and cover_shading_when_closing
+            and is_state(cover, 'closing')
+            and states[cover].last_changed <= now() - timedelta(seconds=illuminance_minimum_duration)
+          )
+        }}
+      is_illuminance_low: "{{ illuminance|int(0) < illuminance_minimum|int(1) }}"
+      is_illuminance_high: "{{ illuminance|int(0) > illuminance_maximum|int(0) }}"
+      is_light_on: "{{ not not target_lights | select('is_state', 'on') | list }}"
       is_scene_saved: "{{ states[scene_entity].state is defined }}"
       is_scene_expired: |
         {{ is_scene_saved and (states[scene_entity].last_updated|default(this.attributes.last_triggered)) < now() - as_timedelta(scene_expiration) }}
+
       create_saved_scene: &create_saved_scene
         action: scene.create
         data:
