@@ -704,7 +704,7 @@ condition:
                       }}
               - condition: template
                 alias: If a target light was turned on/off by a user or automation; on events are suppressed when the toggle is already enabled to prevent self-triggered restarts
-                value_template: "{{ trigger_id in ('user_off', 'automation_off') or (trigger_id in ('user_on', 'automation_on') and (not is_automatic_control_enabled or not automatic_control_toggle)) }}"
+                value_template: "{{ not not automatic_control_toggle and (trigger_id in ('user_off', 'automation_off') or (trigger_id in ('user_on', 'automation_on') and not is_automatic_control_enabled) }}"
 
 actions:
   - variables:
