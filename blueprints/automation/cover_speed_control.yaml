@@ -1,0 +1,178 @@
+blueprint:
+  name: Cover speed control
+  description: >
+    Automatically manages a cover's movement speed based on what caused it to move.
+    Movements initiated by an automation use a distinct 'automation' speed for the
+    duration of the movement. Every other movement (physical control, the dashboard/
+    app, or a listed relay automation/script forwarding a physical action) uses the
+    'default' speed, which is also what covers are left at while idle. Only affects
+    devices that also expose a speed select entity; devices without one are ignored.
+  domain: automation
+  input:
+    target:
+      name: Target
+      description: Area, device, or entity to manage.
+      selector:
+        target:
+          entity:
+            domain: cover
+    default_speed:
+      name: Default speed
+      description: >
+        The speed covers are left at while idle, and the speed used for any movement
+        that isn't classified as automation-triggered (physical control, UI/app
+        control, or a listed manual exception automation/script).
+      selector:
+        select:
+          options:
+            - Low
+            - Medium
+            - High
+    automation_speed:
+      name: Automation speed
+      description: >
+        The speed used only while a movement triggered by an automation is in
+        progress. Reverted to the default speed as soon as the cover stops.
+      selector:
+        select:
+          options:
+            - Low
+            - Medium
+            - High
+    manual_exceptions:
+      name: Manual exceptions (optional)
+      description: >
+        Automations or scripts that should be treated as manual/external control
+        despite calling the cover service themselves, e.g. a relay automation that
+        forwards a physical remote's button press to a cover that can't communicate
+        with it directly. A movement is treated as manual if any of these entities
+        were triggered within the exception window before the cover started moving.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain:
+                - automation
+                - script
+    exception_window:
+      name: Exception window
+      description: >
+        How recently a manual exception automation/script must have run for a cover
+        movement to be treated as manual.
+      default:
+        hours: 0
+        minutes: 0
+        seconds: 2
+      selector:
+        duration: {}
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/cover_speed_control.yaml
+
+trigger_variables:
+  target: !input target
+  target_entity_ids: '{{ [target.entity_id | default([])] | flatten }}'
+  target_device_ids: '{{ [target.device_id | default([])] | flatten }}'
+  target_area_ids: '{{ [target.area_id | default([])] | flatten }}'
+  target_floor_ids: '{{ [target.floor_id | default([])] | flatten }}'
+  target_label_ids: '{{ [target.label_id | default([])] | flatten }}'
+  covers: >
+    {% set resolved =
+      (target_device_ids | map('device_entities') | flatten if target_device_ids else [])
+      + (target_area_ids | map('area_entities') | flatten if target_area_ids else [])
+      + (target_floor_ids | map('floor_entities') | flatten if target_floor_ids else [])
+      + (target_label_ids | map('label_entities') | flatten if target_label_ids else [])
+      + (target_label_ids | map('label_devices') | flatten | map('device_entities') | flatten if target_label_ids else [])
+      + target_entity_ids
+    %}
+    {{ resolved | select('contains', 'cover.') | unique | list }}
+
+trigger:
+  - trigger: state
+    entity_id: '{{ covers }}'
+    to:
+      - opening
+      - closing
+    id: moving
+  - trigger: state
+    entity_id: '{{ covers }}'
+    to:
+      - open
+      - closed
+    id: stopped
+
+variables:
+  default_speed: !input default_speed
+  automation_speed: !input automation_speed
+  manual_exceptions: !input manual_exceptions
+  exception_window: !input exception_window
+  cover: '{{ trigger.entity_id }}'
+  cover_device_id: '{{ device_id(cover) }}'
+  speed_select: '{{ device_entities(cover_device_id) | select(''match'', ''^select\..*speed'') | first | default(none) }}'
+
+condition:
+  - alias: The device has an available speed select entity
+    condition: template
+    value_template: '{{ speed_select is not none and has_value(speed_select) }}'
+
+action:
+  - choose:
+      - alias: A movement started
+        conditions:
+          - condition: trigger
+            id: moving
+        sequence:
+          - variables:
+              is_manual: >-
+                {% set ctx = trigger.to_state.context %}
+                {% set ns = namespace(exception=false) %}
+                {% for entity_id in manual_exceptions %}
+                  {% set last_run = state_attr(entity_id, 'last_triggered') %}
+                  {% if last_run is not none and last_run > now() - as_timedelta(exception_window) %}
+                    {% set ns.exception = true %}
+                  {% endif %}
+                {% endfor %}
+                {{
+                  ctx.user_id is not none
+                  or ctx.parent_id is none
+                  or ns.exception
+                }}
+          - if:
+              - alias: The movement was not manual
+                condition: template
+                value_template: '{{ not is_manual }}'
+              - alias: The device supports the automation speed
+                condition: template
+                value_template: '{{ automation_speed in (state_attr(speed_select, ''options'') | default([])) }}'
+              - alias: The speed select is not already set
+                condition: template
+                value_template: '{{ states(speed_select) != automation_speed }}'
+            then:
+              - alias: Set automation speed
+                action: select.select_option
+                target:
+                  entity_id: '{{ speed_select }}'
+                data:
+                  option: '{{ automation_speed }}'
+      - alias: A movement finished
+        conditions:
+          - condition: trigger
+            id: stopped
+        sequence:
+          - if:
+              - alias: The device supports the default speed
+                condition: template
+                value_template: '{{ default_speed in (state_attr(speed_select, ''options'') | default([])) }}'
+              - alias: The speed select is not already set
+                condition: template
+                value_template: '{{ states(speed_select) != default_speed }}'
+            then:
+              - alias: Restore default speed
+                action: select.select_option
+                target:
+                  entity_id: '{{ speed_select }}'
+                data:
+                  option: '{{ default_speed }}'
+
+mode: parallel
+max: 20
+icon: mdi:speedometer
