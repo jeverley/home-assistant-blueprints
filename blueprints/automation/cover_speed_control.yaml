@@ -46,7 +46,8 @@ blueprint:
         despite calling the cover service themselves, e.g. a relay automation that
         forwards a physical remote's button press to a cover that can't communicate
         with it directly. A movement is treated as manual if any of these entities
-        were triggered within the exception window before the cover started moving.
+        is currently running, or was triggered within the exception window before
+        the cover started moving.
       default: []
       selector:
         entity:
@@ -59,7 +60,8 @@ blueprint:
       name: Exception window
       description: >
         How recently a manual exception automation/script must have run for a cover
-        movement to be treated as manual.
+        movement to be treated as manual, used as a fallback for the rare case where
+        it has already finished running by the time the cover starts moving.
       default:
         hours: 0
         minutes: 0
@@ -126,8 +128,14 @@ action:
                 {% set ctx = trigger.to_state.context %}
                 {% set ns = namespace(exception=false) %}
                 {% for entity_id in manual_exceptions %}
+                  {% set domain = entity_id.split('.')[0] %}
+                  {% set is_running =
+                    (domain == 'script' and is_state(entity_id, 'on'))
+                    or (domain == 'automation' and state_attr(entity_id, 'current') | int(0) > 0)
+                  %}
                   {% set last_run = state_attr(entity_id, 'last_triggered') %}
-                  {% if last_run is not none and last_run > now() - as_timedelta(exception_window) %}
+                  {% set recently_run = last_run is not none and last_run > now() - as_timedelta(exception_window) %}
+                  {% if is_running or recently_run %}
                     {% set ns.exception = true %}
                   {% endif %}
                 {% endfor %}
