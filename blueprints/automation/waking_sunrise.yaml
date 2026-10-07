@@ -2,7 +2,16 @@ blueprint:
   domain: automation
   name: Waking Sunrise
   description: |
-    Biologically accurate sunrise simulation.
+    Biologically accurate sunrise simulation that gradually brightens and cools your lights ahead of a waking alarm.
+
+    The simulation runs through three phases (nautical dawn, civil dawn and sunrise), each with its own brightness curve and colour temperature ramp, followed by a maintenance plateau at peak brightness until the alarm time.
+
+    - The alarm time is taken from the alarm sensor, or the fallback time when the sensor is unspecified or `unavailable`.
+    - Turning a light off or setting it brighter than the simulation aborts the sunrise for the day.
+    - An in-progress sunrise resumes after a Home Assistant restart or automation reload.
+    - Running the automation manually performs a test sunrise starting immediately, without affecting the scheduled sunrise.
+  homeassistant:
+    min_version: 2024.10.0
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/waking_sunrise.yaml
   input:
     alarm_sensor:
@@ -36,7 +45,7 @@ blueprint:
     target_lights:
       name: Lights
       description: |
-        Specify lights to use in the sunrise simulation.
+        Specify lights to use in the sunrise simulation, areas, devices, floors and labels are expanded to their lights.
       selector:
         target:
           entity:
@@ -45,7 +54,7 @@ blueprint:
     start_conditions:
       name: Start conditions
       description: |
-        Prevent sunrise from starting until these conditions are true
+        Prevent sunrise from starting until these conditions are true, conditions are re-checked every 10 seconds until the end of the sunrise phase.
       default: []
       selector:
         condition: {}
@@ -56,7 +65,9 @@ blueprint:
       collapsed: true
       input:
         max_brightness_step:
-          name: Maximum brightness step per transition (uses the intenal 1–255 range)
+          name: Maximum brightness step per transition
+          description: |
+            Uses the internal `1`–`255` brightness range, smaller steps give smoother transitions at the cost of more light commands.
           default: 3
           selector:
             number:
@@ -97,7 +108,7 @@ blueprint:
           default: 2200
           selector:
             number:
-              min: 1500
+              min: 1800
               max: 2500
               step: 50
               unit_of_measurement: K
@@ -254,10 +265,9 @@ trigger_variables:
 
   duration_min: "{{ nautical_duration_min|int + civil_duration_min|int + sunrise_duration_min|int }}"
   duration_s: "{{ duration_min|int * 60 }}"
-  duration: "{{ timedelta(minutes=duration_min|int) }}"
 
-trigger:
-  - platform: template
+triggers:
+  - trigger: template
     value_template: |
       {% set h = states(helper_entity) | from_json(default={}) %}
       {% set last_alarm = as_datetime(h.last_alarm | default(none), none) %}
@@ -265,11 +275,11 @@ trigger:
 
       {% set started_today = not not last_alarm and last_alarm.date() == now().date() %}
 
-      {% set sensor_state = states[alarm_sensor].state|default('unavailable') %}
+      {% set sensor_state = states(alarm_sensor) if alarm_sensor else 'unavailable' %}
       {% if sensor_state == 'unavailable' %}
         {% set sensor_dt = 'unavailable' %}
       {% else %}
-        {# none/unknown is handed as no alarm set #}
+        {# none/unknown is handled as no alarm set #}
         {% set sensor_dt = as_datetime(sensor_state, none) %}
       {% endif %}
 
@@ -287,37 +297,69 @@ trigger:
 
       {% if alarm_dt %}
         {% set start_dt = alarm_dt - timedelta(minutes=duration_min + maintenance_duration_min) %}
-        {% set end_dt = alarm_dt - timedelta(minutes=maintenance_duration_min) %}
-      {% else %}
-        {% set start_dt = none %}
-        {% set end_dt = none %}
       {% endif %}
 
       {{
-        alarm_dt and start_dt <= now() < alarm_dt
+        not not alarm_dt and start_dt <= now() < alarm_dt
         and (not started_today or active)
       }}
+
+  # Template triggers do not fire when already true at start-up, these resume an in-progress sunrise
+  - trigger: homeassistant
+    event: start
+  - trigger: event
+    event_type: automation_reloaded
 
 conditions:
   - condition: template
     value_template: "{{ state_attr(this.entity_id, 'current')|int(0) == 0 }}"
 
-action:
+actions:
   # --- RUNTIME VARIABLES ---
   - variables:
+      start_conditions: !input start_conditions
+
+      # Manual runs execute a test sunrise and leave the helper untouched
+      is_test: "{{ trigger.id is not defined }}"
+
+      light_entities: |
+        {% set t = target_lights if target_lights is mapping else {} %}
+        {% set ns = namespace(entities=[], areas=[]) %}
+        {% for key in ['entity_id', 'device_id', 'area_id', 'floor_id', 'label_id'] %}
+          {% set ids = t.get(key, []) %}
+          {% set ids = [ids] if ids is string else ids | list %}
+          {% for id in ids %}
+            {% if key == 'entity_id' %}
+              {% set ns.entities = ns.entities + [id] %}
+            {% elif key == 'device_id' %}
+              {% set ns.entities = ns.entities + device_entities(id) %}
+            {% elif key == 'area_id' %}
+              {% set ns.areas = ns.areas + [id] %}
+            {% elif key == 'floor_id' %}
+              {% set ns.areas = ns.areas + floor_areas(id) %}
+            {% else %}
+              {% set ns.entities = ns.entities + label_entities(id) %}
+            {% endif %}
+          {% endfor %}
+        {% endfor %}
+        {% for area in ns.areas %}
+          {% set ns.entities = ns.entities + area_entities(area) %}
+        {% endfor %}
+        {{ ns.entities | select('match', 'light\.') | unique | list }}
+
       h: "{{ states(helper_entity) | from_json(default={}) }}"
       last_alarm: "{{ as_datetime(h.last_alarm | default(none), none) }}"
       active: "{{ h.active | default(false) }}"
-      aborted: "{{ h.aborted | default(false) }}"
 
       started_today: "{{ not not last_alarm and as_datetime(last_alarm).date() == now().date() }}"
+      resuming: "{{ not is_test and started_today and active }}"
 
       sensor_dt: |
-        {% set s = states[alarm_sensor].state|default('unavailable') %}
+        {% set s = states(alarm_sensor) if alarm_sensor else 'unavailable' %}
         {% if s == 'unavailable' %}
           {{ 'unavailable' }}
         {% else %}
-          {# none/unknown is handed as no alarm set #}
+          {# none/unknown is handled as no alarm set #}
           {{ as_datetime(s, none) }}
         {% endif %}
 
@@ -325,8 +367,7 @@ action:
         {{ today_at(fallback_time) if fallback_time is not none else none }}
 
       alarm_dt: |
-        {% if trigger.id is not defined %}
-          {# manual trigger executes a test sunrise #}
+        {% if is_test %}
           {{ now() + timedelta(minutes=duration_min + maintenance_duration_min) }}
         {% elif started_today %}
           {{ last_alarm }}
@@ -344,7 +385,6 @@ action:
       # Phase weights
       w1: "{{ nautical_duration_min / duration_min }}"
       w2: "{{ civil_duration_min / duration_min }}"
-      w3: "{{ sunrise_duration_min / duration_min }}"
 
       # Phase boundaries
       p1_end: "{{ w1 }}"
@@ -357,7 +397,7 @@ action:
       p3_dur_s: "{{ sunrise_duration_min * 60 }}"
 
       # Kelvin boundaries
-      k0: 1800
+      k0: "{{ min(1800, nautical_kelvin_end) }}"
       k1: "{{ nautical_kelvin_end }}"
       k2: "{{ civil_kelvin_end }}"
       k3: "{{ sunrise_kelvin_end }}"
@@ -376,33 +416,55 @@ action:
       # Max brightness step (%)
       max_step_pct: "{{ max(max_brightness_step, 1) / 255 * 100 }}"
 
+  # --- RUN WINDOW ---
+  # Re-checks the trigger window as the start-up triggers fire unconditionally
+  - condition: template
+    value_template: |
+      {{
+        is_test or (
+          alarm_dt is not none
+          and as_datetime(start_dt) <= now() < as_datetime(alarm_dt)
+          and (not started_today or active)
+        )
+      }}
+
+  - if:
+      - condition: template
+        value_template: "{{ light_entities | count == 0 }}"
+    then:
+      - stop: "No lights found in target"
+
   # --- START CONDITIONS ---
-  - if: !input start_conditions
-    then: []
-    else:
+  - if:
+      - condition: template
+        value_template: "{{ start_conditions | count > 0 and not is_test and not resuming }}"
+    then:
       - repeat:
           until:
             - or:
                 - and: !input start_conditions
                 - condition: template
-                  value_template: "{{ now() >= as_datetime(alarm_dt) }}"
-                - condition: template
-                  value_template: "{{ trigger.id is not defined }}"
+                  value_template: "{{ now() >= as_datetime(end_dt) }}"
           sequence:
             - delay:
                 seconds: 10
-      - if: !input start_conditions
-        then: []
-        else:
-          - stop: "Start conditions not met"
+      - if:
+          - condition: template
+            value_template: "{{ now() >= as_datetime(end_dt) }}"
+        then:
+          - stop: "Start conditions not met before the end of the sunrise"
 
   # --- WRITE HELPER (start) ---
-  - service: input_text.set_value
-    target:
-      entity_id: "{{ helper_entity }}"
-    data:
-      value: |
-        {{ {"last_alarm": alarm_dt, "active": trigger.id is defined, "aborted": false} | to_json }}
+  - if:
+      - condition: template
+        value_template: "{{ not is_test }}"
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: "{{ helper_entity }}"
+        data:
+          value: |
+            {{ {"last_alarm": alarm_dt, "active": true, "aborted": false} | to_json }}
 
   # --- MAIN LOOP ---
   - repeat:
@@ -410,9 +472,9 @@ action:
         # --- LOOP VARIABLES ---
         - variables:
             state: |
-              {% set b = target_lights.entity_id | map('state_attr', 'brightness') | reject('eq', none) | list %}
+              {% set b = light_entities | map('state_attr', 'brightness') | reject('eq', none) | list %}
               {{ {
-                "is_off": target_lights.entity_id | select('is_state', 'off') | list | count > 0,
+                "is_off": light_entities | select('is_state', 'off') | list | count > 0,
                 "b_max": b|max / 255 * 100 if b else 0
               } }}
 
@@ -473,10 +535,6 @@ action:
             brightness_pct: |
               {{ phase.b_start + (phase.b_end - phase.b_start) * (x|float ** phase.e) }}
 
-            # Current Kelvin (linear ramp)
-            kelvin: |
-              {{ (phase.k_start + (phase.k_end - phase.k_start) * x|float)|round }}
-
             # --- INTERVAL: time until brightness reaches (current + max_step_pct) ---
             interval: |
               {% set pbr = phase.b_end - phase.b_start %}
@@ -505,7 +563,8 @@ action:
                 {% endif %}
               {% endif %}
 
-              {{ min(interval_curve, pr, 300) }}
+              {# At least 1s so phase boundaries and rounding cannot cause a tight loop #}
+              {{ max(min(interval_curve, pr, 300), 1) }}
 
             # Target progress
             target_p: |
@@ -524,20 +583,27 @@ action:
               {{ (phase.k_start + (phase.k_end - phase.k_start) * target_x|float)|round }}
 
         # --- USER OVERRIDE DETECTION ---
-        - if: |
-            {{ (not repeat.first and state.is_off) or state.b_max - 1 > target_brightness_pct }}
+        - if:
+            - condition: template
+              value_template: |
+                {{ (not repeat.first and state.is_off) or state.b_max - 1 > target_brightness_pct }}
           then:
-            - service: input_text.set_value
-              target:
-                entity_id: "{{ helper_entity }}"
-              data:
-                value: |
-                  {{ {"last_alarm": alarm_dt, "active": false, "aborted": true} | to_json }}
+            - if:
+                - condition: template
+                  value_template: "{{ not is_test }}"
+              then:
+                - action: input_text.set_value
+                  target:
+                    entity_id: "{{ helper_entity }}"
+                  data:
+                    value: |
+                      {{ {"last_alarm": alarm_dt, "active": false, "aborted": true} | to_json }}
             - stop: "User override detected"
 
         # --- APPLY TARGET STATE ---
-        - service: light.turn_on
-          target: !input target_lights
+        - action: light.turn_on
+          target:
+            entity_id: "{{ light_entities }}"
           data:
             brightness_pct: "{{ max(target_brightness_pct, b0) }}"
             color_temp_kelvin: "{{ max(target_kelvin, k0) }}"
@@ -549,9 +615,14 @@ action:
           value_template: "{{ target_p >= 1 }}"
 
   # --- FINAL WRITEBACK ---
-  - service: input_text.set_value
-    target:
-      entity_id: "{{ helper_entity }}"
-    data:
-      value: |
-        {{ {"last_alarm": alarm_dt, "active": false, "aborted": false} | to_json }}
+  # Lights are held at peak brightness through the maintenance phase until the alarm
+  - if:
+      - condition: template
+        value_template: "{{ not is_test }}"
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: "{{ helper_entity }}"
+        data:
+          value: |
+            {{ {"last_alarm": alarm_dt, "active": false, "aborted": false} | to_json }}
