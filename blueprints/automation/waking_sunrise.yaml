@@ -11,7 +11,7 @@ blueprint:
     - An in-progress sunrise resumes after a Home Assistant restart or automation reload.
     - Running the automation manually performs a test sunrise starting immediately, without affecting the scheduled sunrise.
   homeassistant:
-    min_version: 2024.10.0
+    min_version: 2026.9.0
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/waking_sunrise.yaml
   input:
     alarm_sensor:
@@ -322,30 +322,19 @@ actions:
       # Manual runs execute a test sunrise and leave the helper untouched
       is_test: "{{ trigger.id is not defined }}"
 
+      # Resolves the target the same way light actions do
       light_entities: |
         {% set t = target_lights if target_lights is mapping else {} %}
-        {% set ns = namespace(entities=[], areas=[]) %}
-        {% for key in ['entity_id', 'device_id', 'area_id', 'floor_id', 'label_id'] %}
-          {% set ids = t.get(key, []) %}
-          {% set ids = [ids] if ids is string else ids | list %}
-          {% for id in ids %}
-            {% if key == 'entity_id' %}
-              {% set ns.entities = ns.entities + [id] %}
-            {% elif key == 'device_id' %}
-              {% set ns.entities = ns.entities + device_entities(id) %}
-            {% elif key == 'area_id' %}
-              {% set ns.areas = ns.areas + [id] %}
-            {% elif key == 'floor_id' %}
-              {% set ns.areas = ns.areas + floor_areas(id) %}
-            {% else %}
-              {% set ns.entities = ns.entities + label_entities(id) %}
-            {% endif %}
-          {% endfor %}
-        {% endfor %}
-        {% for area in ns.areas %}
-          {% set ns.entities = ns.entities + area_entities(area) %}
-        {% endfor %}
-        {{ ns.entities | select('match', 'light\.') | unique | list }}
+        {% set labels = [t.label_id | default([])] | flatten %}
+        {% set devices = [t.device_id | default([]), labels | map('label_devices') | list] | flatten %}
+        {% set areas = [t.area_id | default([]), labels | map('label_areas') | list] | flatten %}
+        {{ [
+          t.entity_id | default([]),
+          labels | map('label_entities') | list,
+          devices | map('device_entities') | list,
+          areas | map('area_entities') | list,
+          [t.floor_id | default([])] | flatten | map('floor_entities') | list
+        ] | flatten | select('match', 'light\.') | unique | list }}
 
       h: "{{ states(helper_entity) | from_json(default={}) }}"
       last_alarm: "{{ as_datetime(h.last_alarm | default(none), none) }}"
@@ -587,7 +576,7 @@ actions:
             - condition: template
               value_template: |
                 {{ (not repeat.first and state.is_off) or state.b_max - 1 > target_brightness_pct }}
-          then:
+          then: &override_abort
             - if:
                 - condition: template
                   value_template: "{{ not is_test }}"
@@ -608,8 +597,17 @@ actions:
             brightness_pct: "{{ max(target_brightness_pct, b0) }}"
             color_temp_kelvin: "{{ max(target_kelvin, k0) }}"
             transition: "{{ interval }}"
-        - delay:
+        # Waits for the transition, aborting as soon as any light is turned off
+        - wait_for_trigger:
+            - trigger: light.turned_off
+              target: !input target_lights
+          timeout:
             seconds: "{{ interval }}"
+          continue_on_timeout: true
+        - if:
+            - condition: template
+              value_template: "{{ wait.trigger is not none }}"
+          then: *override_abort
       until:
         - condition: template
           value_template: "{{ target_p >= 1 }}"
