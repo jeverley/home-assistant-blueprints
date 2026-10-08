@@ -191,9 +191,6 @@ variables:
   hold_enabled: !input hold_enabled
   hold_max: !input hold_max
   require_presence: !input require_presence
-  # Defined here so the variables action inside the read block updates this
-  # outer value; otherwise slot_time stays local to that block.
-  slot_time: ""
 
 triggers:
   - alias: Floor occupied
