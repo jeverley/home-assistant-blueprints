@@ -11,71 +11,22 @@ blueprint:
     min_version: 2026.10.0
   input:
     thermostat:
-      name: Thermostat entities
+      name: Thermostat
       icon: mdi:thermostat
       collapsed: false
       input:
-        schedule_group:
-          name: Schedule group select
+        thermostat_device:
+          name: Thermostat device
+          description: >-
+            The TP-WGZBA on ZHA with the tp_wgzba.py quirk. Its schedule and
+            override entities are found by their default entity ID endings,
+            so keep those (for example select.bedroom_thermostat_schedule_group).
           selector:
-            entity:
+            device:
               filter:
-                - domain: select
-        operating_day:
-          name: Schedule operating day select
-          selector:
-            entity:
-              filter:
-                - domain: select
-        fetch_button:
-          name: Schedule fetch button
-          selector:
-            entity:
-              filter:
-                - domain: button
-        slot2_time:
-          name: Schedule period 2 time select
-          description: Slot 1 is fixed at 00:00, so slot 2 is the first heating slot.
-          selector:
-            entity:
-              filter:
-                - domain: select
-        override_mode:
-          name: Override mode select
-          selector:
-            entity:
-              filter:
-                - domain: select
-        override_target:
-          name: Override target temperature
-          selector:
-            entity:
-              filter:
-                - domain: number
-        override_period:
-          name: Override period
-          selector:
-            entity:
-              filter:
-                - domain: number
-        override_apply:
-          name: Override apply button
-          selector:
-            entity:
-              filter:
-                - domain: button
-        override_exit:
-          name: Override exit button
-          selector:
-            entity:
-              filter:
-                - domain: button
-        override_state:
-          name: Override mode sensor (read only)
-          selector:
-            entity:
-              filter:
-                - domain: sensor
+                - integration: zha
+                  manufacturer: SONOFF
+                  model: TP-WGZBA
     occupancy:
       name: Occupancy
       icon: mdi:home-account
@@ -182,13 +133,34 @@ max: 10
 max_exceeded: silent
 
 trigger_variables:
+  thermostat_device: !input thermostat_device
   alarm_sensor: !input alarm_sensor
   prewarm_lead: !input prewarm_lead
 
 variables:
-  slot2_entity: !input slot2_time
-  fetch_button: !input fetch_button
-  override_state: !input override_state
+  # Entities created by the tp_wgzba.py quirk, matched on the device by
+  # domain and default entity ID ending.
+  thermostat_entities: "{{ device_entities(thermostat_device) }}"
+  schedule_group: >-
+    {{ thermostat_entities | select('match', '^select\\..*_schedule_group$') | first | default('') }}
+  operating_day: >-
+    {{ thermostat_entities | select('match', '^select\\..*_schedule_operating_day$') | first | default('') }}
+  fetch_button: >-
+    {{ thermostat_entities | select('match', '^button\\..*_schedule_fetch$') | first | default('') }}
+  slot2_entity: >-
+    {{ thermostat_entities | select('match', '^select\\..*_schedule_period_2_time$') | first | default('') }}
+  override_mode: >-
+    {{ thermostat_entities | select('match', '^select\\..*_override_mode$') | first | default('') }}
+  override_target: >-
+    {{ thermostat_entities | select('match', '^number\\..*_override_target_temperature$') | first | default('') }}
+  override_period: >-
+    {{ thermostat_entities | select('match', '^number\\..*_override_period$') | first | default('') }}
+  override_apply: >-
+    {{ thermostat_entities | select('match', '^button\\..*_override_apply$') | first | default('') }}
+  override_exit: >-
+    {{ thermostat_entities | select('match', '^button\\..*_override_exit$') | first | default('') }}
+  override_state: >-
+    {{ thermostat_entities | select('match', '^sensor\\..*_override_mode$') | first | default('') }}
   alarm_sensor: !input alarm_sensor
   hold_enabled: !input hold_enabled
   hold_max: !input hold_max
@@ -226,11 +198,11 @@ triggers:
     options:
       for: "00:00:00"
   - alias: Schedule group came back
-    trigger: state
-    entity_id: !input schedule_group
-    from:
-      - unavailable
-      - unknown
+    trigger: template
+    value_template: >-
+      {% set e = device_entities(thermostat_device)
+           | select('match', '^select\\..*_schedule_group$') | first | default('') %}
+      {{ e != '' and states(e) not in ['unavailable', 'unknown'] }}
   - alias: Inside the pre-warm window
     trigger: template
     id: prewarm
@@ -238,28 +210,44 @@ triggers:
       {% set a = states(alarm_sensor) | as_datetime(none) %}
       {{ a is not none and a - timedelta(minutes=prewarm_lead | int) <= now() < a }}
   - alias: Timer override ended
-    trigger: state
+    trigger: template
     id: override-ended
-    entity_id: !input override_state
-    from: Timer
-    to: Idle
+    value_template: >-
+      {% set e = device_entities(thermostat_device)
+           | select('match', '^sensor\\..*_override_mode$') | first | default('') %}
+      {{ e != '' and is_state(e, 'Idle') }}
 
 actions:
+  - alias: Stop if the device is missing an entity
+    if:
+      - condition: template
+        value_template: >-
+          {{ '' in [schedule_group, operating_day, fetch_button, slot2_entity,
+                    override_mode, override_target, override_period,
+                    override_apply, override_exit, override_state] }}
+    then:
+      - stop: >-
+          Could not find every tp_wgzba.py entity on the thermostat device.
+          Check the entity IDs still end with their default names.
+        error: true
+  - variables:
+      # The template trigger fires on any change to Idle; only Timer counts.
+      timer_ended: >-
+        {{ trigger.id == 'override-ended' and trigger.from_state is not none
+           and trigger.from_state.state == 'Timer' }}
   - alias: Read the first heating slot from the device
     if:
-      - condition: trigger
-        id:
-          - prewarm
-          - override-ended
+      - condition: template
+        value_template: "{{ trigger.id == 'prewarm' or timer_ended }}"
     then:
       - action: select.select_option
         target:
-          entity_id: !input operating_day
+          entity_id: "{{ operating_day }}"
         data:
           option: "{{ now().strftime('%A') }}"
       - action: button.press
         target:
-          entity_id: !input fetch_button
+          entity_id: "{{ fetch_button }}"
       - wait_template: >-
           {{ states[slot2_entity].last_reported >= states(fetch_button) | as_datetime }}
         timeout: "00:00:10"
@@ -278,13 +266,8 @@ actions:
               {% set a = states(alarm_sensor) | as_datetime(none) %}
               {{ a is not none and slot_time != ''
                  and (min(a, today_at(slot_time)) - now()).total_seconds() >= 60 }}
-          - condition: not
-            conditions:
-              - condition: state
-                entity_id: !input override_state
-                state:
-                  - Boost
-                  - Timer
+          - condition: template
+            value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
           - condition: or
             conditions:
               - condition: template
@@ -302,17 +285,17 @@ actions:
         sequence:
           - action: select.select_option
             target:
-              entity_id: !input override_mode
+              entity_id: "{{ override_mode }}"
             data:
               option: Timer
           - action: number.set_value
             target:
-              entity_id: !input override_target
+              entity_id: "{{ override_target }}"
             data:
               value: !input prewarm_target
           - action: number.set_value
             target:
-              entity_id: !input override_period
+              entity_id: "{{ override_period }}"
             data:
               value: >-
                 {% set a = states(alarm_sensor) | as_datetime %}
@@ -320,13 +303,11 @@ actions:
                 {{ min(((end - now()).total_seconds() / 60) | round(0) | int, 1439) }}
           - action: button.press
             target:
-              entity_id: !input override_apply
+              entity_id: "{{ override_apply }}"
       - alias: Hold until the first heating slot
         conditions:
-          - condition: trigger
-            id: override-ended
           - condition: template
-            value_template: "{{ hold_enabled }}"
+            value_template: "{{ timer_ended and hold_enabled }}"
           - condition: template
             value_template: >-
               {{ slot_time != '' and (today_at(slot_time) - now()).total_seconds() >= 60 }}
@@ -338,23 +319,23 @@ actions:
         sequence:
           - action: select.select_option
             target:
-              entity_id: !input override_mode
+              entity_id: "{{ override_mode }}"
             data:
               option: Timer
           - action: number.set_value
             target:
-              entity_id: !input override_target
+              entity_id: "{{ override_target }}"
             data:
               value: !input hold_target
           - action: number.set_value
             target:
-              entity_id: !input override_period
+              entity_id: "{{ override_period }}"
             data:
               value: >-
                 {{ min(((today_at(slot_time) - now()).total_seconds() / 60) | round(0) | int, hold_max | int) }}
           - action: button.press
             target:
-              entity_id: !input override_apply
+              entity_id: "{{ override_apply }}"
       - alias: Area occupied, use Schedule 1
         conditions:
           - condition: occupancy.is_detected
@@ -362,17 +343,12 @@ actions:
             options:
               behavior: any
               for: !input detect_delay
-          - condition: not
-            conditions:
-              - condition: state
-                entity_id: !input override_state
-                state:
-                  - Boost
-                  - Timer
+          - condition: template
+            value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
         sequence:
           - action: select.select_option
             target:
-              entity_id: !input schedule_group
+              entity_id: "{{ schedule_group }}"
             data:
               option: Schedule 1
       - alias: Nobody home, use Schedule 3
@@ -389,18 +365,15 @@ actions:
               for: !input clear_delay
         sequence:
           - if:
-              - condition: state
-                entity_id: !input override_state
-                state:
-                  - Boost
-                  - Timer
+              - condition: template
+                value_template: "{{ states(override_state) in ['Boost', 'Timer'] }}"
             then:
               - action: button.press
                 target:
-                  entity_id: !input override_exit
+                  entity_id: "{{ override_exit }}"
           - action: select.select_option
             target:
-              entity_id: !input schedule_group
+              entity_id: "{{ schedule_group }}"
             data:
               option: Schedule 3
       - alias: Area empty, use Schedule 2
@@ -410,16 +383,11 @@ actions:
             options:
               behavior: all
               for: !input clear_delay
-          - condition: not
-            conditions:
-              - condition: state
-                entity_id: !input override_state
-                state:
-                  - Boost
-                  - Timer
+          - condition: template
+            value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
         sequence:
           - action: select.select_option
             target:
-              entity_id: !input schedule_group
+              entity_id: "{{ schedule_group }}"
             data:
               option: Schedule 2

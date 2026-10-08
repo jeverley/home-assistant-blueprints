@@ -19,13 +19,14 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA with a custom quirk (`tp_wgz
 - **Pre-warm:** inside the pre-warm window before the next waking alarm, sets a Timer override at the pre-warm temperature. The period runs until the alarm or the first heating slot, whichever is earlier. The home zone must be occupied and, if `require_presence` is on, someone must be in this area.
 - **Hold:** when the Timer override ends, optionally holds a working temperature until the first heating slot, capped by the maximum hold.
 - **First heating slot:** read from the device. The blueprint sets the operating day to today, presses the schedule fetch button, waits up to 10 s for the "Schedule period 2 time" select to report again, then uses period 2 (period 1 is fixed at 00:00). If the read fails, pre-warm and hold are skipped.
+- **Thermostat entities:** you pick the device and the blueprint finds the quirk's entities on it by domain and default entity ID ending (for example `select.*_schedule_group` and `sensor.*_override_mode`). If any is missing, the run stops with an error in the trace.
 - **Resilience:** runs in queued mode (max 10, silent), re-applies the schedule group when its select recovers from `unavailable` or `unknown`, and caps override periods at 1439 minutes or the maximum hold.
 
 ### Inputs
 
 | Section | Inputs |
 | --- | --- |
-| Thermostat entities | schedule group, operating day, fetch button, period 2 time, override mode, override target, override period, override apply, override exit, override mode sensor |
+| Thermostat | the TP-WGZBA device (ZHA, SONOFF). Its schedule group, operating day, fetch, period 2 time, override mode, target, period, apply and exit entities, plus the override mode sensor, are found on the device automatically. |
 | Occupancy | this area or floor, all areas or floors in the house, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min) |
 | Pre-warm and hold | next alarm sensor, lead time (30 min), pre-warm temperature (21 °C), require presence (on), hold enabled (on), hold temperature (20 °C), maximum hold (180 min) |
 
@@ -43,9 +44,11 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA with a custom quirk (`tp_wgz
 
 - Not yet tested against live hardware. Check:
   - the native occupancy and zone trigger and condition syntax on Home Assistant 2026.10;
-  - the select option strings (`Schedule 1/2/3`, `Timer`, `Boost`, `Idle` and the day names);
+  - the select option strings (`Schedule 1/2/3`, `Timer`, `Boost`, `Idle`, the day names and `HH:MM` times). These match the quirk's enums, assuming ZHA shows underscores as spaces;
   - that the fetch wait works, which needs `last_reported` to update even when the fetched value is unchanged.
 - The occupancy inputs use target selectors, so the UI also offers devices and entities. Only areas and floors were intended.
 - The device work mode must be set to Schedule. The blueprint does not check it.
 - The option strings and entity types are specific to the custom ZHA quirk.
+- Keep the default entity ID endings on the thermostat's entities. Renaming the start (the device part) is fine.
+- Because the entities are looked up from the device, the schedule group recovery and Timer override ended triggers are template triggers. The Timer override ended trigger fires on any change to `Idle`, and the actions only treat it as ended when the previous state was `Timer`.
 - The trigger ids `prewarm` and `override-ended` are fixed because the actions depend on them.
