@@ -2,7 +2,7 @@ blueprint:
   name: Zigbee thermostat, occupancy and alarm aware schedule
   description: >-
     Switches a thermostat's active schedule group by occupancy (1 occupied,
-    2 floor empty, 3 nobody home). Before the next waking alarm it pre-warms
+    2 area empty, 3 nobody home). Before the next waking alarm it pre-warms
     the room with the Timer override, then optionally holds a working
     temperature until the first heating slot on the device schedule.
   domain: automation
@@ -80,15 +80,16 @@ blueprint:
       icon: mdi:home-account
       collapsed: true
       input:
-        room_floor:
-          name: Floor this thermostat heats
+        room_target:
+          name: Area or floor this thermostat heats
+          description: Pick the area the thermostat heats, or its whole floor.
           selector:
-            floor: {}
-        all_floors:
-          name: All floors in the house
+            target: {}
+        house_target:
+          name: All areas or floors in the house
+          description: Everywhere that counts as someone being home, as areas or floors.
           selector:
-            floor:
-              multiple: true
+            target: {}
         home_zone:
           name: Home zone
           default: zone.home
@@ -144,7 +145,7 @@ blueprint:
               unit_of_measurement: °C
               mode: box
         require_presence:
-          name: Require someone on this floor to pre-warm
+          name: Require someone in this area to pre-warm
           description: On for bedrooms. Off for rooms that are empty when the alarm fires.
           default: true
           selector:
@@ -193,24 +194,21 @@ variables:
   require_presence: !input require_presence
 
 triggers:
-  - alias: Floor occupied
+  - alias: Area occupied
     trigger: occupancy.detected
-    target:
-      floor_id: !input room_floor
+    target: !input room_target
     options:
       behavior: first
       for: !input detect_delay
-  - alias: Floor empty
+  - alias: Area empty
     trigger: occupancy.cleared
-    target:
-      floor_id: !input room_floor
+    target: !input room_target
     options:
       behavior: all
       for: !input clear_delay
-  - alias: All floors empty
+  - alias: Whole house empty
     trigger: occupancy.cleared
-    target:
-      floor_id: !input all_floors
+    target: !input house_target
     options:
       behavior: all
       for: !input clear_delay
@@ -291,8 +289,7 @@ actions:
               - condition: template
                 value_template: "{{ not require_presence }}"
               - condition: occupancy.is_detected
-                target:
-                  floor_id: !input room_floor
+                target: !input room_target
                 options:
                   behavior: any
                   for: "00:00:00"
@@ -333,8 +330,7 @@ actions:
             value_template: >-
               {{ slot_time != '' and (today_at(slot_time) - now()).total_seconds() >= 60 }}
           - condition: occupancy.is_detected
-            target:
-              floor_id: !input room_floor
+            target: !input room_target
             options:
               behavior: any
               for: "00:00:00"
@@ -358,11 +354,10 @@ actions:
           - action: button.press
             target:
               entity_id: !input override_apply
-      - alias: Floor occupied, use Schedule 1
+      - alias: Area occupied, use Schedule 1
         conditions:
           - condition: occupancy.is_detected
-            target:
-              floor_id: !input room_floor
+            target: !input room_target
             options:
               behavior: any
               for: !input detect_delay
@@ -387,8 +382,7 @@ actions:
             options:
               for: !input clear_delay
           - condition: occupancy.is_not_detected
-            target:
-              floor_id: !input all_floors
+            target: !input house_target
             options:
               behavior: all
               for: !input clear_delay
@@ -408,11 +402,10 @@ actions:
               entity_id: !input schedule_group
             data:
               option: Schedule 3
-      - alias: Floor empty, use Schedule 2
+      - alias: Area empty, use Schedule 2
         conditions:
           - condition: occupancy.is_not_detected
-            target:
-              floor_id: !input room_floor
+            target: !input room_target
             options:
               behavior: all
               for: !input clear_delay
