@@ -7,7 +7,8 @@ blueprint:
     temperature until the first heating slot on the device schedule.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/zigbee_thermostat_occupancy_alarm_schedule.yaml
-  min_version: 2026.10.0
+  homeassistant:
+    min_version: 2026.10.0
   input:
     thermostat:
       name: Thermostat entities
