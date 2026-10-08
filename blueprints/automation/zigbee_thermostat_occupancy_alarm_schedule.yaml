@@ -1,0 +1,434 @@
+blueprint:
+  name: Zigbee thermostat, occupancy and alarm aware schedule
+  description: >-
+    Switches a thermostat's active schedule group by occupancy (1 occupied,
+    2 floor empty, 3 nobody home). Before the next waking alarm it pre-warms
+    the room with the Timer override, then optionally holds a working
+    temperature until the first heating slot on the device schedule.
+  domain: automation
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/zigbee_thermostat_occupancy_alarm_schedule.yaml
+  min_version: 2026.10.0
+  input:
+    thermostat:
+      name: Thermostat entities
+      icon: mdi:thermostat
+      collapsed: false
+      input:
+        schedule_group:
+          name: Schedule group select
+          selector:
+            entity:
+              filter:
+                - domain: select
+        operating_day:
+          name: Schedule operating day select
+          selector:
+            entity:
+              filter:
+                - domain: select
+        fetch_button:
+          name: Schedule fetch button
+          selector:
+            entity:
+              filter:
+                - domain: button
+        slot2_time:
+          name: Schedule period 2 time select
+          description: Slot 1 is fixed at 00:00, so slot 2 is the first heating slot.
+          selector:
+            entity:
+              filter:
+                - domain: select
+        override_mode:
+          name: Override mode select
+          selector:
+            entity:
+              filter:
+                - domain: select
+        override_target:
+          name: Override target temperature
+          selector:
+            entity:
+              filter:
+                - domain: number
+        override_period:
+          name: Override period
+          selector:
+            entity:
+              filter:
+                - domain: number
+        override_apply:
+          name: Override apply button
+          selector:
+            entity:
+              filter:
+                - domain: button
+        override_exit:
+          name: Override exit button
+          selector:
+            entity:
+              filter:
+                - domain: button
+        override_state:
+          name: Override mode sensor (read only)
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+    occupancy:
+      name: Occupancy
+      icon: mdi:home-account
+      collapsed: true
+      input:
+        room_floor:
+          name: Floor this thermostat heats
+          selector:
+            floor: {}
+        all_floors:
+          name: All floors in the house
+          selector:
+            floor:
+              multiple: true
+        home_zone:
+          name: Home zone
+          default: zone.home
+          selector:
+            entity:
+              filter:
+                - domain: zone
+        detect_delay:
+          name: Occupied delay
+          default:
+            hours: 0
+            minutes: 1
+            seconds: 0
+          selector:
+            duration: {}
+        clear_delay:
+          name: Empty delay
+          default:
+            hours: 0
+            minutes: 5
+            seconds: 0
+          selector:
+            duration: {}
+    prewarm:
+      name: Pre-warm and hold
+      icon: mdi:alarm
+      collapsed: true
+      input:
+        alarm_sensor:
+          name: Next waking alarm sensor
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+        prewarm_lead:
+          name: Pre-warm lead time (minutes before alarm)
+          default: 30
+          selector:
+            number:
+              min: 5
+              max: 120
+              step: 5
+              unit_of_measurement: min
+              mode: box
+        prewarm_target:
+          name: Pre-warm temperature
+          default: 21
+          selector:
+            number:
+              min: 5
+              max: 30
+              step: 0.5
+              unit_of_measurement: °C
+              mode: box
+        require_presence:
+          name: Require someone on this floor to pre-warm
+          description: On for bedrooms. Off for rooms that are empty when the alarm fires.
+          default: true
+          selector:
+            boolean: {}
+        hold_enabled:
+          name: Hold after the alarm until the first heating slot
+          default: true
+          selector:
+            boolean: {}
+        hold_target:
+          name: Hold temperature
+          default: 20
+          selector:
+            number:
+              min: 5
+              max: 30
+              step: 0.5
+              unit_of_measurement: °C
+              mode: box
+        hold_max:
+          name: Maximum hold (minutes)
+          default: 180
+          selector:
+            number:
+              min: 15
+              max: 1439
+              step: 5
+              unit_of_measurement: min
+              mode: box
+
+mode: queued
+max: 10
+max_exceeded: silent
+
+trigger_variables:
+  alarm_sensor: !input alarm_sensor
+  prewarm_lead: !input prewarm_lead
+
+variables:
+  slot2_entity: !input slot2_time
+  fetch_button: !input fetch_button
+  override_state: !input override_state
+  alarm_sensor: !input alarm_sensor
+  hold_enabled: !input hold_enabled
+  hold_max: !input hold_max
+  require_presence: !input require_presence
+  # Defined here so the variables action inside the read block updates this
+  # outer value; otherwise slot_time stays local to that block.
+  slot_time: ""
+
+triggers:
+  - alias: Floor occupied
+    trigger: occupancy.detected
+    target:
+      floor_id: !input room_floor
+    options:
+      behavior: first
+      for: !input detect_delay
+  - alias: Floor empty
+    trigger: occupancy.cleared
+    target:
+      floor_id: !input room_floor
+    options:
+      behavior: all
+      for: !input clear_delay
+  - alias: All floors empty
+    trigger: occupancy.cleared
+    target:
+      floor_id: !input all_floors
+    options:
+      behavior: all
+      for: !input clear_delay
+  - alias: Home zone occupied
+    trigger: zone.occupancy_detected
+    target:
+      entity_id: !input home_zone
+    options:
+      for: "00:00:00"
+  - alias: Home zone empty
+    trigger: zone.occupancy_cleared
+    target:
+      entity_id: !input home_zone
+    options:
+      for: "00:00:00"
+  - alias: Schedule group came back
+    trigger: state
+    entity_id: !input schedule_group
+    from:
+      - unavailable
+      - unknown
+  - alias: Inside the pre-warm window
+    trigger: template
+    id: prewarm
+    value_template: >-
+      {% set a = states(alarm_sensor) | as_datetime(none) %}
+      {{ a is not none and a - timedelta(minutes=prewarm_lead | int) <= now() < a }}
+  - alias: Timer override ended
+    trigger: state
+    id: override-ended
+    entity_id: !input override_state
+    from: Timer
+    to: Idle
+
+actions:
+  - alias: Read the first heating slot from the device
+    if:
+      - condition: trigger
+        id:
+          - prewarm
+          - override-ended
+    then:
+      - action: select.select_option
+        target:
+          entity_id: !input operating_day
+        data:
+          option: "{{ now().strftime('%A') }}"
+      - action: button.press
+        target:
+          entity_id: !input fetch_button
+      - wait_template: >-
+          {{ states[slot2_entity].last_reported >= states(fetch_button) | as_datetime }}
+        timeout: "00:00:10"
+        continue_on_timeout: false
+      - variables:
+          slot_time: >-
+            {% set s = states(slot2_entity) %}
+            {{ s[:5] if s is match('^[0-9]{2}:[0-9]{2}') else '' }}
+  - choose:
+      - alias: Pre-warm before the alarm
+        conditions:
+          - condition: trigger
+            id: prewarm
+          - condition: template
+            value_template: >-
+              {% set a = states(alarm_sensor) | as_datetime(none) %}
+              {{ a is not none and slot_time != ''
+                 and (min(a, today_at(slot_time)) - now()).total_seconds() >= 60 }}
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: !input override_state
+                state:
+                  - Boost
+                  - Timer
+          - condition: or
+            conditions:
+              - condition: template
+                value_template: "{{ not require_presence }}"
+              - condition: occupancy.is_detected
+                target:
+                  floor_id: !input room_floor
+                options:
+                  behavior: any
+                  for: "00:00:00"
+          - condition: zone.occupancy_is_detected
+            target:
+              entity_id: !input home_zone
+            options:
+              for: "00:00:00"
+        sequence:
+          - action: select.select_option
+            target:
+              entity_id: !input override_mode
+            data:
+              option: Timer
+          - action: number.set_value
+            target:
+              entity_id: !input override_target
+            data:
+              value: !input prewarm_target
+          - action: number.set_value
+            target:
+              entity_id: !input override_period
+            data:
+              value: >-
+                {% set a = states(alarm_sensor) | as_datetime %}
+                {% set end = min(a, today_at(slot_time)) %}
+                {{ min(((end - now()).total_seconds() / 60) | round(0) | int, 1439) }}
+          - action: button.press
+            target:
+              entity_id: !input override_apply
+      - alias: Hold until the first heating slot
+        conditions:
+          - condition: trigger
+            id: override-ended
+          - condition: template
+            value_template: "{{ hold_enabled }}"
+          - condition: template
+            value_template: >-
+              {{ slot_time != '' and (today_at(slot_time) - now()).total_seconds() >= 60 }}
+          - condition: occupancy.is_detected
+            target:
+              floor_id: !input room_floor
+            options:
+              behavior: any
+              for: "00:00:00"
+        sequence:
+          - action: select.select_option
+            target:
+              entity_id: !input override_mode
+            data:
+              option: Timer
+          - action: number.set_value
+            target:
+              entity_id: !input override_target
+            data:
+              value: !input hold_target
+          - action: number.set_value
+            target:
+              entity_id: !input override_period
+            data:
+              value: >-
+                {{ min(((today_at(slot_time) - now()).total_seconds() / 60) | round(0) | int, hold_max | int) }}
+          - action: button.press
+            target:
+              entity_id: !input override_apply
+      - alias: Floor occupied, use Schedule 1
+        conditions:
+          - condition: occupancy.is_detected
+            target:
+              floor_id: !input room_floor
+            options:
+              behavior: any
+              for: !input detect_delay
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: !input override_state
+                state:
+                  - Boost
+                  - Timer
+        sequence:
+          - action: select.select_option
+            target:
+              entity_id: !input schedule_group
+            data:
+              option: Schedule 1
+      - alias: Nobody home, use Schedule 3
+        conditions:
+          - condition: zone.occupancy_is_not_detected
+            target:
+              entity_id: !input home_zone
+            options:
+              for: !input clear_delay
+          - condition: occupancy.is_not_detected
+            target:
+              floor_id: !input all_floors
+            options:
+              behavior: all
+              for: !input clear_delay
+        sequence:
+          - if:
+              - condition: state
+                entity_id: !input override_state
+                state:
+                  - Boost
+                  - Timer
+            then:
+              - action: button.press
+                target:
+                  entity_id: !input override_exit
+          - action: select.select_option
+            target:
+              entity_id: !input schedule_group
+            data:
+              option: Schedule 3
+      - alias: Floor empty, use Schedule 2
+        conditions:
+          - condition: occupancy.is_not_detected
+            target:
+              floor_id: !input room_floor
+            options:
+              behavior: all
+              for: !input clear_delay
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: !input override_state
+                state:
+                  - Boost
+                  - Timer
+        sequence:
+          - action: select.select_option
+            target:
+              entity_id: !input schedule_group
+            data:
+              option: Schedule 2
