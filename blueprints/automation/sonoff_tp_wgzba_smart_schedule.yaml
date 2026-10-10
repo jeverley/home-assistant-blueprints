@@ -11,6 +11,7 @@ blueprint:
     **Routine** moves the start of the morning heating to match the next waking alarm:
     - An **early alarm** starts today's schedule early, at its own temperatures.
     - A **late alarm** keeps the night temperature until shortly before it.
+    - Someone **up early** in the wake areas starts it straight away, alarm or not.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_smart_schedule.yaml
   homeassistant:
@@ -79,8 +80,8 @@ blueprint:
       icon: mdi:alarm
       description: >-
         Moves the start of the morning heating to match the next waking alarm,
-        earlier or later than the schedule. It only runs while someone is in
-        the home areas.
+        earlier or later than the schedule, or to when someone gets up. It only
+        runs while someone is in the home areas.
       collapsed: false
       input:
         alarm_sensor:
@@ -101,6 +102,32 @@ blueprint:
               step: 5
               unit_of_measurement: min
               mode: box
+        wake_areas:
+          name: Wake areas
+          description: >-
+            Areas where sustained movement means someone is up, such as the
+            landing or kitchen. A wake-up starts the morning heating like an
+            early alarm. Avoid bedrooms, where turning over in bed counts as
+            movement. Leave empty to only follow the alarm.
+          default: []
+          selector:
+            area:
+              multiple: true
+        wake_duration:
+          name: Wake duration
+          description: The duration a motion sensor in the wake areas must stay on to count as someone being up.
+          default:
+            hours: 0
+            minutes: 3
+            seconds: 0
+          selector:
+            duration: {}
+        earliest_wake:
+          name: Earliest wake time
+          description: Movement before this time is ignored.
+          default: "05:00:00"
+          selector:
+            time: {}
 
 mode: queued
 max: 10
@@ -137,6 +164,7 @@ variables:
   prewarm_lead: !input prewarm_lead
   heated_areas: !input heated_areas
   home_areas: !input home_areas
+  earliest_wake: !input earliest_wake
 
 triggers:
   - alias: Heated areas occupied
@@ -198,6 +226,14 @@ triggers:
       {{ start.date() == now().date() and p2 < start
          and p2 - timedelta(minutes=1) <= now() < start }}
       {% endif %}
+  - alias: Someone is up
+    trigger: motion.detected
+    id: wake
+    target:
+      area_id: !input wake_areas
+    options:
+      behavior: each
+      for: !input wake_duration
   - alias: Timer override ended
     trigger: template
     id: override-ended
@@ -255,7 +291,7 @@ actions:
   - alias: Fetch today's schedule
     if:
       - condition: template
-        value_template: "{{ trigger.id in ['prewarm', 'late-hold', 'override-ended', 'catch-up'] }}"
+        value_template: "{{ trigger.id in ['prewarm', 'late-hold', 'override-ended', 'catch-up', 'wake'] }}"
     then:
       - alias: Select today as the operating day
         action: select.select_option
@@ -306,22 +342,28 @@ actions:
       # shifts the morning earlier. With 2 or 3, period 3 (if any) is the
       # evening setback, so period 2 is only started early.
       shift: "{{ periods | count >= 4 }}"
+      # Someone was confirmed up in the wake areas, after the earliest wake time.
+      woke: "{{ trigger.id == 'wake' and now() >= today_at(earliest_wake) }}"
       # Alarm minus lead time, when the alarm is today and still ahead.
       # Otherwise blank.
-      routine_start: >-
+      alarm_start: >-
         {% set a = states(alarm_sensor) | as_datetime(none) %}
         {% if a is none %}{{ '' }}{% else %}
         {% set a = a | as_local %}
         {% set start = a - timedelta(minutes=prewarm_lead | int) %}
         {{ start.isoformat() if start.date() == now().date() and now() < a else '' }}
         {% endif %}
+      # The routine start: now if someone is up before the alarm start (or
+      # with no alarm), otherwise the alarm start.
+      routine_start: >-
+        {% if woke and (alarm_start == '' or now() < alarm_start | as_datetime) %}{{ now().isoformat() }}{% else %}{{ alarm_start }}{% endif %}
   - choose:
-      - alias: Early alarm, start period 2 early
+      - alias: Early alarm or someone up, start period 2 early
         conditions:
           - alias: The early start window is open
             condition: template
             value_template: >-
-              {{ trigger.id in ['prewarm', 'catch-up'] and routine_start != ''
+              {{ (trigger.id in ['prewarm', 'catch-up'] or woke) and routine_start != ''
                  and (routine_start | as_datetime) <= now() }}
           - alias: Period 2 is set and warmer than period 1
             condition: template
@@ -438,10 +480,67 @@ actions:
             action: button.press
             target:
               entity_id: "{{ override_apply }}"
+      - alias: Someone up during a late hold, end it
+        conditions:
+          - condition: template
+            value_template: "{{ woke }}"
+          - alias: Our late hold is running (Timer at the period 1 temperature)
+            condition: template
+            value_template: >-
+              {{ periods | count >= 2 and periods[0].temp is not none
+                 and periods[1].temp is not none
+                 and is_state(override_state, 'Timer')
+                 and states(override_target) | float(none) == periods[0].temp
+                 and now() >= today_at(periods[1].time) - timedelta(minutes=1) }}
+        sequence:
+          - alias: End the hold
+            action: button.press
+            target:
+              entity_id: "{{ override_exit }}"
+          # With 2 or 3 periods the device's period 2 now carries on. With 4 or
+          # more, run period 2 for its usual length from now, never past period 4.
+          - if:
+              - condition: template
+                value_template: "{{ shift }}"
+            then:
+              - variables:
+                  wake_minutes: >-
+                    {% set p2 = today_at(periods[1].time) %}
+                    {% set end = now() + (today_at(periods[2].time) - p2) %}
+                    {% if periods | count >= 4 %}{% set end = min(end, today_at(periods[3].time)) %}{% endif %}
+                    {{ min(((end - now()).total_seconds() / 60) | round(0) | int, 1439) }}
+              - alias: Stop if period 2 would be under a minute
+                condition: template
+                value_template: "{{ wake_minutes >= 1 }}"
+              - alias: Set override mode to Timer
+                action: select.select_option
+                target:
+                  entity_id: "{{ override_mode }}"
+                data:
+                  option: Timer
+              - alias: Set period 2 temperature
+                action: number.set_value
+                target:
+                  entity_id: "{{ override_target }}"
+                data:
+                  value: "{{ periods[1].temp }}"
+              - alias: Set the period 2 length
+                action: number.set_value
+                target:
+                  entity_id: "{{ override_period }}"
+                data:
+                  value: "{{ wake_minutes }}"
+              - alias: Apply override
+                action: button.press
+                target:
+                  entity_id: "{{ override_apply }}"
       - alias: Early alarm, run period 3 until its usual start
         conditions:
           - condition: template
             value_template: "{{ timer_ended and shift }}"
+          - alias: No override running now (another may have started since)
+            condition: template
+            value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
           - alias: Period 3 has a temperature
             condition: template
             value_template: "{{ periods[2].temp is not none }}"
@@ -488,7 +587,10 @@ actions:
       - alias: Late alarm, run period 2 for its usual length
         conditions:
           - condition: template
-            value_template: "{{ timer_ended and shift and routine_start != '' }}"
+            value_template: "{{ timer_ended and shift and alarm_start != '' }}"
+          - alias: No override running now (another may have started since)
+            condition: template
+            value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
           - alias: Period 2 has a temperature
             condition: template
             value_template: "{{ periods[1].temp is not none }}"
@@ -497,10 +599,10 @@ actions:
             value_template: >-
               {{ periods[0].temp is not none
                  and states(override_target) | float(none) == periods[0].temp }}
-          - alias: The routine start is after period 2's usual start, and period 2 has time left
+          - alias: The alarm start is after period 2's usual start, and period 2 has time left
             condition: template
             value_template: >-
-              {% set start = routine_start | as_datetime %}
+              {% set start = alarm_start | as_datetime %}
               {% set p2 = today_at(periods[1].time) %}
               {% set end = start + (today_at(periods[2].time) - p2) %}
               {{ p2 < start and now() >= p2 and (end - now()).total_seconds() >= 60 }}
@@ -513,10 +615,10 @@ actions:
               for: "00:00:00"
         sequence:
           - variables:
-              # Period 2's usual length from the routine start, but never past
+              # Period 2's usual length from the alarm start, but never past
               # period 4 (usually the evening setback).
               stage_2_minutes: >-
-                {% set start = routine_start | as_datetime %}
+                {% set start = alarm_start | as_datetime %}
                 {% set p2 = today_at(periods[1].time) %}
                 {% set end = start + (today_at(periods[2].time) - p2) %}
                 {% if periods | count >= 4 %}{% set end = min(end, today_at(periods[3].time)) %}{% endif %}
