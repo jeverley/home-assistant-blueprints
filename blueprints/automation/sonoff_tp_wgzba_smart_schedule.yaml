@@ -9,8 +9,6 @@ blueprint:
     - **Schedule 3** when nobody is home. Any running override is ended first.
 
     **Early morning heating** starts the morning part of today's schedule early, before the next waking alarm, at the schedule's own temperatures.
-
-    The thermostat's **Device work mode** must be set to **Schedule**.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_smart_schedule.yaml
   homeassistant:
