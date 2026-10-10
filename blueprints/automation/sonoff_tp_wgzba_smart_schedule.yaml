@@ -183,13 +183,13 @@ blueprint:
               unit_of_measurement: min
               mode: box
         early_alarm_enabled:
-          name: Start the morning heating early for an early alarm
+          name: Early alarm
           description: When the alarm is earlier than the schedule, starts the morning heating that much earlier.
           default: true
           selector:
             boolean: {}
         late_alarm_enabled:
-          name: Hold the night temperature for a late alarm
+          name: Late alarm
           description: When the alarm is later than the schedule, keeps the night temperature until shortly before it.
           default: true
           selector:
@@ -209,13 +209,13 @@ blueprint:
                     - binary_sensor
                     - input_boolean
         wake_enabled:
-          name: Start the morning heating when someone gets up
+          name: Wake-up
           description: When the awake sensor turns on, starts the morning heating straight away, as for an early alarm.
           default: true
           selector:
             boolean: {}
         wake_duration:
-          name: Awake for at least
+          name: Wake-up delay
           description: >-
             How long the awake sensor must stay on before someone counts as up. Leave
             at zero if the sensor already accounts for this.
@@ -226,7 +226,7 @@ blueprint:
           selector:
             duration: {}
         bedtime_enabled:
-          name: Start the night temperature early at bedtime
+          name: Bedtime
           description: >-
             When the awake sensor turns off, starts the schedule's night temperature
             early. It ends again if someone gets up before the usual time.
@@ -234,7 +234,7 @@ blueprint:
           selector:
             boolean: {}
         sleep_delay:
-          name: Asleep for at least
+          name: Bedtime delay
           description: How long the awake sensor must stay off before everyone counts as asleep.
           default:
             hours: 0
@@ -355,13 +355,13 @@ triggers:
       {{ start.date() == now().date() and p2 < start
          and p2 - timedelta(minutes=1) <= now() < p2 }}
       {% endif %}
-  # Any awake sensor on, held for the Awake for at least time.
+  # Any awake sensor on, held for the wake-up delay.
   - alias: Someone is up
     trigger: template
     id: wake
     value_template: "{{ awake_sensors | select('is_state', 'on') | list | count > 0 }}"
     for: !input wake_duration
-  # Every awake sensor off, held for the Asleep for at least time.
+  # Every awake sensor off, held for the bedtime delay.
   - alias: Everyone asleep
     trigger: template
     id: asleep
@@ -681,7 +681,7 @@ actions:
       woke: >-
         {{ wake_enabled and (run == 'wake' or (run in ['catch-up', 'late-hold'] and wake_on)) }}
       # Everyone has been asleep long enough (every awake sensor off
-      # for at least the Asleep for at least time).
+      # for at least the bedtime delay).
       asleep: >-
         {% set sensors = expand(awake_sensors) %}
         {% set d = sleep_delay %}
