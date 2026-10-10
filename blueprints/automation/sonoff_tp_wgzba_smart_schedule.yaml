@@ -36,12 +36,12 @@ blueprint:
                   model: TP-WGZBA
         state_helper:
           name: State helper
-          description: >-
-            A Text helper where the blueprint keeps its working state, such as the
-            running wake-up stage and what comes next, so it can carry on after a
-            restart or while the schedule is being edited. Create one under Settings
-            > Devices & services > Helpers, with a maximum length of 255, and use it
-            for this thermostat only.
+          description: |
+            Where the blueprint keeps its working state, such as the running routine stage and what comes next, so it can carry on after a restart or while the schedule is being edited.
+
+            Create a **Text** helper under **Settings > Devices & services > Helpers**:
+            - Set its **Maximum length** to 255.
+            - Use it for this thermostat only.
           selector:
             entity:
               filter:
@@ -50,9 +50,10 @@ blueprint:
     home_away:
       name: Home/Away
       icon: mdi:home-account
-      description: >-
-        Where this thermostat looks for people, how long to wait before switching
-        schedule group, and geofencing: heating up before someone gets home.
+      description: |
+        Where this thermostat looks for people, and how long to wait before switching schedule group.
+
+        **Geofencing** heats up before someone gets home.
       collapsed: false
       input:
         heated_areas:
@@ -95,10 +96,10 @@ blueprint:
             duration: {}
         geofencing_distance:
           name: Geofencing distance
-          description: >-
-            While nobody is home, pre-heats once someone heading home is within this
-            distance, using the Proximity integration for the home zone. Set to 0 to
-            turn this off.
+          description: |
+            While nobody is home, pre-heats once someone heading home is within this distance.
+
+            Uses the **Proximity** integration for the home zone. Set to 0 to turn this off.
           default: 5
           selector:
             number:
@@ -131,9 +132,10 @@ blueprint:
               mode: box
         proximity_devices:
           name: Proximity
-          description: >-
-            The Proximity entry for the home zone is found by its name. Pick it here
-            only if it is not found, for example after renaming the zone.
+          description: |
+            Normally found automatically: the Proximity entry named after the home zone.
+
+            Pick it here only if it is not found, for example after renaming the zone.
           default: []
           selector:
             device:
@@ -142,10 +144,10 @@ blueprint:
                 - integration: proximity
         arriving_sensors:
           name: Arriving sensor
-          description: >-
-            Optional binary sensors or toggles that turn on when someone is on their
-            way home, such as a travel time helper. Used as well as Proximity; set the
-            geofencing distance to 0 to use only these.
+          description: |
+            Optional binary sensors or toggles that turn on when someone is on their way home, such as a travel time helper.
+
+            Used as well as Proximity. Set the geofencing distance to 0 to use only these.
           default: []
           selector:
             entity:
@@ -157,11 +159,13 @@ blueprint:
     routine:
       name: Routine
       icon: mdi:alarm
-      description: >-
-        Follows your day rather than the clock: starts the morning heating early
-        or late to match the next waking alarm or when someone gets up, and starts
-        the evening setback early when everyone goes to bed. It only runs while
-        someone is in the home areas.
+      description: |
+        Follows your day rather than the clock:
+        - **Early alarm** and **Late alarm** move the morning heating to match the next waking alarm.
+        - **Getting up** starts it as soon as someone is up.
+        - **Bedtime** starts the night temperature early when everyone goes to bed.
+
+        It only runs while someone is home.
       collapsed: false
       input:
         alarm_sensor:
@@ -196,10 +200,10 @@ blueprint:
             boolean: {}
         awake_sensors:
           name: Awake sensor
-          description: >-
-            A binary sensor or toggle that is on while anyone is up and off once
-            everyone is asleep, such as a helper built from your motion sensors. It
-            must tell a night-time trip from getting up for the day itself.
+          description: |
+            A binary sensor or toggle that is **on while anyone is up** and **off once everyone is asleep**, such as a helper built from your motion sensors.
+
+            It must tell a night-time trip from getting up for the day by itself.
           default: []
           selector:
             entity:
@@ -216,9 +220,10 @@ blueprint:
             boolean: {}
         wake_duration:
           name: Getting up delay
-          description: >-
-            How long the awake sensor must stay on before someone counts as up. Leave
-            at zero if the sensor already accounts for this.
+          description: |
+            How long the awake sensor must stay on before someone counts as up.
+
+            Leave at zero if the sensor already accounts for this.
           default:
             hours: 0
             minutes: 0
@@ -227,9 +232,10 @@ blueprint:
             duration: {}
         bedtime_enabled:
           name: Bedtime
-          description: >-
-            When the awake sensor turns off, starts the schedule's night temperature
-            early. It ends again if someone gets up before the usual time.
+          description: |
+            When the awake sensor turns off, starts the schedule's night temperature early.
+
+            It ends again if someone gets up before the usual time.
           default: true
           selector:
             boolean: {}
