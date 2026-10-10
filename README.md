@@ -15,6 +15,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 - **Home/Away:** switches the thermostat's active schedule group using the native occupancy and zone triggers and conditions.
   - Schedule 1 when the heated areas are occupied.
   - Schedule 2 when the heated areas are empty. A running Boost or Timer override is left alone.
+  - With **Room occupancy** turned off, Schedule 1 is used whenever someone is home, for a room you want on its occupied schedule all day.
   - Schedule 3 when nobody is home (the home zone is empty and every home area is clear). Any running override is ended first.
   - **Geofencing:** while nobody is home, once someone heading home is within the geofencing distance, it switches to the pre-heat group (Schedule 2 by default) so the house warms before they arrive. See [Geofencing](#geofencing) below.
 - **Routine:** moves the start of the morning heating to match the next waking alarm. The wake-up start is the alarm minus the lead time. Early, late, wake and catch-up runs (and a refresh just after midnight) fetch today's schedule for the active group from the thermostat and counts the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period).
@@ -54,7 +55,7 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | Section | Inputs |
 | --- | --- |
 | Thermostat | the TP-WGZBA device, heated areas, state helper (required) |
-| Home/Away | home areas, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min), geofencing distance (5 km), pre-heat schedule group (Schedule 2), geofencing timeout (30 min), Proximity (found from the home zone), arriving sensor (none) |
+| Home/Away | room occupancy (on), home areas, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min), geofencing distance (5 km), pre-heat schedule group (Schedule 2), geofencing timeout (30 min), Proximity (found from the home zone), arriving sensor (none) |
 | Routine | next alarm sensor, lead time (30 min), early alarm (on), late alarm (on), awake sensor (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
 
 ### Example configurations

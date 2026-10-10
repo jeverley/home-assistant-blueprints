@@ -5,7 +5,7 @@ blueprint:
 
     **Home/Away** switches the thermostat between its schedule groups:
     - **Schedule 1** while the heated areas are occupied.
-    - **Schedule 2** when the heated areas are empty. A running Boost or Timer override is left alone.
+    - **Schedule 2** when the heated areas are empty. A running Boost or Timer override is left alone. With **Room occupancy** off, Schedule 1 is used whenever someone is home.
     - **Schedule 3** when nobody is home. Any running override is ended first.
     - **Geofencing:** while nobody is home, someone heading home and close switches it to the pre-heat group early.
 
@@ -62,6 +62,15 @@ blueprint:
         **Geofencing** heats up before someone gets home.
       collapsed: false
       input:
+        occupancy_enabled:
+          name: Room occupancy
+          description: |
+            Uses Schedule 1 while the heated areas are occupied and Schedule 2 when they are empty.
+
+            When off, Schedule 1 is used whenever someone is home.
+          default: true
+          selector:
+            boolean: {}
         home_areas:
           name: Home areas
           description: The areas that count as someone being home.
@@ -292,6 +301,7 @@ variables:
     {{ thermostat_entities | select('match', '^sensor\\..*_override_mode$') | first | default('') }}
   heated_areas: !input heated_areas
   home_areas: !input home_areas
+  occupancy_enabled: !input occupancy_enabled
   early_alarm_enabled: !input early_alarm_enabled
   late_alarm_enabled: !input late_alarm_enabled
   wake_enabled: !input wake_enabled
@@ -945,23 +955,6 @@ actions:
       - variables:
           group_before: "{{ states(schedule_group) }}"
       - choose:
-          - alias: Heated areas occupied, Schedule 1
-            conditions:
-              - condition: occupancy.is_detected
-                target:
-                  area_id: !input heated_areas
-                options:
-                  behavior: any
-                  for: !input detect_delay
-              - alias: No override running
-                condition: template
-                value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
-            sequence:
-              - action: select.select_option
-                target:
-                  entity_id: "{{ schedule_group }}"
-                data:
-                  option: Schedule 1
           - alias: Nobody home but someone heading home, pre-heat
             conditions:
               - condition: zone.occupancy_is_not_detected
@@ -1025,8 +1018,33 @@ actions:
                   entity_id: "{{ schedule_group }}"
                 data:
                   option: Schedule 3
+          # After the nobody-home branches, so Schedule 1 never applies to an
+          # empty house when room occupancy is off.
+          - alias: Heated areas occupied (or room occupancy off), Schedule 1
+            conditions:
+              - condition: or
+                conditions:
+                  - condition: template
+                    value_template: "{{ not occupancy_enabled }}"
+                  - condition: occupancy.is_detected
+                    target:
+                      area_id: !input heated_areas
+                    options:
+                      behavior: any
+                      for: !input detect_delay
+              - alias: No override running
+                condition: template
+                value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
+            sequence:
+              - action: select.select_option
+                target:
+                  entity_id: "{{ schedule_group }}"
+                data:
+                  option: Schedule 1
           - alias: Heated areas clear, Schedule 2
             conditions:
+              - condition: template
+                value_template: "{{ occupancy_enabled }}"
               - condition: occupancy.is_not_detected
                 target:
                   area_id: !input heated_areas
