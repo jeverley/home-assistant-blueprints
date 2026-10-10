@@ -183,14 +183,14 @@ blueprint:
               unit_of_measurement: min
               mode: box
         early_alarm_enabled:
-          name: Start early for an early alarm
-          description: Starts the morning heating early when the alarm is before the schedule.
+          name: Start the morning heating early for an early alarm
+          description: When the alarm is earlier than the schedule, starts the morning heating that much earlier.
           default: true
           selector:
             boolean: {}
         late_alarm_enabled:
           name: Hold the night temperature for a late alarm
-          description: Keeps the night temperature past the schedule's morning start when the alarm is later.
+          description: When the alarm is later than the schedule, keeps the night temperature until shortly before it.
           default: true
           selector:
             boolean: {}
@@ -209,16 +209,16 @@ blueprint:
                     - binary_sensor
                     - input_boolean
         wake_enabled:
-          name: Start when someone is up
-          description: When the awake sensor turns on, starts the morning heating like an early alarm.
+          name: Start the morning heating when someone gets up
+          description: When the awake sensor turns on, starts the morning heating straight away, as for an early alarm.
           default: true
           selector:
             boolean: {}
         wake_duration:
-          name: Wake duration
+          name: Awake for at least
           description: >-
-            The duration the awake sensor must stay on to count as someone being up.
-            Leave at zero if the sensor already accounts for this.
+            How long the awake sensor must stay on before someone counts as up. Leave
+            at zero if the sensor already accounts for this.
           default:
             hours: 0
             minutes: 0
@@ -226,16 +226,16 @@ blueprint:
           selector:
             duration: {}
         bedtime_enabled:
-          name: Cool down early at bedtime
+          name: Start the night temperature early at bedtime
           description: >-
-            When the awake sensor turns off, starts the evening setback early. It ends
-            again if someone gets up before the usual setback time.
+            When the awake sensor turns off, starts the schedule's night temperature
+            early. It ends again if someone gets up before the usual time.
           default: true
           selector:
             boolean: {}
         sleep_delay:
-          name: Sleep delay
-          description: The duration the awake sensor must stay off to count as everyone being asleep.
+          name: Asleep for at least
+          description: How long the awake sensor must stay off before everyone counts as asleep.
           default:
             hours: 0
             minutes: 15
@@ -355,13 +355,13 @@ triggers:
       {{ start.date() == now().date() and p2 < start
          and p2 - timedelta(minutes=1) <= now() < p2 }}
       {% endif %}
-  # Any awake sensor on, held for the wake duration.
+  # Any awake sensor on, held for the Awake for at least time.
   - alias: Someone is up
     trigger: template
     id: wake
     value_template: "{{ awake_sensors | select('is_state', 'on') | list | count > 0 }}"
     for: !input wake_duration
-  # Every awake sensor off, held for the sleep delay.
+  # Every awake sensor off, held for the Asleep for at least time.
   - alias: Everyone asleep
     trigger: template
     id: asleep
@@ -680,8 +680,8 @@ actions:
       # one that is already on.
       woke: >-
         {{ wake_enabled and (run == 'wake' or (run in ['catch-up', 'late-hold'] and wake_on)) }}
-      # Everyone has been asleep for the sleep delay (every awake sensor off
-      # for at least that long).
+      # Everyone has been asleep long enough (every awake sensor off
+      # for at least the Asleep for at least time).
       asleep: >-
         {% set sensors = expand(awake_sensors) %}
         {% set d = sleep_delay %}
@@ -735,7 +735,7 @@ actions:
                   stage_minutes: 0
           - alias: Everyone asleep, start the evening setback early
             conditions:
-              - alias: Everyone has been asleep for the sleep delay
+              - alias: Everyone has been asleep long enough
                 condition: template
                 value_template: "{{ bedtime_enabled and run in ['asleep', 'catch-up'] and asleep }}"
               - alias: The setback is at least a minute away and cooler than now

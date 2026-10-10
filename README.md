@@ -28,8 +28,8 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 
   - **Late alarm** (wake-up start after period 2): just before period 2's usual start, period 1's temperature is held until the wake-up start. With 2 or 3 periods, the device schedule then carries on with period 2. With 4 or more, period 2 then runs for its usual length (never past period 4), so period 3 starts later and later periods keep their usual times.
 
-  - **Someone up early:** when the awake sensor turns on (and stays on for the wake duration, if set), the wake-up starts now, as if the alarm were early. With no alarm set, this still starts the morning early. During a late hold, it ends the hold and, with 4 or more periods, runs period 2 for its usual length from now. Leave the wake sensor empty to only follow the alarm.
-  - **Bedtime:** when the awake sensor has been off for the sleep delay and the evening setback is still ahead (the last period with 3 or more periods, or period 1 again at midnight with 2), the setback starts early as a Timer at its temperature until its usual start. If someone gets up again before then, the Timer ends. Bedtime checks the home zone rather than the home areas, since people asleep may not show on occupancy sensors.
+  - **Someone up early:** when the awake sensor turns on (and stays on for **Awake for at least**, if set), the wake-up starts now, as if the alarm were early. With no alarm set, this still starts the morning early. During a late hold, it ends the hold and, with 4 or more periods, runs period 2 for its usual length from now. Leave the wake sensor empty to only follow the alarm.
+  - **Bedtime:** when the awake sensor has been off for **Asleep for at least** and the evening setback is still ahead (the last period with 3 or more periods, or period 1 again at midnight with 2), the setback starts early as a Timer at its temperature until its usual start. If someone gets up again before then, the Timer ends. Bedtime checks the home zone rather than the home areas, since people asleep may not show on occupancy sensors.
   - Each of these (early alarm, late alarm, wake-up and bedtime) has its own toggle.
 
   Each stage is a Timer override on the thermostat, so it keeps running if Home Assistant restarts.
@@ -55,7 +55,7 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | --- | --- |
 | Thermostat | the TP-WGZBA device, state helper (required) |
 | Home/Away | heated areas, home areas, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min), geofencing distance (5 km), pre-heat schedule group (Schedule 2), geofencing timeout (30 min), Proximity (found from the home zone), arriving sensor (none) |
-| Routine | next alarm sensor, lead time (30 min), start early for an early alarm (on), hold the night temperature for a late alarm (on), awake sensor (none), start when someone is up (on), wake duration (0), cool down early at bedtime (on), sleep delay (15 min) |
+| Routine | next alarm sensor, lead time (30 min), start the morning heating early for an early alarm (on), hold the night temperature for a late alarm (on), awake sensor (none), start the morning heating when someone gets up (on), awake for at least (0), start the night temperature early at bedtime (on), asleep for at least (15 min) |
 
 ### Example configurations
 
@@ -65,7 +65,7 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | Home areas | Every area | Every area |
 | Lead time | 30 min | 10 min |
 | Awake sensor | Someone up helper | Someone up helper |
-| Cool down early at bedtime | Off | On |
+| Start the night temperature early at bedtime | Off | On |
 | Pre-heat schedule group | Schedule 2 | Schedule 1 |
 
 Temperatures come from each thermostat's own schedule, so set the morning periods on the device.
@@ -73,8 +73,8 @@ Temperatures come from each thermostat's own schedule, so set the morning period
 ### Awake sensor
 
 Any binary sensor or input boolean that is **on while anyone is up** and **off once everyone is asleep**. It drives both ends of the day:
-- Turning on (held for the wake duration, if set) is a wake-up, when **Start when someone is up** is on.
-- Turning off (held for the sleep delay, 15 minutes by default) is bedtime, when **Cool down early at bedtime** is on. If it turns on again before the usual setback time, the early setback ends.
+- Turning on (held for **Awake for at least**, if set) is a wake-up, when **Start the morning heating when someone gets up** is on.
+- Turning off (held for **Asleep for at least**, 15 minutes by default) is bedtime, when **Start the night temperature early at bedtime** is on. If it turns on again before the usual setback time, the early setback ends.
 
 Each automation uses it only for its own thermostat, so you can turn wake-ups or bedtime off for a bedroom and keep them for a living room.
 
@@ -85,8 +85,8 @@ The sensor has to tell real getting up from a trip to the bathroom, and real bed
   2. A **History stats** sensor on the group: type **time**, state `on`, start `{{ now() - timedelta(minutes=15) }}`, end `{{ now() }}`.
   3. A **Threshold** sensor on the history stats: upper limit 0.08 hours (5 minutes), with a small hysteresis.
 
-  This turns on after about 5 minutes of motion within 15 minutes, wherever it happens, and off about 15 minutes after the house goes quiet. Pauses and moving between rooms only lower the total, and a short bathroom trip stays under the limit. Use it with a wake duration of zero.
-- **Motion held through short pauses (simpler):** a **Template** binary sensor that is on while any motion sensor in the group is on, with **Delay off** set to about 2 minutes. Use it with a wake duration of around 10 minutes and a longer sleep delay.
+  This turns on after about 5 minutes of motion within 15 minutes, wherever it happens, and off about 15 minutes after the house goes quiet. Pauses and moving between rooms only lower the total, and a short bathroom trip stays under the limit. Use it with **Awake for at least** at zero.
+- **Motion held through short pauses (simpler):** a **Template** binary sensor that is on while any motion sensor in the group is on, with **Delay off** set to about 2 minutes. Use it with **Awake for at least** around 10 minutes and a longer **Asleep for at least**.
 
 A quiet evening on the sofa can look like everyone asleep to motion sensors. Keep the sensor on while there are other signs of people up, for example by grouping the motion helper with the TV or the living room lights (a **Group** with **All entities** off, so it is on when any member is on), or use a **Bayesian** sensor that combines motion with signals such as phones charging or bedroom lights.
 
