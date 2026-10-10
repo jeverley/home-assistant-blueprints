@@ -16,7 +16,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
   - Schedule 1 when the heated areas are occupied.
   - Schedule 2 when the heated areas are empty. A running Boost or Timer override is left alone.
   - Schedule 3 when nobody is home (the home zone is empty and every home area is clear). Any running override is ended first.
-- **Routine:** moves the start of the morning heating to match the next waking alarm. The routine start is the alarm minus the lead time. Routine runs (and a refresh just after midnight) read today's schedule for the active group, fetching it from the thermostat when needed, and counts the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period).
+- **Routine:** moves the start of the morning heating to match the next waking alarm. The routine start is the alarm minus the lead time. Routine runs (and a refresh just after midnight) fetch today's schedule for the active group from the thermostat and counts the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period).
   - **Early alarm** (routine start before period 2): today's morning starts early, at the schedule's own temperatures.
 
     | Configured periods | Typical schedule | What happens |
@@ -32,7 +32,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
   Each stage is a Timer override on the thermostat, so it keeps running if Home Assistant restarts.
 - **Skips:** alarm-based changes only happen when the alarm is today; a wake-up works with no alarm or a later one. The routine is skipped when period 2 is not warmer than period 1, when a schedule temperature cannot be read, when an override is already running, or when nobody is in the home areas.
 - **Catch up:** the early and late windows are checked again when Home Assistant starts and when automations reload, so a restart inside either window still applies it.
-- **Resilience:** runs in queued mode (max 10, silent), re-applies the schedule group when its select recovers from `unavailable` or `unknown`, and stops with an error in the trace if the device is missing an expected entity. If the fetch fails, schedule group switching still runs, but the routine does not.
+- **Resilience:** runs in queued mode (max 10, silent), re-applies the schedule group when its select recovers from `unavailable` or `unknown`, and stops with an error in the trace if the device is missing an expected entity. Fetch errors are tolerated: if the thermostat is not answering, any stage applied from older data fails too, and schedule group switching still runs. A 30 second wait after ending or applying an override lets the thermostat report its new state.
 
 #### Example (4 periods)
 
@@ -89,14 +89,14 @@ A Bayesian sensor that combines motion with other signals (a phone coming off ch
 - The option strings (`Schedule 1/2/3`, `Boost`, `Timer`, `Idle` and the day names) and entity types come from that ZHA support.
 - The Device work mode must be Schedule for the on-device schedule to apply. The blueprint does not check it.
 - If the routine start falls before midnight (an alarm just after 00:00), the routine is skipped, because the fetched schedule would be for the wrong day.
-- With 4 or more periods, the follow-on stages (period 3 after an early start, period 2 after a late hold) only run when the Timer that ended was the routine's own: period 2's temperature for period 2's usual length after an early start, or period 1's temperature ending at the alarm start after a late hold, each within 2 minutes. A manual Timer would have to match both to be mistaken for one. If Home Assistant restarts during an early start, the restarted stage is shorter, so its period 3 follow-on does not run and the device carries on with its normal schedule. If Home Assistant is down when a stage ends, its follow-on does not run either.
+- With 4 or more periods, the follow-on stages (period 3 after an early start, period 2 after a late hold) only run when the Timer that ended was the routine's own. After an early start, it must have had period 2's temperature and run for the override period that an automation (not a person in the UI) set, within 2 minutes. After a late hold, it must have had period 1's temperature and ended at the alarm start, within 2 minutes. If Home Assistant is down when a stage ends, its follow-on does not run and the device carries on with its normal schedule.
 - During a late hold and its period 2 stage, schedule group switching for the heated areas waits until they end. Without a wake sensor, anyone up before the routine start stays at period 1's temperature. With one, the hold ends when it reports someone up.
 - Heated areas and home areas are both required. If either is empty, the automation stops with an error.
 - The routine needs someone anywhere in the home areas, so a downstairs thermostat heats while people are still in bed upstairs. It cannot be limited to one room, so a spare bedroom thermostat sharing the same alarm sensor would also heat whenever someone is home.
 - Occupancy for the heated and home areas uses occupancy sensors (device class `occupancy`) only. For an area with only a motion sensor, create an occupancy sensor from it, for example a template binary sensor with a delay off.
 - The trigger ids `prewarm`, `late-hold`, `wake`, `override-ended`, `catch-up` and `new-day` are fixed because the actions depend on them.
 
-- Fetching the schedule selects today in the thermostat's **Schedule operating day** select, which replaces whatever day is shown for editing. To avoid that, the blueprint only fetches on routine runs and just after midnight, and skips the fetch when the selects already hold today's schedule (fetched today, after the last group change and schedule apply). If someone changed the operating day or a period in the UI in the last 2 minutes, the run waits until they have stopped for 2 minutes (up to 15 minutes, after which it stops without fetching). Unapplied edits left untouched for longer than that can be replaced by the next fetch.
+- Fetching the schedule selects today in the thermostat's **Schedule operating day** select, which replaces whatever day is shown for editing. The blueprint only fetches on routine runs, just after midnight, and after it switches schedule group while a late alarm is still ahead. If someone changed the operating day or a period in the UI in the last 3 minutes, a routine run waits until they have stopped for 3 minutes. After 5 minutes it gives up: it skips the routine for that run without fetching, but still switches schedule group. Unapplied edits left untouched for longer than 3 minutes can be replaced by the next fetch.
 
 ### Known issue
 
