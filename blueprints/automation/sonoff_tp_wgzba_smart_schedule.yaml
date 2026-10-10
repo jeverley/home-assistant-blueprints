@@ -8,7 +8,9 @@ blueprint:
     - **Schedule 2** when the heated areas are empty. A running Boost or Timer override is left alone.
     - **Schedule 3** when nobody is home. Any running override is ended first.
 
-    **Early morning heating** starts the morning part of today's schedule early, before the next waking alarm, at the schedule's own temperatures.
+    **Routine** moves the start of the morning heating to match the next waking alarm:
+    - An **early alarm** starts today's schedule early, at its own temperatures.
+    - A **late alarm** keeps the night temperature until shortly before it.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_smart_schedule.yaml
   homeassistant:
@@ -72,10 +74,13 @@ blueprint:
             seconds: 0
           selector:
             duration: {}
-    prewarm:
-      name: Early morning heating
+    routine:
+      name: Routine
       icon: mdi:alarm
-      description: When to start the morning heating. It only runs while someone is in the home areas.
+      description: >-
+        Moves the start of the morning heating to match the next waking alarm,
+        earlier or later than the schedule. It only runs while someone is in
+        the home areas.
       collapsed: false
       input:
         alarm_sensor:
@@ -171,22 +176,28 @@ triggers:
       {% set e = device_entities(thermostat_device)
            | select('match', '^select\\..*_schedule_group$') | first | default('') %}
       {{ e != '' and states(e) not in ['unavailable', 'unknown'] }}
-  - alias: Early heating window opened
+  - alias: Early start window opened
     trigger: template
     id: prewarm
     value_template: >-
       {% set a = states(alarm_sensor) | as_datetime(none) %}
       {{ a is not none and a - timedelta(minutes=prewarm_lead | int) <= now() < a }}
-  # The window may already be open when Home Assistant starts or automations
-  # reload, so the template trigger above would not fire. Check it again then.
-  - alias: Home Assistant started
-    trigger: homeassistant
-    id: prewarm
-    event: start
-  - alias: Automations reloaded
-    trigger: event
-    id: prewarm
-    event_type: automation_reloaded
+  # Reads the period 2 time from the last fetch, so it can fire just before
+  # period 2 starts when the alarm is later than usual.
+  - alias: Late start hold due
+    trigger: template
+    id: late-hold
+    value_template: >-
+      {% set a = states(alarm_sensor) | as_datetime(none) %}
+      {% set p = device_entities(thermostat_device)
+           | select('match', '^select\\..*_schedule_period_2_time$') | first | default('') %}
+      {% set s = states(p) if p != '' else '' %}
+      {% if a is none or s is not match('^[0-9]{2}:[0-9]{2}') %}{{ false }}{% else %}
+      {% set start = (a | as_local) - timedelta(minutes=prewarm_lead | int) %}
+      {% set p2 = today_at(s[:5]) %}
+      {{ start.date() == now().date() and p2 < start
+         and p2 - timedelta(minutes=1) <= now() < start }}
+      {% endif %}
   - alias: Timer override ended
     trigger: template
     id: override-ended
@@ -194,6 +205,21 @@ triggers:
       {% set e = device_entities(thermostat_device)
            | select('match', '^sensor\\..*_override_mode$') | first | default('') %}
       {{ e != '' and is_state(e, 'Idle') }}
+  # The early or late window may already be open when Home Assistant starts or
+  # automations reload, so the template triggers above would not fire.
+  - alias: Home Assistant started
+    trigger: homeassistant
+    id: catch-up
+    event: start
+  - alias: Automations reloaded
+    trigger: event
+    id: catch-up
+    event_type: automation_reloaded
+  # Refreshes the fetched schedule for the new day, for the late start trigger.
+  - alias: New day
+    trigger: time
+    id: new-day
+    at: "00:01:00"
 
 conditions: []
 
@@ -218,22 +244,18 @@ actions:
       - stop: Set at least one heated area and one home area.
         error: true
   - variables:
-      # Inside the early heating window, with the window and alarm on the same day.
-      in_window: >-
-        {% set a = states(alarm_sensor) | as_datetime(none) %}
-        {% if a is none %}{{ false }}{% else %}
-        {% set a = a | as_local %}
-        {% set start = a - timedelta(minutes=prewarm_lead | int) %}
-        {{ start <= now() < a and start.date() == a.date() }}
-        {% endif %}
       # The template trigger fires on any change to Idle; only Timer counts.
       timer_ended: >-
         {{ trigger.id == 'override-ended' and trigger.from_state is not none
            and trigger.from_state.state == 'Timer' }}
+  # Every run fetches today's schedule for the active group. For routine
+  # triggers a failed fetch stops the run, so the routine fails closed. For
+  # other triggers it is only a refresh, so a failure must not block the
+  # schedule group switching below.
   - alias: Fetch today's schedule
     if:
       - condition: template
-        value_template: "{{ (trigger.id == 'prewarm' and in_window) or timer_ended }}"
+        value_template: "{{ trigger.id in ['prewarm', 'late-hold', 'override-ended', 'catch-up'] }}"
     then:
       - alias: Select today as the operating day
         action: select.select_option
@@ -246,36 +268,61 @@ actions:
         action: button.press
         target:
           entity_id: "{{ fetch_button }}"
-      - alias: Read the configured periods
-        variables:
-          # Periods in order as {time, temp}, stopping at the first unset (NULL)
-          # time. Period 1 is fixed at 00:00. A missing temperature is none.
-          periods: >-
-            {% set ns = namespace(out=[], open=true) %}
-            {% for i in range(1, 13) %}
-              {% set t = thermostat_entities
-                   | select('match', '^select\\..*_schedule_period_' ~ i ~ '_time$')
-                   | first | default('') %}
-              {% set p = thermostat_entities
-                   | select('match', '^number\\..*_schedule_period_' ~ i ~ '_temp$')
-                   | first | default('') %}
-              {% set s = states(t) if t != '' else '' %}
-              {% if ns.open and s is match('^[0-9]{2}:[0-9]{2}') %}
-                {% set ns.out = ns.out + [{'time': s[:5], 'temp': states(p) | float(none)}] %}
-              {% else %}
-                {% set ns.open = false %}
-              {% endif %}
-            {% endfor %}
-            {{ ns.out }}
-          # With 4 or more periods, period 3 is daytime heating, so the morning
-          # is shifted earlier. With 2 or 3, period 3 (if any) is the evening
-          # setback, so period 2 is only started early.
-          shift: "{{ periods | count >= 4 }}"
+    else:
+      - alias: Select today as the operating day
+        continue_on_error: true
+        action: select.select_option
+        target:
+          entity_id: "{{ operating_day }}"
+        data:
+          option: "{{ now().strftime('%A') }}"
+      - alias: Fetch the active schedule
+        continue_on_error: true
+        action: button.press
+        target:
+          entity_id: "{{ fetch_button }}"
+  - alias: Read the configured periods and today's routine start
+    variables:
+      # Periods in order as {time, temp}, stopping at the first unset (NULL)
+      # time. Period 1 is fixed at 00:00. A missing temperature is none.
+      periods: >-
+        {% set ns = namespace(out=[], open=true) %}
+        {% for i in range(1, 13) %}
+          {% set t = thermostat_entities
+               | select('match', '^select\\..*_schedule_period_' ~ i ~ '_time$')
+               | first | default('') %}
+          {% set p = thermostat_entities
+               | select('match', '^number\\..*_schedule_period_' ~ i ~ '_temp$')
+               | first | default('') %}
+          {% set s = states(t) if t != '' else '' %}
+          {% if ns.open and s is match('^[0-9]{2}:[0-9]{2}') %}
+            {% set ns.out = ns.out + [{'time': s[:5], 'temp': states(p) | float(none)}] %}
+          {% else %}
+            {% set ns.open = false %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.out }}
+      # With 4 or more periods, period 3 is daytime heating, so an early start
+      # shifts the morning earlier. With 2 or 3, period 3 (if any) is the
+      # evening setback, so period 2 is only started early.
+      shift: "{{ periods | count >= 4 }}"
+      # Alarm minus lead time, when the alarm is today and still ahead.
+      # Otherwise blank.
+      routine_start: >-
+        {% set a = states(alarm_sensor) | as_datetime(none) %}
+        {% if a is none %}{{ '' }}{% else %}
+        {% set a = a | as_local %}
+        {% set start = a - timedelta(minutes=prewarm_lead | int) %}
+        {{ start.isoformat() if start.date() == now().date() and now() < a else '' }}
+        {% endif %}
   - choose:
-      - alias: Start period 2 early
+      - alias: Early alarm, start period 2 early
         conditions:
-          - condition: template
-            value_template: "{{ trigger.id == 'prewarm' and in_window }}"
+          - alias: The early start window is open
+            condition: template
+            value_template: >-
+              {{ trigger.id in ['prewarm', 'catch-up'] and routine_start != ''
+                 and (routine_start | as_datetime) <= now() }}
           - alias: Period 2 is set and warmer than period 1
             condition: template
             value_template: >-
@@ -290,7 +337,7 @@ actions:
           - alias: No override already running
             condition: template
             value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
-          - alias: Someone is in the house
+          - alias: Someone is in the home areas
             condition: occupancy.is_detected
             target:
               area_id: !input home_areas
@@ -299,11 +346,10 @@ actions:
               for: "00:00:00"
         sequence:
           - variables:
-              # Shift: run period 2 for its usual length from the window start.
+              # Shift: run period 2 for its usual length from the routine start.
               # Otherwise: run period 2 until its usual start.
               stage_1_minutes: >-
-                {% set a = states(alarm_sensor) | as_datetime | as_local %}
-                {% set start = a - timedelta(minutes=prewarm_lead | int) %}
+                {% set start = routine_start | as_datetime %}
                 {% set p2 = today_at(periods[1].time) %}
                 {% set end = start + (today_at(periods[2].time) - p2) if shift else p2 %}
                 {{ min(((end - now()).total_seconds() / 60) | round(0) | int, 1439) }}
@@ -332,7 +378,68 @@ actions:
             action: button.press
             target:
               entity_id: "{{ override_apply }}"
-      - alias: Run period 3 until its usual start
+      - alias: Late alarm, hold period 1 past period 2's start
+        conditions:
+          - alias: Triggered for a late start
+            condition: template
+            value_template: "{{ trigger.id in ['late-hold', 'catch-up'] and routine_start != '' }}"
+          - alias: Period 2 is set and warmer than period 1
+            condition: template
+            value_template: >-
+              {{ periods | count >= 2
+                 and periods[0].temp is not none and periods[1].temp is not none
+                 and periods[1].temp > periods[0].temp }}
+          - alias: Period 2 is due, and the routine start is at least a minute later
+            condition: template
+            value_template: >-
+              {% set start = routine_start | as_datetime %}
+              {% set p2 = today_at(periods[1].time) %}
+              {{ p2 < start and now() >= p2 - timedelta(minutes=1)
+                 and (start - now()).total_seconds() >= 60 }}
+          - alias: No override already running
+            condition: template
+            value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
+          - alias: Someone is in the home areas
+            condition: occupancy.is_detected
+            target:
+              area_id: !input home_areas
+            options:
+              behavior: any
+              for: "00:00:00"
+        sequence:
+          - variables:
+              # Hold until the routine start. With 4 or more periods, stop no
+              # later than period 3, so later periods keep their usual times.
+              hold_minutes: >-
+                {% set start = routine_start | as_datetime %}
+                {% set end = min(start, today_at(periods[2].time)) if shift else start %}
+                {{ min(((end - now()).total_seconds() / 60) | round(0) | int, 1439) }}
+          - alias: Stop if the hold would be under a minute
+            condition: template
+            value_template: "{{ hold_minutes >= 1 }}"
+          - alias: Set override mode to Timer
+            action: select.select_option
+            target:
+              entity_id: "{{ override_mode }}"
+            data:
+              option: Timer
+          - alias: Set period 1 temperature
+            action: number.set_value
+            target:
+              entity_id: "{{ override_target }}"
+            data:
+              value: "{{ periods[0].temp }}"
+          - alias: Set the hold length
+            action: number.set_value
+            target:
+              entity_id: "{{ override_period }}"
+            data:
+              value: "{{ hold_minutes }}"
+          - alias: Apply override
+            action: button.press
+            target:
+              entity_id: "{{ override_apply }}"
+      - alias: Early alarm, run period 3 until its usual start
         conditions:
           - condition: template
             value_template: "{{ timer_ended and shift }}"
@@ -347,7 +454,7 @@ actions:
             condition: template
             value_template: >-
               {{ states(override_target) | float(none) == periods[1].temp }}
-          - alias: Someone is in the house
+          - alias: Someone is in the home areas
             condition: occupancy.is_detected
             target:
               area_id: !input home_areas
