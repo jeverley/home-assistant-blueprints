@@ -17,10 +17,7 @@ blueprint:
       input:
         thermostat_device:
           name: Thermostat device
-          description: >-
-            The TP-WGZBA on ZHA with the custom quirk. Its schedule and override
-            entities are found by their default entity ID endings, so keep those
-            (for example select.bedroom_thermostat_schedule_group).
+          description: A Sonoff TP-WGZBA on ZHA, with the custom quirk installed.
           selector:
             device:
               filter:
@@ -30,6 +27,10 @@ blueprint:
     occupancy:
       name: Occupancy
       icon: mdi:home-account
+      description: >-
+        Switches the thermostat to Schedule 1 while the heated areas are
+        occupied, Schedule 2 when they are empty, and Schedule 3 when nobody
+        is home.
       collapsed: false
       input:
         heated_areas:
@@ -70,6 +71,10 @@ blueprint:
     prewarm:
       name: Early morning heating
       icon: mdi:alarm
+      description: >-
+        Before the next waking alarm, starts the morning heating on the
+        thermostat's schedule early, at the schedule's own temperatures. Only
+        runs while someone is in the home areas.
       collapsed: false
       input:
         alarm_sensor:
