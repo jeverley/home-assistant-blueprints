@@ -15,7 +15,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 - **Occupancy:** switches the thermostat's active schedule group using the native occupancy and zone triggers and conditions.
   - Schedule 1 when the heated areas are occupied.
   - Schedule 2 when the heated areas are empty. A running Boost or Timer override is left alone.
-  - Schedule 3 when nobody is home (the home zone is empty and the whole house is clear). Any running override is ended first.
+  - Schedule 3 when nobody is home (the home zone is empty and every home area is clear). Any running override is ended first.
 - **Early morning heating:** from the lead time before the next waking alarm, the morning part of today's on-device schedule starts early, at the schedule's own temperatures. The blueprint fetches today's schedule for the active group and counts the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period).
 
   | Configured periods | Typical schedule | What happens |
@@ -44,7 +44,7 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C. Alarm 05:30, le
 | Section | Inputs |
 | --- | --- |
 | Thermostat | the TP-WGZBA device |
-| Occupancy | heated areas, whole house areas, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min) |
+| Occupancy | heated areas, home areas, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min) |
 | Early morning heating | next alarm sensor, lead time (30 min) |
 
 ### Example configurations
@@ -52,7 +52,7 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C. Alarm 05:30, le
 | Setting | Bedroom | Living room |
 | --- | --- | --- |
 | Heated areas | Bedroom | Living room |
-| Whole house areas | Every area | Every area |
+| Home areas | Every area | Every area |
 | Lead time | 30 min | 10 min |
 
 Temperatures come from each thermostat's own schedule, so set the morning periods on the device.
@@ -65,8 +65,8 @@ Temperatures come from each thermostat's own schedule, so set the morning period
 - If the early heating window starts before midnight (an alarm just after 00:00), it is skipped, because the fetched schedule would be for the wrong day.
 - The second stage only runs when the Timer that ended still has period 2's temperature as its target, which rules out most manual Timers. A manual Timer at exactly that temperature, ending before period 3, would still be followed by period 3.
 - If Home Assistant is down at the moment the first stage ends, the second stage does not run and the device falls back to its normal schedule.
-- Heated areas and whole house areas are both required. If either is empty, the automation stops with an error.
-- Early heating needs someone anywhere in the whole house areas, so a downstairs thermostat heats while people are still in bed upstairs. It cannot be limited to one room, so a spare bedroom thermostat sharing the same alarm sensor would also heat whenever someone is home.
+- Heated areas and home areas are both required. If either is empty, the automation stops with an error.
+- Early heating needs someone anywhere in the home areas, so a downstairs thermostat heats while people are still in bed upstairs. It cannot be limited to one room, so a spare bedroom thermostat sharing the same alarm sensor would also heat whenever someone is home.
 - The trigger ids `prewarm` and `override-ended` are fixed because the actions depend on them.
 
 ### Known issue

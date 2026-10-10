@@ -30,7 +30,7 @@ blueprint:
     occupancy:
       name: Occupancy
       icon: mdi:home-account
-      collapsed: true
+      collapsed: false
       input:
         heated_areas:
           name: Heated areas
@@ -38,8 +38,8 @@ blueprint:
           selector:
             area:
               multiple: true
-        house_areas:
-          name: Whole house areas
+        home_areas:
+          name: Home areas
           description: Every area that counts as someone being home.
           selector:
             area:
@@ -70,7 +70,7 @@ blueprint:
     prewarm:
       name: Early morning heating
       icon: mdi:alarm
-      collapsed: true
+      collapsed: false
       input:
         alarm_sensor:
           name: Next waking alarm sensor
@@ -123,7 +123,7 @@ variables:
   alarm_sensor: !input alarm_sensor
   prewarm_lead: !input prewarm_lead
   heated_areas: !input heated_areas
-  house_areas: !input house_areas
+  home_areas: !input home_areas
 
 triggers:
   - alias: Heated areas occupied
@@ -140,10 +140,10 @@ triggers:
     options:
       behavior: all
       for: !input clear_delay
-  - alias: Whole house empty
+  - alias: Home areas empty
     trigger: occupancy.cleared
     target:
-      area_id: !input house_areas
+      area_id: !input home_areas
     options:
       behavior: all
       for: !input clear_delay
@@ -202,12 +202,12 @@ actions:
           Could not find every quirk entity on the thermostat device. Check the
           entity IDs still end with their default names.
         error: true
-  - alias: Stop if no heated or whole house areas are set
+  - alias: Stop if no heated or home areas are set
     if:
       - condition: template
-        value_template: "{{ heated_areas | count == 0 or house_areas | count == 0 }}"
+        value_template: "{{ heated_areas | count == 0 or home_areas | count == 0 }}"
     then:
-      - stop: Set at least one heated area and one whole house area.
+      - stop: Set at least one heated area and one home area.
         error: true
   - variables:
       # Inside the early heating window, with the window and alarm on the same day.
@@ -285,7 +285,7 @@ actions:
           - alias: Someone is in the house
             condition: occupancy.is_detected
             target:
-              area_id: !input house_areas
+              area_id: !input home_areas
             options:
               behavior: any
               for: "00:00:00"
@@ -342,7 +342,7 @@ actions:
           - alias: Someone is in the house
             condition: occupancy.is_detected
             target:
-              area_id: !input house_areas
+              area_id: !input home_areas
             options:
               behavior: any
               for: "00:00:00"
@@ -396,7 +396,7 @@ actions:
               zone: !input home_zone
           - condition: occupancy.is_not_detected
             target:
-              area_id: !input house_areas
+              area_id: !input home_areas
             options:
               behavior: all
               for: !input clear_delay
