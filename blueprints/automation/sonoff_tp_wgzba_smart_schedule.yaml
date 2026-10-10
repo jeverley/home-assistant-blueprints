@@ -11,7 +11,7 @@ blueprint:
     **Routine** moves the start of the morning heating to match the next waking alarm:
     - An **early alarm** starts today's schedule early, at its own temperatures.
     - A **late alarm** keeps the night temperature until shortly before it.
-    - Someone **up early** in the wake areas starts it straight away, alarm or not.
+    - Someone **up early**, moving about the home areas, starts it straight away, alarm or not.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_smart_schedule.yaml
   homeassistant:
@@ -102,20 +102,19 @@ blueprint:
               step: 5
               unit_of_measurement: min
               mode: box
-        wake_areas:
-          name: Wake areas
+        wake_enabled:
+          name: Start when someone is up
           description: >-
-            Areas where sustained movement means someone is up, such as the
-            landing or kitchen. A wake-up starts the morning heating like an
-            early alarm. Avoid bedrooms, where turning over in bed counts as
-            movement. Leave empty to only follow the alarm.
-          default: []
+            Starts the morning heating when there is sustained movement in the
+            home areas, like an early alarm. Turn off to only follow the alarm.
+          default: true
           selector:
-            area:
-              multiple: true
+            boolean: {}
         wake_duration:
           name: Wake duration
-          description: The duration a motion sensor in the wake areas must stay on to count as someone being up.
+          description: >-
+            The duration there must be continuous movement somewhere in the home
+            areas to count as someone being up. Movement can pass between rooms.
           default:
             hours: 0
             minutes: 3
@@ -137,6 +136,9 @@ trigger_variables:
   thermostat_device: !input thermostat_device
   alarm_sensor: !input alarm_sensor
   prewarm_lead: !input prewarm_lead
+  home_areas: !input home_areas
+  wake_enabled: !input wake_enabled
+  earliest_wake: !input earliest_wake
 
 variables:
   # The thermostat's ZHA entities, matched on the device by domain and
@@ -226,14 +228,18 @@ triggers:
       {{ start.date() == now().date() and p2 < start
          and p2 - timedelta(minutes=1) <= now() < start }}
       {% endif %}
+  # True while any motion sensor in the home areas is on, after the earliest
+  # wake time. Held for the wake duration, so movement can pass between rooms.
   - alias: Someone is up
-    trigger: motion.detected
+    trigger: template
     id: wake
-    target:
-      area_id: !input wake_areas
-    options:
-      behavior: each
-      for: !input wake_duration
+    value_template: >-
+      {{ wake_enabled and now() >= today_at(earliest_wake)
+         and home_areas | map('area_entities') | sum(start=[])
+             | select('match', '^binary_sensor\\.')
+             | select('is_state_attr', 'device_class', 'motion')
+             | select('is_state', 'on') | list | count > 0 }}
+    for: !input wake_duration
   - alias: Timer override ended
     trigger: template
     id: override-ended
@@ -342,7 +348,7 @@ actions:
       # shifts the morning earlier. With 2 or 3, period 3 (if any) is the
       # evening setback, so period 2 is only started early.
       shift: "{{ periods | count >= 4 }}"
-      # Someone was confirmed up in the wake areas, after the earliest wake time.
+      # Someone was confirmed up in the home areas, after the earliest wake time.
       woke: "{{ trigger.id == 'wake' and now() >= today_at(earliest_wake) }}"
       # Alarm minus lead time, when the alarm is today and still ahead.
       # Otherwise blank.
