@@ -113,14 +113,36 @@ blueprint:
         wake_duration:
           name: Wake duration
           description: >-
-            The duration there must be continuous movement somewhere in the home
+            The duration there must be ongoing movement somewhere in the home
             areas to count as someone being up. Movement can pass between rooms.
           default:
             hours: 0
-            minutes: 3
+            minutes: 10
             seconds: 0
           selector:
             duration: {}
+        wake_gap:
+          name: Gap tolerance
+          description: >-
+            Pauses in movement shorter than this do not reset the wake duration,
+            such as between leaving one sensor's view and reaching the next.
+          default: 2
+          selector:
+            number:
+              min: 1
+              max: 10
+              step: 1
+              unit_of_measurement: min
+              mode: box
+        wake_two_areas:
+          name: Require movement in two areas
+          description: >-
+            Only counts someone as up once there has been movement in at least two
+            home areas, such as the bedroom and the landing. This stops a restless
+            sleeper from counting.
+          default: true
+          selector:
+            boolean: {}
         earliest_wake:
           name: Earliest wake time
           description: Movement before this time is ignored.
@@ -139,6 +161,9 @@ trigger_variables:
   home_areas: !input home_areas
   wake_enabled: !input wake_enabled
   earliest_wake: !input earliest_wake
+  wake_duration: !input wake_duration
+  wake_gap: !input wake_gap
+  wake_two_areas: !input wake_two_areas
 
 variables:
   # The thermostat's ZHA entities, matched on the device by domain and
@@ -228,17 +253,26 @@ triggers:
       {{ start.date() == now().date() and p2 < start
          and p2 - timedelta(minutes=1) <= now() < start }}
       {% endif %}
-  # True while any motion sensor in the home areas is on, after the earliest
-  # wake time. Held for the wake duration, so movement can pass between rooms.
+  # Movement is active while any motion sensor in the home areas is on or
+  # changed within the gap tolerance, so short pauses do not count as stopping.
+  # Optionally, motion must also have been seen in at least two areas within
+  # the wake duration plus the gap. Held for the wake duration.
   - alias: Someone is up
     trigger: template
     id: wake
     value_template: >-
-      {{ wake_enabled and now() >= today_at(earliest_wake)
-         and home_areas | map('area_entities') | sum(start=[])
-             | select('match', '^binary_sensor\\.')
-             | select('is_state_attr', 'device_class', 'motion')
-             | select('is_state', 'on') | list | count > 0 }}
+      {% if not wake_enabled or now() < today_at(earliest_wake) %}{{ false }}{% else %}
+      {% set sensors = expand(home_areas | map('area_entities') | sum(start=[])
+           | select('match', '^binary_sensor\\.')
+           | select('is_state_attr', 'device_class', 'motion') | list) %}
+      {% set on = sensors | selectattr('state', 'eq', 'on') | list %}
+      {% set gap_start = now() - timedelta(minutes=wake_gap | int) %}
+      {% set active = on | count > 0
+           or sensors | selectattr('last_changed', 'ge', gap_start) | list | count > 0 %}
+      {% set seen = on + (sensors | selectattr('last_changed', 'ge', gap_start - timedelta(**wake_duration)) | list) %}
+      {% set areas = seen | map(attribute='entity_id') | map('area_id') | reject('none') | unique | list | count %}
+      {{ active and (not wake_two_areas or areas >= 2) }}
+      {% endif %}
     for: !input wake_duration
   - alias: Timer override ended
     trigger: template
