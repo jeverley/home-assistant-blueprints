@@ -25,7 +25,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
     | 2 or 3 | Night, day (and evening setback) | Period 2 starts early and runs until its usual start, so period 3 (the evening setback) is never pulled into the morning |
     | 4 or more | Night, morning, daytime, ... | The morning shifts earlier. Period 2 runs for its usual length from the early start, then period 3 runs until its usual start, when the device schedule carries on |
 
-  - **Late alarm** (routine start after period 2): just before period 2's usual start, period 1's temperature is held until the routine start, then the device schedule carries on with period 2. With 4 or more periods, the hold ends no later than period 3, so later periods keep their usual times.
+  - **Late alarm** (routine start after period 2): just before period 2's usual start, period 1's temperature is held until the routine start. With 2 or 3 periods, the device schedule then carries on with period 2. With 4 or more, period 2 then runs for its usual length (never past period 4), so period 3 starts later and later periods keep their usual times.
 
   Each stage is a Timer override on the thermostat, so it keeps running if Home Assistant restarts.
 - **Skips:** the routine only acts when the alarm is today. It is skipped when period 2 is not warmer than period 1, when a schedule temperature cannot be read, when an override is already running, or when nobody is in the home areas.
@@ -36,12 +36,13 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 
 Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes.
 
-| Time | Usual schedule | Alarm 05:30 (early) | Alarm 07:30 (late) |
+| Time | Usual schedule | Alarm 05:30 (early) | Alarm 09:00 (late) |
 | --- | --- | --- | --- |
 | 05:00 to 06:30 | 16 °C | 21 °C | 16 °C |
-| 06:30 to 07:00 | 21 °C | 18 °C | 16 °C (held) |
-| 07:00 to 08:00 | 21 °C | 18 °C | 21 °C |
-| From 08:00 | 18 °C | 18 °C | 18 °C |
+| 06:30 to 08:00 | 21 °C | 18 °C | 16 °C (held) |
+| 08:00 to 08:30 | 18 °C | 18 °C | 16 °C (held) |
+| 08:30 to 10:00 | 18 °C | 18 °C | 21 °C (period 2, its usual 90 minutes) |
+| From 10:00 | 18 °C | 18 °C | 18 °C |
 
 ### Inputs
 
@@ -67,9 +68,9 @@ Temperatures come from each thermostat's own schedule, so set the morning period
 - The option strings (`Schedule 1/2/3`, `Boost`, `Timer`, `Idle` and the day names) and entity types come from that ZHA support.
 - The Device work mode must be Schedule for the on-device schedule to apply. The blueprint does not check it.
 - If the routine start falls before midnight (an alarm just after 00:00), the routine is skipped, because the fetched schedule would be for the wrong day.
-- For an early alarm with 4 or more periods, the period 3 stage only runs when the Timer that ended still has period 2's temperature as its target, which rules out most manual Timers. A manual Timer at exactly that temperature, ending before period 3, would still be followed by period 3.
-- If Home Assistant is down at the moment the early period 2 stage ends, the period 3 stage does not run and the device falls back to its normal schedule.
-- During a late hold, schedule group switching for the heated areas waits until the hold ends, and anyone up before the routine start stays at period 1's temperature.
+- Checking the Timer target rules out most manual Timers. A manual Timer at exactly the expected temperature, ending inside a routine window, would still be followed by the next stage.
+- With 4 or more periods, the follow-on stages (period 3 after an early alarm, period 2 after a late hold) only run when the Timer that ended has the expected target: period 2's temperature after an early start, period 1's after a late hold. If Home Assistant is down when that Timer ends, the follow-on stage does not run and the device falls back to its normal schedule.
+- During a late hold and its period 2 stage, schedule group switching for the heated areas waits until they end, and anyone up before the routine start stays at period 1's temperature.
 - Heated areas and home areas are both required. If either is empty, the automation stops with an error.
 - The routine needs someone anywhere in the home areas, so a downstairs thermostat heats while people are still in bed upstairs. It cannot be limited to one room, so a spare bedroom thermostat sharing the same alarm sensor would also heat whenever someone is home.
 - The trigger ids `prewarm`, `late-hold`, `override-ended`, `catch-up` and `new-day` are fixed because the actions depend on them.

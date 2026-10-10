@@ -408,12 +408,11 @@ actions:
               for: "00:00:00"
         sequence:
           - variables:
-              # Hold until the routine start. With 4 or more periods, stop no
-              # later than period 3, so later periods keep their usual times.
+              # Hold until the routine start. With 4 or more periods, period 2
+              # then runs for its usual length (the next branch).
               hold_minutes: >-
                 {% set start = routine_start | as_datetime %}
-                {% set end = min(start, today_at(periods[2].time)) if shift else start %}
-                {{ min(((end - now()).total_seconds() / 60) | round(0) | int, 1439) }}
+                {{ min(((start - now()).total_seconds() / 60) | round(0) | int, 1439) }}
           - alias: Stop if the hold would be under a minute
             condition: template
             value_template: "{{ hold_minutes >= 1 }}"
@@ -482,6 +481,67 @@ actions:
               value: >-
                 {{ min(((today_at(periods[2].time) - now()).total_seconds() / 60)
                    | round(0) | int, 1439) }}
+          - alias: Apply override
+            action: button.press
+            target:
+              entity_id: "{{ override_apply }}"
+      - alias: Late alarm, run period 2 for its usual length
+        conditions:
+          - condition: template
+            value_template: "{{ timer_ended and shift and routine_start != '' }}"
+          - alias: Period 2 has a temperature
+            condition: template
+            value_template: "{{ periods[1].temp is not none }}"
+          - alias: The Timer that ended was our late hold (target was the period 1 temperature)
+            condition: template
+            value_template: >-
+              {{ periods[0].temp is not none
+                 and states(override_target) | float(none) == periods[0].temp }}
+          - alias: The routine start is after period 2's usual start, and period 2 has time left
+            condition: template
+            value_template: >-
+              {% set start = routine_start | as_datetime %}
+              {% set p2 = today_at(periods[1].time) %}
+              {% set end = start + (today_at(periods[2].time) - p2) %}
+              {{ p2 < start and now() >= p2 and (end - now()).total_seconds() >= 60 }}
+          - alias: Someone is in the home areas
+            condition: occupancy.is_detected
+            target:
+              area_id: !input home_areas
+            options:
+              behavior: any
+              for: "00:00:00"
+        sequence:
+          - variables:
+              # Period 2's usual length from the routine start, but never past
+              # period 4 (usually the evening setback).
+              stage_2_minutes: >-
+                {% set start = routine_start | as_datetime %}
+                {% set p2 = today_at(periods[1].time) %}
+                {% set end = start + (today_at(periods[2].time) - p2) %}
+                {% if periods | count >= 4 %}{% set end = min(end, today_at(periods[3].time)) %}{% endif %}
+                {{ min(((end - now()).total_seconds() / 60) | round(0) | int, 1439) }}
+          - alias: Stop if period 2 would be under a minute
+            condition: template
+            value_template: "{{ stage_2_minutes >= 1 }}"
+          - alias: Set override mode to Timer
+            action: select.select_option
+            target:
+              entity_id: "{{ override_mode }}"
+            data:
+              option: Timer
+          - alias: Set period 2 temperature
+            action: number.set_value
+            target:
+              entity_id: "{{ override_target }}"
+            data:
+              value: "{{ periods[1].temp }}"
+          - alias: Set the period 2 length
+            action: number.set_value
+            target:
+              entity_id: "{{ override_period }}"
+            data:
+              value: "{{ stage_2_minutes }}"
           - alias: Apply override
             action: button.press
             target:
