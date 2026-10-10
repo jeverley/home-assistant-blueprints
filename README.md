@@ -100,7 +100,7 @@ The blueprint finds that Proximity entry by its name, which defaults to the home
 
 While nobody is home, someone heading home switches the thermostat to the pre-heat group and records the time in the State helper. Pre-heating carries on until someone gets home, even if they stop on the way, or until the geofencing timeout passes, when it goes back to Schedule 3. Turn off **Geofencing** to stop it.
 
-An **Arriving sensor** (a binary sensor or toggle) counts as well as Proximity, for example a template helper that is on when a Waze or Google travel time to home is under 15 minutes. Use it with a geofencing distance of 0 to rely on it alone.
+An **Arriving sensor** (a binary sensor or toggle) counts as well as Proximity, for example a template helper that is on when a Waze or Google travel time to home is under 15 minutes.
 
 ### Requirements and caveats
 

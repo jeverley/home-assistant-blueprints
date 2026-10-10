@@ -118,11 +118,11 @@ blueprint:
           description: |
             While nobody is home, pre-heats once someone heading home is within this distance.
 
-            Uses the **Proximity** integration for the home zone. Set to 0 to use only the arriving sensors.
+            Uses the **Proximity** integration for the home zone.
           default: 5
           selector:
             number:
-              min: 0
+              min: 0.5
               max: 100
               step: 0.5
               unit_of_measurement: km
@@ -452,24 +452,22 @@ triggers:
       {% set ns = namespace(on=false, ents=[]) %}
       {% if geofencing_enabled %}
         {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
-        {% if geofencing_distance | float(0) > 0 %}
-          {% if proximity_devices | count > 0 %}
-            {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
-          {% else %}
-            {% set zone_name = state_attr(home_zone, 'friendly_name') %}
-            {% for e in integration_entities('proximity') %}
-              {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
-            {% endfor %}
-          {% endif %}
-          {% for d in ns.ents | select('match', '^sensor\\..*_distance$') | reject('search', '_nearest_distance$') %}
-            {% set km = states(d) | float(none) %}
-            {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
-            {% if km is not none and is_state(d[:-9] ~ '_direction_of_travel', 'towards')
-                  and km * to_km.get(state_attr(d, 'unit_of_measurement'), 1) <= geofencing_distance | float(0) %}
-              {% set ns.on = true %}
-            {% endif %}
+        {% if proximity_devices | count > 0 %}
+          {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
+        {% else %}
+          {% set zone_name = state_attr(home_zone, 'friendly_name') %}
+          {% for e in integration_entities('proximity') %}
+            {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
           {% endfor %}
         {% endif %}
+        {% for d in ns.ents | select('match', '^sensor\\..*_distance$') | reject('search', '_nearest_distance$') %}
+          {% set km = states(d) | float(none) %}
+          {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
+          {% if km is not none and is_state(d[:-9] ~ '_direction_of_travel', 'towards')
+                and km * to_km.get(state_attr(d, 'unit_of_measurement'), 1) <= geofencing_distance | float(0) %}
+            {% set ns.on = true %}
+          {% endif %}
+        {% endfor %}
       {% endif %}
       {{ ns.on }}
   # The geofencing timeout has passed since pre-heating started.
@@ -548,24 +546,22 @@ actions:
         {% set ns = namespace(on=false, ents=[]) %}
         {% if geofencing_enabled %}
           {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
-          {% if geofencing_distance | float(0) > 0 %}
-            {% if proximity_devices | count > 0 %}
-              {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
-            {% else %}
-              {% set zone_name = state_attr(home_zone, 'friendly_name') %}
-              {% for e in integration_entities('proximity') %}
-                {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
-              {% endfor %}
-            {% endif %}
-            {% for d in ns.ents | select('match', '^sensor\\..*_distance$') | reject('search', '_nearest_distance$') %}
-              {% set km = states(d) | float(none) %}
-              {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
-              {% if km is not none and is_state(d[:-9] ~ '_direction_of_travel', 'towards')
-                    and km * to_km.get(state_attr(d, 'unit_of_measurement'), 1) <= geofencing_distance | float(0) %}
-                {% set ns.on = true %}
-              {% endif %}
+          {% if proximity_devices | count > 0 %}
+            {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
+          {% else %}
+            {% set zone_name = state_attr(home_zone, 'friendly_name') %}
+            {% for e in integration_entities('proximity') %}
+              {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
             {% endfor %}
           {% endif %}
+          {% for d in ns.ents | select('match', '^sensor\\..*_distance$') | reject('search', '_nearest_distance$') %}
+            {% set km = states(d) | float(none) %}
+            {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
+            {% if km is not none and is_state(d[:-9] ~ '_direction_of_travel', 'towards')
+                  and km * to_km.get(state_attr(d, 'unit_of_measurement'), 1) <= geofencing_distance | float(0) %}
+              {% set ns.on = true %}
+            {% endif %}
+          {% endfor %}
         {% endif %}
         {{ ns.on }}
       # Geofencing pre-heating started at this time, and is still within its
