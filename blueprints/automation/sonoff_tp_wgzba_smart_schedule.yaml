@@ -223,7 +223,7 @@ actions:
       # Inside the early heating window, with the window and alarm on the same day.
       in_window: >-
         {% set a = states(alarm_sensor) | as_datetime(none) %}
-        {% if a is none %}false{% else %}
+        {% if a is none %}{{ false }}{% else %}
         {% set a = a | as_local %}
         {% set start = a - timedelta(minutes=prewarm_lead | int) %}
         {{ start <= now() < a and start.date() == a.date() }}
