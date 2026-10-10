@@ -12,7 +12,9 @@ blueprint:
     **Routine** moves the start of the morning heating to match the next waking alarm:
     - An **early alarm** starts today's schedule early, at its own temperatures.
     - A **late alarm** keeps the night temperature until shortly before it.
-    - Someone **up early**, reported by the wake sensor, starts it straight away, alarm or not.
+    - Someone **up early**, reported by the awake sensor, starts it straight away, alarm or not.
+
+    At **bedtime**, when the awake sensor reports everyone asleep, the evening setback starts early.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_smart_schedule.yaml
   homeassistant:
@@ -156,9 +158,10 @@ blueprint:
       name: Routine
       icon: mdi:alarm
       description: >-
-        Moves the start of the morning heating to match the next waking alarm,
-        earlier or later than the schedule, or to when the wake sensor reports
-        someone up. It only runs while someone is in the home areas.
+        Follows your day rather than the clock: starts the morning heating early
+        or late to match the next waking alarm or when someone gets up, and starts
+        the evening setback early when everyone goes to bed. It only runs while
+        someone is in the home areas.
       collapsed: false
       input:
         alarm_sensor:
@@ -179,13 +182,24 @@ blueprint:
               step: 5
               unit_of_measurement: min
               mode: box
-        wake_sensors:
-          name: Wake sensor
+        early_alarm_enabled:
+          name: Start early for an early alarm
+          description: Starts the morning heating early when the alarm is before the schedule.
+          default: true
+          selector:
+            boolean: {}
+        late_alarm_enabled:
+          name: Hold the night temperature for a late alarm
+          description: Keeps the night temperature past the schedule's morning start when the alarm is later.
+          default: true
+          selector:
+            boolean: {}
+        awake_sensors:
+          name: Awake sensor
           description: >-
-            A binary sensor or toggle that turns on when someone is up in the
-            morning, such as a helper built from your motion sensors. Starts the
-            morning heating like an early alarm. Limit the hours it can turn on in
-            the sensor itself. Leave empty to only follow the alarm.
+            A binary sensor or toggle that is on while anyone is up and off once
+            everyone is asleep, such as a helper built from your motion sensors. It
+            must tell a night-time trip from getting up for the day itself.
           default: []
           selector:
             entity:
@@ -194,17 +208,41 @@ blueprint:
                 - domain:
                     - binary_sensor
                     - input_boolean
+        wake_enabled:
+          name: Start when someone is up
+          description: When the awake sensor turns on, starts the morning heating like an early alarm.
+          default: true
+          selector:
+            boolean: {}
         wake_duration:
           name: Wake duration
           description: >-
-            The duration the wake sensor must stay on to count. Leave at zero if the
-            sensor already accounts for this.
+            The duration the awake sensor must stay on to count as someone being up.
+            Leave at zero if the sensor already accounts for this.
           default:
             hours: 0
             minutes: 0
             seconds: 0
           selector:
             duration: {}
+        bedtime_enabled:
+          name: Cool down early at bedtime
+          description: >-
+            When the awake sensor turns off, starts the evening setback early. It ends
+            again if someone gets up before the usual setback time.
+          default: true
+          selector:
+            boolean: {}
+        sleep_delay:
+          name: Sleep delay
+          description: The duration the awake sensor must stay off to count as everyone being asleep.
+          default:
+            hours: 0
+            minutes: 15
+            seconds: 0
+          selector:
+            duration: {}
+
 mode: queued
 max: 10
 max_exceeded: silent
@@ -213,7 +251,7 @@ trigger_variables:
   thermostat_device: !input thermostat_device
   alarm_sensor: !input alarm_sensor
   prewarm_lead: !input prewarm_lead
-  wake_sensors: !input wake_sensors
+  awake_sensors: !input awake_sensors
   state_helper: !input state_helper
   home_zone: !input home_zone
   geofencing_distance: !input geofencing_distance
@@ -248,6 +286,11 @@ variables:
     {{ thermostat_entities | select('match', '^sensor\\..*_override_mode$') | first | default('') }}
   heated_areas: !input heated_areas
   home_areas: !input home_areas
+  early_alarm_enabled: !input early_alarm_enabled
+  late_alarm_enabled: !input late_alarm_enabled
+  wake_enabled: !input wake_enabled
+  bedtime_enabled: !input bedtime_enabled
+  sleep_delay: !input sleep_delay
 
 # Trigger templates cannot use the variables above, so the ones that need a
 # thermostat entity repeat its matching. Keep them in step.
@@ -312,12 +355,20 @@ triggers:
       {{ start.date() == now().date() and p2 < start
          and p2 - timedelta(minutes=1) <= now() < p2 }}
       {% endif %}
-  # Any wake sensor on, held for the wake duration.
+  # Any awake sensor on, held for the wake duration.
   - alias: Someone is up
     trigger: template
     id: wake
-    value_template: "{{ wake_sensors | select('is_state', 'on') | list | count > 0 }}"
+    value_template: "{{ awake_sensors | select('is_state', 'on') | list | count > 0 }}"
     for: !input wake_duration
+  # Every awake sensor off, held for the sleep delay.
+  - alias: Everyone asleep
+    trigger: template
+    id: asleep
+    value_template: >-
+      {{ awake_sensors | count > 0
+         and awake_sensors | select('is_state', 'off') | list | count == awake_sensors | count }}
+    for: !input sleep_delay
   # Any change to Idle. Whether to continue is decided from the plan in the
   # Routine state helper, so this run does not need to know what changed.
   - alias: Timer override ended
@@ -579,7 +630,7 @@ actions:
     if:
       - condition: template
         value_template: >-
-          {{ stage == '' and run in ['prewarm', 'late-hold', 'wake', 'catch-up', 'new-day'] }}
+          {{ stage == '' and run in ['prewarm', 'late-hold', 'wake', 'asleep', 'catch-up', 'new-day'] }}
     then:
       - variables:
           state: "{{ dict(state, fetch=now().timestamp() | int) }}"
@@ -622,11 +673,35 @@ actions:
       # shifts the morning earlier. With 2 or 3, period 3 (if any) is the
       # evening setback, so period 2 is only started early.
       shift: "{{ periods | count >= 4 }}"
-      # Any wake sensor is on.
-      wake_on: "{{ wake_sensors | select('is_state', 'on') | list | count > 0 }}"
-      # Someone is up. Its trigger only fires when a wake sensor turns on, so
-      # catch-up and late start runs also count one that is already on.
-      woke: "{{ run == 'wake' or (run in ['catch-up', 'late-hold'] and wake_on) }}"
+      # Any awake sensor is on.
+      wake_on: "{{ awake_sensors | select('is_state', 'on') | list | count > 0 }}"
+      # Someone is up, and wake-ups are turned on. Its trigger only fires when
+      # an awake sensor turns on, so catch-up and late start runs also count
+      # one that is already on.
+      woke: >-
+        {{ wake_enabled and (run == 'wake' or (run in ['catch-up', 'late-hold'] and wake_on)) }}
+      # Everyone has been asleep for the sleep delay (every awake sensor off
+      # for at least that long).
+      asleep: >-
+        {% set sensors = expand(awake_sensors) %}
+        {% set d = sleep_delay %}
+        {% set delay = (d.hours | default(0)) * 3600 + (d.minutes | default(0)) * 60 + (d.seconds | default(0)) %}
+        {{ sensors | count > 0
+           and sensors | selectattr('state', 'eq', 'off') | list | count == sensors | count
+           and sensors | selectattr('last_changed', 'gt', now() - timedelta(seconds=delay)) | list | count == 0 }}
+      # The evening setback still ahead today: the last period with 3 or more
+      # periods, or period 1 again at midnight with 2. Blank time if none.
+      setback: >-
+        {% if periods | count >= 3 and today_at(periods[-1].time) > now() %}
+        {{ {'temp': periods[-1].temp, 'until': today_at(periods[-1].time).isoformat()} }}
+        {% elif periods | count == 2 %}
+        {{ {'temp': periods[0].temp, 'until': (today_at('00:00') + timedelta(days=1)).isoformat()} }}
+        {% else %}{{ {'temp': none, 'until': ''} }}{% endif %}
+      # The temperature of the period running now.
+      current_temp: >-
+        {% set ns = namespace(t=none) %}
+        {% for p in periods %}{% if today_at(p.time) <= now() %}{% set ns.t = p.temp %}{% endif %}{% endfor %}
+        {{ ns.t }}
       # Alarm minus lead time, when the alarm is today and still ahead.
       # Otherwise blank.
       alarm_start: >-
@@ -646,12 +721,49 @@ actions:
         value_template: "{{ stage == '' }}"
     then:
       - choose:
+          - alias: Someone got up during the bedtime cool-down, end it
+            conditions:
+              - condition: template
+                value_template: >-
+                  {{ bedtime_enabled and run in ['wake', 'catch-up'] and wake_on
+                     and is_state(override_state, 'Timer') and plan.stage == 'bedtime'
+                     and plan.ends > 0 and now().timestamp() < plan.ends }}
+            sequence:
+              - variables:
+                  stage: bedtime-end
+                  stage_exit: true
+                  stage_minutes: 0
+          - alias: Everyone asleep, start the evening setback early
+            conditions:
+              - alias: Everyone has been asleep for the sleep delay
+                condition: template
+                value_template: "{{ bedtime_enabled and run in ['asleep', 'catch-up'] and asleep }}"
+              - alias: The setback is at least a minute away and cooler than now
+                condition: template
+                value_template: >-
+                  {{ setback.until != '' and setback.temp is not none and current_temp is not none
+                     and current_temp > setback.temp
+                     and ((setback.until | as_datetime) - now()).total_seconds() >= 60 }}
+              - alias: No override already running
+                condition: template
+                value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
+              # Sleepers may not show on occupancy sensors, so check the home
+              # zone instead of the home areas.
+              - alias: Someone is home
+                condition: template
+                value_template: "{{ states(home_zone) | int(0) > 0 }}"
+            sequence:
+              - variables:
+                  stage: bedtime
+                  stage_temp: "{{ setback.temp }}"
+                  stage_minutes: >-
+                    {{ min((((setback.until | as_datetime) - now()).total_seconds() / 60) | round(0) | int, 1439) }}
           - alias: Early alarm or someone up, start period 2 early
             conditions:
               - alias: The wake-up start has been reached
                 condition: template
                 value_template: >-
-                  {{ (run in ['prewarm', 'catch-up'] or woke) and routine_start != ''
+                  {{ ((run in ['prewarm', 'catch-up'] and early_alarm_enabled) or woke) and routine_start != ''
                      and (routine_start | as_datetime) <= now() }}
               - alias: Period 2 is set and warmer than period 1
                 condition: template
@@ -693,7 +805,7 @@ actions:
               - alias: Triggered for a late start, and nobody is up yet
                 condition: template
                 value_template: >-
-                  {{ run in ['late-hold', 'catch-up'] and not woke and routine_start != '' }}
+                  {{ late_alarm_enabled and run in ['late-hold', 'catch-up'] and not woke and routine_start != '' }}
               - alias: Period 2 is set and warmer than period 1
                 condition: template
                 value_template: >-
