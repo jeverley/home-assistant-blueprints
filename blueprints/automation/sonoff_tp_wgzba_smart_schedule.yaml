@@ -5,7 +5,7 @@ blueprint:
 
     **Occupancy** switches the thermostat between its schedule groups:
     - **Schedule 1** while the heated areas are occupied.
-    - **Schedule 2** when the heated areas are empty. A running Boost or Timer override is left alone. With **Room occupancy** off, Schedule 1 is used whenever someone is home.
+    - **Schedule 2** when the heated areas are empty. A running Boost or Timer override is left alone. With **Occupancy switching** off, Schedule 1 is used whenever someone is home.
     - **Schedule 3** when nobody is home. Any running override is ended first.
 
     **Geofencing** switches to the pre-heat group early while nobody is home and someone is close and heading home.
@@ -61,7 +61,7 @@ blueprint:
       collapsed: false
       input:
         occupancy_enabled:
-          name: Room occupancy
+          name: Occupancy switching
           description: |
             Uses Schedule 1 while the heated areas are occupied and Schedule 2 when they are empty.
 
@@ -69,14 +69,6 @@ blueprint:
           default: true
           selector:
             boolean: {}
-        home_zone:
-          name: Home zone
-          description: The zone that shows whether anyone is home.
-          default: zone.home
-          selector:
-            entity:
-              filter:
-                - domain: zone
         detect_delay:
           name: Occupied delay
           description: The duration the heated areas must be occupied before switching to Schedule 1.
@@ -107,6 +99,17 @@ blueprint:
           default: true
           selector:
             boolean: {}
+        home_zone:
+          name: Home zone
+          description: |
+            The zone people head home to, used to find its **Proximity** entry.
+
+            It also shows whether anyone is home, for **Occupancy**.
+          default: zone.home
+          selector:
+            entity:
+              filter:
+                - domain: zone
         geofencing_distance:
           name: Geofencing distance
           description: |
@@ -144,7 +147,7 @@ blueprint:
               unit_of_measurement: min
               mode: box
         proximity_devices:
-          name: Proximity
+          name: Proximity devices (optional)
           description: |
             Normally found automatically: the Proximity entry named after the home zone.
 
@@ -156,9 +159,9 @@ blueprint:
               filter:
                 - integration: proximity
         arriving_sensors:
-          name: Arriving sensor
+          name: Arriving sensors (optional)
           description: |
-            Optional binary sensors or toggles that turn on when someone is on their way home, such as a travel time helper.
+            Binary sensors or toggles that turn on when someone is on their way home, such as a travel time helper.
 
             Used as well as Proximity.
           default: []
@@ -1030,8 +1033,8 @@ actions:
                 data:
                   option: Schedule 3
           # After the nobody-home branches, so Schedule 1 never applies to an
-          # empty house when room occupancy is off.
-          - alias: Heated areas occupied (or room occupancy off), Schedule 1
+          # empty house when occupancy switching is off.
+          - alias: Heated areas occupied (or occupancy switching off), Schedule 1
             conditions:
               - condition: or
                 conditions:
