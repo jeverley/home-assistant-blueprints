@@ -25,7 +25,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
   | 4 or more | Night, morning, daytime, ... | The morning shifts earlier. Period 2 runs for its usual length from the early start, then period 3 runs until its usual start, when the device schedule carries on |
 
   Each stage is a Timer override on the thermostat, so it keeps running if Home Assistant restarts.
-- **Skips:** early heating is skipped when the alarm is at or after period 2, when period 2 is not warmer than period 1, when a schedule temperature cannot be read, when an override is already running, or when nobody is on a presence floor (if any are set).
+- **Skips:** early heating is skipped when the early start (alarm minus lead time) is at or after period 2, since the schedule is already heating by then. It is also skipped when period 2 is not warmer than period 1, when a schedule temperature cannot be read, when an override is already running, or when nobody is on a presence floor (if any are set).
 - **Catch up:** the early heating window is checked again when Home Assistant starts and when automations reload, so a restart inside the window still starts it.
 - **Resilience:** runs in queued mode (max 10, silent), re-applies the schedule group when its select recovers from `unavailable` or `unknown`, and stops with an error in the trace if the device is missing an expected entity.
 
