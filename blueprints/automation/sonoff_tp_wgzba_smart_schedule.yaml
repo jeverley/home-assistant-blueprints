@@ -104,20 +104,6 @@ blueprint:
               step: 5
               unit_of_measurement: min
               mode: box
-        presence_areas:
-          name: Presence areas
-          description: Early heating only runs if someone is in one of these areas or the presence floors. Pick the bedrooms, even for a downstairs thermostat, so it heats while people are still in bed. Leave both empty to skip the check.
-          default: []
-          selector:
-            area:
-              multiple: true
-        presence_floors:
-          name: Presence floors
-          description: Floors for the same presence check, in addition to any presence areas.
-          default: []
-          selector:
-            floor:
-              multiple: true
 
 mode: queued
 max: 10
@@ -156,9 +142,6 @@ variables:
   heated_floors: !input heated_floors
   house_areas: !input house_areas
   house_floors: !input house_floors
-  presence_areas: !input presence_areas
-  presence_floors: !input presence_floors
-  presence_unset: "{{ (presence_areas | count) + (presence_floors | count) == 0 }}"
 
 triggers:
   - alias: Heated areas occupied
@@ -322,18 +305,14 @@ actions:
           - alias: No override already running
             condition: template
             value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
-          - alias: Someone is in a presence area, or none are set
-            condition: or
-            conditions:
-              - condition: template
-                value_template: "{{ presence_unset }}"
-              - condition: occupancy.is_detected
-                target:
-                  area_id: !input presence_areas
-                  floor_id: !input presence_floors
-                options:
-                  behavior: any
-                  for: "00:00:00"
+          - alias: Someone is in the house
+            condition: occupancy.is_detected
+            target:
+              area_id: !input house_areas
+              floor_id: !input house_floors
+            options:
+              behavior: any
+              for: "00:00:00"
         sequence:
           - variables:
               # Shift: run period 2 for its usual length from the window start.
@@ -384,18 +363,14 @@ actions:
             condition: template
             value_template: >-
               {{ states(override_target) | float(none) == periods[1].temp }}
-          - alias: Someone is in a presence area, or none are set
-            condition: or
-            conditions:
-              - condition: template
-                value_template: "{{ presence_unset }}"
-              - condition: occupancy.is_detected
-                target:
-                  area_id: !input presence_areas
-                  floor_id: !input presence_floors
-                options:
-                  behavior: any
-                  for: "00:00:00"
+          - alias: Someone is in the house
+            condition: occupancy.is_detected
+            target:
+              area_id: !input house_areas
+              floor_id: !input house_floors
+            options:
+              behavior: any
+              for: "00:00:00"
         sequence:
           - alias: Set override mode to Timer
             action: select.select_option
