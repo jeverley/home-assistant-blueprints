@@ -30,7 +30,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
   - **Someone up early:** when the wake sensor turns on (and stays on for the wake duration, if set), the routine starts now, as if the alarm were early. With no alarm set, this still starts the morning early. During a late hold, it ends the hold and, with 4 or more periods, runs period 2 for its usual length from now. Leave the wake sensor empty to only follow the alarm.
 
   Each stage is a Timer override on the thermostat, so it keeps running if Home Assistant restarts.
-- **Skips:** the routine only acts when the alarm is today. It is skipped when period 2 is not warmer than period 1, when a schedule temperature cannot be read, when an override is already running, or when nobody is in the home areas.
+- **Skips:** alarm-based changes only happen when the alarm is today; a wake-up works with no alarm or a later one. The routine is skipped when period 2 is not warmer than period 1, when a schedule temperature cannot be read, when an override is already running, or when nobody is in the home areas.
 - **Catch up:** the early and late windows are checked again when Home Assistant starts and when automations reload, so a restart inside either window still applies it.
 - **Resilience:** runs in queued mode (max 10, silent), re-applies the schedule group when its select recovers from `unavailable` or `unknown`, and stops with an error in the trace if the device is missing an expected entity. If the fetch fails, schedule group switching still runs, but the routine does not.
 
@@ -81,7 +81,7 @@ Motion sensors alone are a poor signal: they have gaps as you move between rooms
 
 A Bayesian sensor that combines motion with other signals (a phone coming off charge, a bedroom light) also works.
 
-The wake sensor should only turn on during the hours someone could be getting up for the day. Otherwise a night-time trip could start the morning heating hours early. To limit it, add a **Times of the Day** helper (for example 05:00 to 11:00), then put it and your activity sensor in a **Group** with **All entities** turned on, so the group is on only when both are. Use the group as the wake sensor.
+**Limit the wake sensor to morning hours.** The blueprint has no time window of its own, so a wake sensor that turns on at night (a trip to the bathroom, say) starts the morning heating hours early. To limit it, add a **Times of the Day** helper (for example 05:00 to 11:00), then put it and your activity sensor in a **Group** with **All entities** turned on, so the group is on only when both are. Use the group as the wake sensor.
 
 ### Requirements and caveats
 
@@ -91,7 +91,7 @@ The wake sensor should only turn on during the hours someone could be getting up
 - If the routine start falls before midnight (an alarm just after 00:00), the routine is skipped, because the fetched schedule would be for the wrong day.
 - Checking the Timer target rules out most manual Timers. A manual Timer at exactly the expected temperature, ending inside a routine window, would still be followed by the next stage.
 - With 4 or more periods, the follow-on stages (period 3 after an early alarm, period 2 after a late hold) only run when the Timer that ended has the expected target: period 2's temperature after an early start, period 1's after a late hold. If Home Assistant is down when that Timer ends, the follow-on stage does not run and the device falls back to its normal schedule.
-- During a late hold and its period 2 stage, schedule group switching for the heated areas waits until they end, and anyone up before the routine start stays at period 1's temperature.
+- During a late hold and its period 2 stage, schedule group switching for the heated areas waits until they end. Without a wake sensor, anyone up before the routine start stays at period 1's temperature. With one, the hold ends when it reports someone up.
 - Heated areas and home areas are both required. If either is empty, the automation stops with an error.
 - The routine needs someone anywhere in the home areas, so a downstairs thermostat heats while people are still in bed upstairs. It cannot be limited to one room, so a spare bedroom thermostat sharing the same alarm sensor would also heat whenever someone is home.
 - Occupancy for the heated and home areas uses occupancy sensors (device class `occupancy`) only. For an area with only a motion sensor, create an occupancy sensor from it, for example a template binary sensor with a delay off.
