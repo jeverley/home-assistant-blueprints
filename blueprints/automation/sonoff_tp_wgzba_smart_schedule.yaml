@@ -1,9 +1,16 @@
 blueprint:
   name: Sonoff TP-WGZBA smart schedule
-  description: >-
-    Switches a Sonoff TP-WGZBA thermostat between its schedule groups based on
-    occupancy. Before the next waking alarm, it starts the morning heating early,
-    using the times and temperatures from the thermostat's own schedule.
+  description: |
+    Smart scheduling for a Sonoff TP-WGZBA thermostat on ZHA, using the schedules stored on the thermostat.
+
+    **Occupancy** switches the thermostat between its schedule groups:
+    - **Schedule 1** while the heated areas are occupied.
+    - **Schedule 2** when the heated areas are empty. A running Boost or Timer override is left alone.
+    - **Schedule 3** when nobody is home. Any running override is ended first.
+
+    **Early morning heating** starts the morning part of today's schedule early, before the next waking alarm, at the schedule's own temperatures.
+
+    The thermostat's **Device work mode** must be set to **Schedule**.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_smart_schedule.yaml
   homeassistant:
@@ -26,10 +33,7 @@ blueprint:
     occupancy:
       name: Occupancy
       icon: mdi:home-account
-      description: >-
-        Switches the thermostat to Schedule 1 while the heated areas are
-        occupied, Schedule 2 when they are empty, and Schedule 3 when nobody
-        is home.
+      description: Where this thermostat looks for people, and how long to wait before switching schedule group.
       collapsed: false
       input:
         heated_areas:
@@ -73,10 +77,7 @@ blueprint:
     prewarm:
       name: Early morning heating
       icon: mdi:alarm
-      description: >-
-        Before the next waking alarm, starts the morning heating on the
-        thermostat's schedule early, at the schedule's own temperatures. It only
-        runs while someone is in the home areas.
+      description: When to start the morning heating. It only runs while someone is in the home areas.
       collapsed: false
       input:
         alarm_sensor:
