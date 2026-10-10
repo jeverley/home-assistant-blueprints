@@ -34,31 +34,15 @@ blueprint:
       input:
         heated_areas:
           name: Heated areas
-          description: Areas this thermostat heats. Set these, the heated floors, or both.
-          default: []
+          description: Areas this thermostat heats.
           selector:
             area:
-              multiple: true
-        heated_floors:
-          name: Heated floors
-          description: Whole floors this thermostat heats, in addition to any heated areas.
-          default: []
-          selector:
-            floor:
               multiple: true
         house_areas:
           name: Whole house areas
-          description: Areas that count as someone being home. Set these, the whole house floors, or both.
-          default: []
+          description: Every area that counts as someone being home.
           selector:
             area:
-              multiple: true
-        house_floors:
-          name: Whole house floors
-          description: Floors that count as someone being home, in addition to any whole house areas.
-          default: []
-          selector:
-            floor:
               multiple: true
         home_zone:
           name: Home zone
@@ -139,16 +123,13 @@ variables:
   alarm_sensor: !input alarm_sensor
   prewarm_lead: !input prewarm_lead
   heated_areas: !input heated_areas
-  heated_floors: !input heated_floors
   house_areas: !input house_areas
-  house_floors: !input house_floors
 
 triggers:
   - alias: Heated areas occupied
     trigger: occupancy.detected
     target:
       area_id: !input heated_areas
-      floor_id: !input heated_floors
     options:
       behavior: first
       for: !input detect_delay
@@ -156,7 +137,6 @@ triggers:
     trigger: occupancy.cleared
     target:
       area_id: !input heated_areas
-      floor_id: !input heated_floors
     options:
       behavior: all
       for: !input clear_delay
@@ -164,7 +144,6 @@ triggers:
     trigger: occupancy.cleared
     target:
       area_id: !input house_areas
-      floor_id: !input house_floors
     options:
       behavior: all
       for: !input clear_delay
@@ -223,14 +202,12 @@ actions:
           Could not find every quirk entity on the thermostat device. Check the
           entity IDs still end with their default names.
         error: true
-  - alias: Stop if no heated or whole house areas or floors are set
+  - alias: Stop if no heated or whole house areas are set
     if:
       - condition: template
-        value_template: >-
-          {{ (heated_areas | count) + (heated_floors | count) == 0
-             or (house_areas | count) + (house_floors | count) == 0 }}
+        value_template: "{{ heated_areas | count == 0 or house_areas | count == 0 }}"
     then:
-      - stop: Set at least one heated area or floor, and one whole house area or floor.
+      - stop: Set at least one heated area and one whole house area.
         error: true
   - variables:
       # Inside the early heating window, with the window and alarm on the same day.
@@ -309,7 +286,6 @@ actions:
             condition: occupancy.is_detected
             target:
               area_id: !input house_areas
-              floor_id: !input house_floors
             options:
               behavior: any
               for: "00:00:00"
@@ -367,7 +343,6 @@ actions:
             condition: occupancy.is_detected
             target:
               area_id: !input house_areas
-              floor_id: !input house_floors
             options:
               behavior: any
               for: "00:00:00"
@@ -401,7 +376,6 @@ actions:
           - condition: occupancy.is_detected
             target:
               area_id: !input heated_areas
-              floor_id: !input heated_floors
             options:
               behavior: any
               for: !input detect_delay
@@ -423,7 +397,6 @@ actions:
           - condition: occupancy.is_not_detected
             target:
               area_id: !input house_areas
-              floor_id: !input house_floors
             options:
               behavior: all
               for: !input clear_delay
@@ -446,7 +419,6 @@ actions:
           - condition: occupancy.is_not_detected
             target:
               area_id: !input heated_areas
-              floor_id: !input heated_floors
             options:
               behavior: all
               for: !input clear_delay
