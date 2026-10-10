@@ -628,13 +628,14 @@ actions:
         value_template: >-
           {{ idle_since > 0 and plan.ends > 0 and idle_since < plan.ends - 120 }}
     then:
+      - variables:
+          state: "{{ dict(state, routine={}) }}"
+          plan: "{{ {'stage': '', 'ends': 0, 'next_temp': none, 'next_until': 0} }}"
       - action: input_text.set_value
         target:
           entity_id: "{{ state_helper }}"
         data:
-          value: "{{ dict(state, routine={}) | to_json }}"
-      - variables:
-          plan: "{{ {'stage': '', 'ends': 0, 'next_temp': none, 'next_until': 0} }}"
+          value: "{{ state | to_json }}"
   # Our stage ended as planned and a next stage is due, so continue the plan.
   # This needs nothing from the schedule, so it also runs while it is edited.
   - alias: Continue the plan
