@@ -16,7 +16,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
   - Schedule 1 when the heated areas are occupied.
   - Schedule 2 when the heated areas are empty. A running Boost or Timer override is left alone.
   - With **Room occupancy** turned off, Schedule 1 is used whenever someone is home, for a room you want on its occupied schedule all day.
-  - Schedule 3 when nobody is home (the home zone is empty and every home area is clear). Any running override is ended first.
+  - Schedule 3 when nobody is home (the home zone is empty and no area is occupied). Any running override is ended first.
 - **Geofencing:** while nobody is home, once someone heading home is within the geofencing distance, it switches to the pre-heat group (Schedule 2 by default) so the house warms before they arrive. See [Geofencing](#geofencing) below.
 - **Routine:** moves the start of the morning heating to match the next waking alarm. The wake-up start is the alarm minus the lead time. Early, late, wake and catch-up runs (and a refresh just after midnight) fetch today's schedule for the active group from the thermostat and counts the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period).
   - **Early alarm** (wake-up start before period 2): today's morning starts early, at the schedule's own temperatures.
@@ -30,11 +30,11 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
   - **Late alarm** (wake-up start after period 2): just before period 2's usual start, period 1's temperature is held until the wake-up start. With 2 or 3 periods, the device schedule then carries on with period 2. With 4 or more, period 2 then runs for its usual length (never past period 4), so period 3 starts later and later periods keep their usual times.
 
   - **Someone up early:** when the awake sensor turns on (and stays on for the **Getting up delay**, if set), the wake-up starts now, as if the alarm were early. With no alarm set, this still starts the morning early. During a late hold, it ends the hold and, with 4 or more periods, runs period 2 for its usual length from now. Leave the wake sensor empty to only follow the alarm.
-  - **Bedtime:** when the awake sensor has been off for the **Bedtime delay** and the evening setback is still ahead (the last period with 3 or more periods, or period 1 again at midnight with 2), the setback starts early as a Timer at its temperature until its usual start. If someone gets up again before then, the Timer ends. Bedtime checks the home zone rather than the home areas, since people asleep may not show on occupancy sensors.
+  - **Bedtime:** when the awake sensor has been off for the **Bedtime delay** and the evening setback is still ahead (the last period with 3 or more periods, or period 1 again at midnight with 2), the setback starts early as a Timer at its temperature until its usual start. If someone gets up again before then, the Timer ends. Bedtime checks the home zone rather than the areas, since people asleep may not show on occupancy sensors.
   - Each of these (early alarm, late alarm, wake-up and bedtime) has its own toggle.
 
   Each stage is a Timer override on the thermostat, so it keeps running if Home Assistant restarts.
-- **Skips:** alarm-based changes only happen when the alarm is today; a wake-up works with no alarm or a later one. The wake-up is skipped when period 2 is not warmer than period 1, when a schedule temperature cannot be read, when an override is already running, or when nobody is in the home areas.
+- **Skips:** alarm-based changes only happen when the alarm is today; a wake-up works with no alarm or a later one. The wake-up is skipped when period 2 is not warmer than period 1, when a schedule temperature cannot be read, when an override is already running, or when nobody is in any area.
 - **Catch up:** a catch-up run re-checks everything (wake-up stages, then schedule group) when Home Assistant starts, when automations reload, 5 minutes after the schedule was last edited, or when you press **Run actions**. Anything deferred or missed is applied then.
 - **Resilience:** runs in queued mode (max 10, silent) and never waits on people, so runs finish in seconds. It re-applies the schedule group when its select recovers from `unavailable` or `unknown`, and stops with an error in the trace if the device is missing an expected entity. Fetch errors are tolerated: the selects still hold today's schedule from the new day fetch, and if the thermostat is not answering, applying a stage fails too. A 30 second wait after ending or applying an override lets the thermostat report its new state.
 
@@ -55,7 +55,7 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | Section | Inputs |
 | --- | --- |
 | Thermostat | the TP-WGZBA device, heated areas, state helper (required) |
-| Occupancy | room occupancy (on), home areas, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min) |
+| Occupancy | room occupancy (on), home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min) |
 | Geofencing | geofencing (on), geofencing distance (5 km), pre-heat schedule group (Schedule 2), geofencing timeout (30 min), Proximity (found from the home zone), arriving sensor (none) |
 | Routine | next alarm sensor, lead time (30 min), early alarm (on), late alarm (on), awake sensor (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
 
@@ -64,7 +64,6 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | Setting | Bedroom | Living room |
 | --- | --- | --- |
 | Heated areas | Bedroom | Living room |
-| Home areas | Every area | Every area |
 | Lead time | 30 min | 10 min |
 | Awake sensor | Someone up helper | Someone up helper |
 | Bedtime | Off | On |
@@ -110,9 +109,9 @@ An **Arriving sensor** (a binary sensor or toggle) counts as well as Proximity, 
 - If the wake-up start falls before midnight (an alarm just after 00:00), the wake-up is skipped, because the fetched schedule would be for the wrong day.
 - With 4 or more periods, the follow-on stages (period 3 after an early start, period 2 after a late hold) are recorded in the State helper when a stage starts: when it should end, and the next stage's temperature and end. When the override is idle and the recorded stage ended as planned (no more than 2 minutes early), any run applies the next stage, even after a restart or while the schedule is being edited, as long as there is a minute left. If it ended more than 2 minutes early, someone cancelled it (in the UI, on the thermostat or with a Boost), so the plan is dropped. Nobody home also drops it. The helper holds JSON with one key per feature, so it is not specific to the wake-up.
 - During a late hold and its period 2 stage, schedule group switching for the heated areas waits until they end. Without an awake sensor, anyone up before the wake-up start stays at period 1's temperature. With one, the hold ends when it reports someone up.
-- Heated areas and home areas are both required. If either is empty, the automation stops with an error.
-- The wake-up needs someone anywhere in the home areas, so a downstairs thermostat heats while people are still in bed upstairs. It cannot be limited to one room, so a spare bedroom thermostat sharing the same alarm sensor would also heat whenever someone is home.
-- Occupancy for the heated and home areas uses occupancy sensors (device class `occupancy`) only. For an area with only a motion sensor, create an occupancy sensor from it, for example a template binary sensor with a delay off.
+- Heated areas are required. If none are set, the automation stops with an error.
+- Someone counts as home when the home zone is occupied or any area's occupancy sensor is on, even one in the garden. The wake-up needs someone in any area, so a downstairs thermostat heats while people are still in bed upstairs. It cannot be limited to one room, so a spare bedroom thermostat sharing the same alarm sensor would also heat whenever someone is home.
+- Occupancy for areas uses occupancy sensors (device class `occupancy`) only. For an area with only a motion sensor, create an occupancy sensor from it, for example a template binary sensor with a delay off.
 - The trigger ids `prewarm`, `late-hold`, `wake`, `override-ended`, `catch-up` and `new-day` are fixed because the actions depend on them.
 
 - Fetching the schedule selects today in the thermostat's **Schedule operating day** select, which replaces whatever day is shown for editing. So while the schedule is being edited (some, but under half, of the operating day and period entities changed in the last 5 minutes, other than by the blueprint's own fetch), every run is deferred, with a note in its trace: no fetch, no new wake-up stage and no schedule group change, since whether a stage is due decides which group is right. Only a recorded follow-on stage still runs, since it needs nothing from the schedule. A catch-up runs 5 minutes after the last change, and in the meantime the thermostat follows its own schedule. A restart or a device rejoining changes every entity at once, so it does not count as editing. Unapplied edits left untouched for more than 5 minutes can be replaced by the next fetch.

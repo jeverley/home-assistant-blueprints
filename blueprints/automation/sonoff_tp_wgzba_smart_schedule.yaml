@@ -69,12 +69,6 @@ blueprint:
           default: true
           selector:
             boolean: {}
-        home_areas:
-          name: Home areas
-          description: The areas that count as someone being home.
-          selector:
-            area:
-              multiple: true
         home_zone:
           name: Home zone
           description: The zone that shows whether anyone is home.
@@ -94,7 +88,7 @@ blueprint:
             duration: {}
         clear_delay:
           name: Empty delay
-          description: The duration areas must be empty before switching to Schedule 2, or to Schedule 3 when nobody is home.
+          description: The duration areas must be empty before switching to Schedule 2, or to Schedule 3 when nobody is home (the home zone is empty and no area is occupied).
           default:
             hours: 0
             minutes: 5
@@ -311,13 +305,35 @@ variables:
   override_state: >-
     {{ thermostat_entities | select('match', '^sensor\\..*_override_mode$') | first | default('') }}
   heated_areas: !input heated_areas
-  home_areas: !input home_areas
   occupancy_enabled: !input occupancy_enabled
   early_alarm_enabled: !input early_alarm_enabled
   late_alarm_enabled: !input late_alarm_enabled
   wake_enabled: !input wake_enabled
   bedtime_enabled: !input bedtime_enabled
   sleep_delay: !input sleep_delay
+  clear_delay: !input clear_delay
+  # Occupancy sensors in any area. Someone in any area, even the garden, is
+  # home.
+  area_sensors: >-
+    {% set ns = namespace(e=[]) %}
+    {% for s in states.binary_sensor if s.attributes.device_class == 'occupancy' and area_id(s.entity_id) %}
+      {% set ns.e = ns.e + [s.entity_id] %}
+    {% endfor %}
+    {{ ns.e }}
+  someone_in_an_area: "{{ area_sensors | select('is_state', 'on') | list | count > 0 }}"
+  # No area is occupied, and none has been for the empty delay.
+  every_area_empty: >-
+    {% set d = clear_delay %}
+    {% set secs = as_timedelta(d).total_seconds() if d is string else
+         (d.days | default(0)) * 86400 + (d.hours | default(0)) * 3600
+         + (d.minutes | default(0)) * 60 + (d.seconds | default(0)) %}
+    {% set ns = namespace(ok=true) %}
+    {% for s in expand(area_sensors) %}
+      {% if s.state == 'on' or (s.state == 'off' and (now() - s.last_changed).total_seconds() < secs) %}
+        {% set ns.ok = false %}
+      {% endif %}
+    {% endfor %}
+    {{ ns.ok }}
 
 # Trigger templates cannot use the variables above, so the ones that need a
 # thermostat entity repeat its matching. Keep them in step.
@@ -336,13 +352,18 @@ triggers:
     options:
       behavior: all
       for: !input clear_delay
-  - alias: Home areas empty
-    trigger: occupancy.cleared
-    target:
-      area_id: !input home_areas
-    options:
-      behavior: all
-      for: !input clear_delay
+  # No occupancy sensor in any area is on. Keep this in step with the
+  # area_sensors variable.
+  - alias: Every area empty
+    trigger: template
+    value_template: >-
+      {% set ns = namespace(on=false) %}
+      {% for s in states.binary_sensor
+           if s.state == 'on' and s.attributes.device_class == 'occupancy' and area_id(s.entity_id) %}
+        {% set ns.on = true %}
+      {% endfor %}
+      {{ not ns.on }}
+    for: !input clear_delay
   - alias: Home zone occupied
     trigger: zone.occupancy_detected
     options:
@@ -499,12 +520,12 @@ actions:
           Could not find every schedule and override entity on the thermostat. Check the
           entity IDs still end with their default names.
         error: true
-  - alias: Stop if no heated or home areas are set
+  - alias: Stop if no heated areas are set
     if:
       - condition: template
-        value_template: "{{ heated_areas | count == 0 or home_areas | count == 0 }}"
+        value_template: "{{ heated_areas | count == 0 }}"
     then:
-      - stop: Set at least one heated area and one home area.
+      - stop: Set at least one heated area.
         error: true
   - variables:
       # The trigger id. A run without one (Run actions in the UI) is a catch-up.
@@ -623,13 +644,9 @@ actions:
           {{ idle_since > 0 and plan.ends > 0 and plan.next_until > 0 and plan.next_temp is not none
              and idle_since >= plan.ends - 120
              and plan.next_until - now().timestamp() >= 60 }}
-      - alias: Someone is in the home areas
-        condition: occupancy.is_detected
-        target:
-          area_id: !input home_areas
-        options:
-          behavior: any
-          for: "00:00:00"
+      - alias: Someone is in an area
+        condition: template
+        value_template: "{{ someone_in_an_area }}"
     then:
       - variables:
           stage: next
@@ -775,7 +792,7 @@ actions:
                 condition: template
                 value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
               # Sleepers may not show on occupancy sensors, so check the home
-              # zone instead of the home areas.
+              # zone instead of the areas.
               - alias: Someone is home
                 condition: template
                 value_template: "{{ states(home_zone) | int(0) > 0 }}"
@@ -806,13 +823,9 @@ actions:
               - alias: No override already running
                 condition: template
                 value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
-              - alias: Someone is in the home areas
-                condition: occupancy.is_detected
-                target:
-                  area_id: !input home_areas
-                options:
-                  behavior: any
-                  for: "00:00:00"
+              - alias: Someone is in an area
+                condition: template
+                value_template: "{{ someone_in_an_area }}"
             sequence:
               # Shift: run period 2 for its usual length from the routine
               # start, then period 3 until its usual start. Otherwise: run
@@ -849,13 +862,9 @@ actions:
               - alias: No override already running
                 condition: template
                 value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
-              - alias: Someone is in the home areas
-                condition: occupancy.is_detected
-                target:
-                  area_id: !input home_areas
-                options:
-                  behavior: any
-                  for: "00:00:00"
+              - alias: Someone is in an area
+                condition: template
+                value_template: "{{ someone_in_an_area }}"
             sequence:
               # Hold until the routine start. With 4 or more periods, period 2
               # then runs for its usual length, never past period 4.
@@ -881,13 +890,9 @@ actions:
                   {{ is_state(override_state, 'Timer') and plan.stage == 'late-hold'
                      and plan.ends > 0 and now().timestamp() < plan.ends
                      and periods | count >= 2 and periods[1].temp is not none }}
-              - alias: Someone is in the home areas
-                condition: occupancy.is_detected
-                target:
-                  area_id: !input home_areas
-                options:
-                  behavior: any
-                  for: "00:00:00"
+              - alias: Someone is in an area
+                condition: template
+                value_template: "{{ someone_in_an_area }}"
             sequence:
               # With 2 or 3 periods the device's period 2 carries on once the
               # hold ends. With 4 or more, run period 2 for its usual length
@@ -972,12 +977,9 @@ actions:
                 options:
                   for: "00:00:00"
                   zone: !input home_zone
-              - condition: occupancy.is_not_detected
-                target:
-                  area_id: !input home_areas
-                options:
-                  behavior: all
-                  for: !input clear_delay
+              - alias: Every area empty
+                condition: template
+                value_template: "{{ every_area_empty }}"
               - alias: Heading home now, or pre-heating within its timeout
                 condition: template
                 value_template: "{{ preheating or (arrival == 0 and heading_home) }}"
@@ -1003,12 +1005,9 @@ actions:
                 options:
                   for: "00:00:00"
                   zone: !input home_zone
-              - condition: occupancy.is_not_detected
-                target:
-                  area_id: !input home_areas
-                options:
-                  behavior: all
-                  for: !input clear_delay
+              - alias: Every area empty
+                condition: template
+                value_template: "{{ every_area_empty }}"
             sequence:
               - alias: Drop the plan
                 action: input_text.set_value
