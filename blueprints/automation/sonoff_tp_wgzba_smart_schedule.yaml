@@ -34,6 +34,12 @@ blueprint:
                 - integration: zha
                   manufacturer: SONOFF
                   model: TP-WGZBA
+        heated_areas:
+          name: Heated areas
+          description: The areas this thermostat heats.
+          selector:
+            area:
+              multiple: true
         state_helper:
           name: State helper
           description: |
@@ -51,17 +57,11 @@ blueprint:
       name: Home/Away
       icon: mdi:home-account
       description: |
-        Where this thermostat looks for people, and how long to wait before switching schedule group.
+        Who is home, and how long to wait before switching schedule group.
 
         **Geofencing** heats up before someone gets home.
       collapsed: false
       input:
-        heated_areas:
-          name: Heated areas
-          description: The areas this thermostat heats.
-          selector:
-            area:
-              multiple: true
         home_areas:
           name: Home areas
           description: The areas that count as someone being home.
