@@ -279,11 +279,11 @@ triggers:
       {% set watched = expand((ents | select('match', '^select\\..*_schedule_operating_day$') | list)
            + (ents | select('match', '^(select|number)\\..*_schedule_period_[0-9]+_(time|temp)$') | list)) %}
       {% set raw = states(state_helper) %}
-      {% set f = ((raw | from_json).fetch | default('') if raw is match('^\\{') else '') | as_datetime(none) %}
+      {% set f = (raw | from_json).fetch | default(0) | int if raw is match('^\\{') else 0 %}
       {% set ns = namespace(n=0) %}
       {% for s in watched %}
-        {% if s.last_changed > now() - timedelta(minutes=5)
-              and not (f is not none and f - timedelta(seconds=10) <= s.last_changed <= f + timedelta(seconds=60)) %}
+        {% set t = s.last_changed.timestamp() %}
+        {% if t > now().timestamp() - 300 and not (f > 0 and f - 10 <= t <= f + 60) %}
           {% set ns.n = ns.n + 1 %}
         {% endif %}
       {% endfor %}
@@ -331,35 +331,36 @@ actions:
       # per feature. Writes merge into it, so other keys are kept.
       #   fetch: when our last fetch started.
       #   routine: the running stage, when it should end, and the next stage's
-      #   temperature and end (blank if none).
+      #   temperature and end.
+      # Times are Unix epoch seconds, 0 when unset.
       state: >-
         {% set raw = states(state_helper) %}
         {{ raw | from_json if raw is match('^\\{') else {} }}
       plan: >-
         {% set r = state.routine | default({}) %}
-        {{ {'stage': r.stage | default(''), 'ends': r.ends | default(''),
-            'next_temp': r.next_temp | default(none), 'next_until': r.next_until | default('')} }}
+        {{ {'stage': r.stage | default(''), 'ends': r.ends | default(0) | int,
+            'next_temp': r.next_temp | default(none), 'next_until': r.next_until | default(0) | int} }}
       # The schedule is being edited: some, but under half, of the operating
       # day and period entities changed in the last 5 minutes, other than
       # through our own fetch (10 s before to 60 s after it started). A person
       # edits a value or two; a fetch, restart or rejoin changes them all. Keep
       # this in step with the Schedule editing finished trigger.
       editing: >-
-        {% set f = state.fetch | default('') | as_datetime(none) %}
+        {% set f = state.fetch | default(0) | int %}
         {% set watched = expand([operating_day] + period_entities) %}
         {% set ns = namespace(n=0) %}
         {% for s in watched %}
-          {% if s.last_changed > now() - timedelta(minutes=5)
-                and not (f is not none and f - timedelta(seconds=10) <= s.last_changed <= f + timedelta(seconds=60)) %}
+          {% set t = s.last_changed.timestamp() %}
+          {% if t > now().timestamp() - 300 and not (f > 0 and f - 10 <= t <= f + 60) %}
             {% set ns.n = ns.n + 1 %}
           {% endif %}
         {% endfor %}
         {{ 0 < ns.n < (watched | count) / 2 }}
-      # When the override last went Idle (blank unless Idle now). A restart or
+      # When the override last went Idle (0 unless Idle now). A restart or
       # rejoin makes this later, never earlier.
       idle_since: >-
         {% set o = expand(override_state) | first %}
-        {{ o.last_changed.isoformat() if o.state == 'Idle' else '' }}
+        {{ o.last_changed.timestamp() | int if o.state == 'Idle' else 0 }}
       # The routine stage chosen below: a Timer at stage_temp for stage_minutes,
       # after ending the running override first if stage_exit is true, with the
       # next stage (if any) to record in the routine plan.
@@ -368,15 +369,14 @@ actions:
       stage_minutes: 0
       stage_exit: false
       next_temp: null
-      next_until: ""
+      next_until: 0
   # Our stage ended more than 2 minutes before it should have, so someone
   # cancelled it (in the UI, on the thermostat or with a Boost). Drop the plan.
   - alias: Forget a cancelled plan
     if:
       - condition: template
         value_template: >-
-          {{ idle_since != '' and plan.ends != ''
-             and (idle_since | as_datetime) < (plan.ends | as_datetime) - timedelta(minutes=2) }}
+          {{ idle_since > 0 and plan.ends > 0 and idle_since < plan.ends - 120 }}
     then:
       - action: input_text.set_value
         target:
@@ -384,16 +384,16 @@ actions:
         data:
           value: "{{ dict(state, routine={}) | to_json }}"
       - variables:
-          plan: "{{ {'stage': '', 'ends': '', 'next_temp': none, 'next_until': ''} }}"
+          plan: "{{ {'stage': '', 'ends': 0, 'next_temp': none, 'next_until': 0} }}"
   # Our stage ended as planned and a next stage is due, so continue the plan.
   # This needs nothing from the schedule, so it also runs while it is edited.
   - alias: Continue the plan
     if:
       - condition: template
         value_template: >-
-          {{ idle_since != '' and plan.ends != '' and plan.next_until != '' and plan.next_temp is not none
-             and (idle_since | as_datetime) >= (plan.ends | as_datetime) - timedelta(minutes=2)
-             and ((plan.next_until | as_datetime) - now()).total_seconds() >= 60 }}
+          {{ idle_since > 0 and plan.ends > 0 and plan.next_until > 0 and plan.next_temp is not none
+             and idle_since >= plan.ends - 120
+             and plan.next_until - now().timestamp() >= 60 }}
       - alias: Someone is in the home areas
         condition: occupancy.is_detected
         target:
@@ -406,7 +406,7 @@ actions:
           stage: next
           stage_temp: "{{ plan.next_temp }}"
           stage_minutes: >-
-            {{ min((((plan.next_until | as_datetime) - now()).total_seconds() / 60) | round(0) | int, 1439) }}
+            {{ min(((plan.next_until - now().timestamp()) / 60) | round(0) | int, 1439) }}
   # While the schedule is being edited its selects cannot be trusted, and a
   # fetch would replace the day being edited. Whether a stage is due decides
   # whether a schedule group change is right, so nothing else is decided: the
@@ -431,7 +431,7 @@ actions:
           {{ stage == '' and run in ['prewarm', 'late-hold', 'wake', 'catch-up', 'new-day'] }}
     then:
       - variables:
-          state: "{{ dict(state, fetch=now().replace(microsecond=0).isoformat()) }}"
+          state: "{{ dict(state, fetch=now().timestamp() | int) }}"
       - action: input_text.set_value
         target:
           entity_id: "{{ state_helper }}"
@@ -536,7 +536,7 @@ actions:
                     {% set end = start + (today_at(periods[2].time) - p2) if shift else p2 %}
                     {{ min(((end - now()).total_seconds() / 60) | round(0) | int, 1439) }}
                   next_temp: "{{ periods[2].temp if shift else none }}"
-                  next_until: "{{ today_at(periods[2].time).isoformat() if shift else '' }}"
+                  next_until: "{{ today_at(periods[2].time).timestamp() | int if shift else 0 }}"
           - alias: Late alarm, hold period 1 past period 2's start
             conditions:
               - alias: Triggered for a late start, and nobody is up yet
@@ -579,8 +579,8 @@ actions:
                   next_until: >-
                     {% if shift %}
                     {% set end = (routine_start | as_datetime) + (today_at(periods[2].time) - today_at(periods[1].time)) %}
-                    {{ min(end, today_at(periods[3].time)).isoformat() }}
-                    {% endif %}
+                    {{ min(end, today_at(periods[3].time)).timestamp() | int }}
+                    {% else %}0{% endif %}
           - alias: Someone up during a late hold, end it
             conditions:
               - condition: template
@@ -589,7 +589,7 @@ actions:
                 condition: template
                 value_template: >-
                   {{ is_state(override_state, 'Timer') and plan.stage == 'late-hold'
-                     and plan.ends != '' and now() < plan.ends | as_datetime
+                     and plan.ends > 0 and now().timestamp() < plan.ends
                      and periods | count >= 2 and periods[1].temp is not none }}
               - alias: Someone is in the home areas
                 condition: occupancy.is_detected
@@ -638,9 +638,9 @@ actions:
           value: >-
             {% set routine = {
                  'stage': stage,
-                 'ends': (now() + timedelta(minutes=stage_minutes)).replace(microsecond=0).isoformat(),
+                 'ends': (now().timestamp() + stage_minutes * 60) | int,
                  'next_temp': next_temp,
-                 'next_until': next_until | trim} if stage_minutes >= 1 else {} %}
+                 'next_until': next_until | int} if stage_minutes >= 1 else {} %}
             {{ dict(state, routine=routine) | to_json }}
       - alias: Start the stage as a Timer override
         if:
