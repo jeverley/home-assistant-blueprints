@@ -11,7 +11,7 @@ blueprint:
     **Routine** moves the start of the morning heating to match the next waking alarm:
     - An **early alarm** starts today's schedule early, at its own temperatures.
     - A **late alarm** keeps the night temperature until shortly before it.
-    - Someone **up early**, moving about the home areas, starts it straight away, alarm or not.
+    - Someone **up early**, reported by the wake sensor, starts it straight away, alarm or not.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_smart_schedule.yaml
   homeassistant:
@@ -80,8 +80,8 @@ blueprint:
       icon: mdi:alarm
       description: >-
         Moves the start of the morning heating to match the next waking alarm,
-        earlier or later than the schedule, or to when someone gets up. It only
-        runs while someone is in the home areas.
+        earlier or later than the schedule, or to when the wake sensor reports
+        someone up. It only runs while someone is in the home areas.
       collapsed: false
       input:
         alarm_sensor:
@@ -102,50 +102,34 @@ blueprint:
               step: 5
               unit_of_measurement: min
               mode: box
-        wake_enabled:
-          name: Start when someone is up
+        wake_sensors:
+          name: Wake sensor
           description: >-
-            Starts the morning heating when there is sustained movement in the
-            home areas, like an early alarm. Turn off to only follow the alarm.
-          default: true
+            A binary sensor or toggle that turns on when someone is up, such as a
+            helper built from your motion sensors. Starts the morning heating like
+            an early alarm. Leave empty to only follow the alarm.
+          default: []
           selector:
-            boolean: {}
+            entity:
+              multiple: true
+              filter:
+                - domain:
+                    - binary_sensor
+                    - input_boolean
         wake_duration:
           name: Wake duration
           description: >-
-            The duration there must be ongoing movement somewhere in the home
-            areas to count as someone being up. Movement can pass between rooms.
+            The duration the wake sensor must stay on to count. Leave at zero if the
+            sensor already accounts for this.
           default:
             hours: 0
-            minutes: 10
+            minutes: 0
             seconds: 0
           selector:
             duration: {}
-        wake_gap:
-          name: Gap tolerance
-          description: >-
-            Pauses in movement shorter than this do not reset the wake duration,
-            such as between leaving one sensor's view and reaching the next.
-          default: 2
-          selector:
-            number:
-              min: 1
-              max: 10
-              step: 1
-              unit_of_measurement: min
-              mode: box
-        wake_two_areas:
-          name: Require movement in two areas
-          description: >-
-            Only counts someone as up once there has been movement in at least two
-            home areas, such as the bedroom and the landing. This stops a restless
-            sleeper from counting.
-          default: true
-          selector:
-            boolean: {}
         earliest_wake:
           name: Earliest wake time
-          description: Movement before this time is ignored.
+          description: The wake sensor is ignored before this time.
           default: "05:00:00"
           selector:
             time: {}
@@ -158,12 +142,8 @@ trigger_variables:
   thermostat_device: !input thermostat_device
   alarm_sensor: !input alarm_sensor
   prewarm_lead: !input prewarm_lead
-  home_areas: !input home_areas
-  wake_enabled: !input wake_enabled
+  wake_sensors: !input wake_sensors
   earliest_wake: !input earliest_wake
-  wake_duration: !input wake_duration
-  wake_gap: !input wake_gap
-  wake_two_areas: !input wake_two_areas
 
 variables:
   # The thermostat's ZHA entities, matched on the device by domain and
@@ -253,26 +233,15 @@ triggers:
       {{ start.date() == now().date() and p2 < start
          and p2 - timedelta(minutes=1) <= now() < start }}
       {% endif %}
-  # Movement is active while any motion sensor in the home areas is on or
-  # changed within the gap tolerance, so short pauses do not count as stopping.
-  # Optionally, motion must also have been seen in at least two areas within
-  # the wake duration plus the gap. Held for the wake duration.
+  # Any wake sensor on after the earliest wake time, held for the wake
+  # duration. Checking the time here means a wake-up that began earlier still
+  # counts from the earliest wake time.
   - alias: Someone is up
     trigger: template
     id: wake
     value_template: >-
-      {% if not wake_enabled or now() < today_at(earliest_wake) %}{{ false }}{% else %}
-      {% set sensors = expand(home_areas | map('area_entities') | sum(start=[])
-           | select('match', '^binary_sensor\\.')
-           | select('is_state_attr', 'device_class', 'motion') | list) %}
-      {% set on = sensors | selectattr('state', 'eq', 'on') | list %}
-      {% set gap_start = now() - timedelta(minutes=wake_gap | int) %}
-      {% set active = on | count > 0
-           or sensors | selectattr('last_changed', 'ge', gap_start) | list | count > 0 %}
-      {% set seen = on + (sensors | selectattr('last_changed', 'ge', gap_start - timedelta(**wake_duration)) | list) %}
-      {% set areas = seen | map(attribute='entity_id') | map('area_id') | reject('none') | unique | list | count %}
-      {{ active and (not wake_two_areas or areas >= 2) }}
-      {% endif %}
+      {{ now() >= today_at(earliest_wake)
+         and wake_sensors | select('is_state', 'on') | list | count > 0 }}
     for: !input wake_duration
   - alias: Timer override ended
     trigger: template
@@ -382,7 +351,7 @@ actions:
       # shifts the morning earlier. With 2 or 3, period 3 (if any) is the
       # evening setback, so period 2 is only started early.
       shift: "{{ periods | count >= 4 }}"
-      # Someone was confirmed up in the home areas, after the earliest wake time.
+      # The wake sensor confirmed someone up, after the earliest wake time.
       woke: "{{ trigger.id == 'wake' and now() >= today_at(earliest_wake) }}"
       # Alarm minus lead time, when the alarm is today and still ahead.
       # Otherwise blank.

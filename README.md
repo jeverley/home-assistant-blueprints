@@ -27,7 +27,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 
   - **Late alarm** (routine start after period 2): just before period 2's usual start, period 1's temperature is held until the routine start. With 2 or 3 periods, the device schedule then carries on with period 2. With 4 or more, period 2 then runs for its usual length (never past period 4), so period 3 starts later and later periods keep their usual times.
 
-  - **Someone up early:** if there is ongoing movement in the home areas for the wake duration (10 minutes by default) after the earliest wake time (05:00 by default), the routine starts now, as if the alarm were early. Movement can pass from room to room, and pauses shorter than the gap tolerance (2 minutes by default) do not reset it. By default it also needs movement in at least two areas, such as the bedroom and the landing, so a restless sleeper does not count. With no alarm set, this still starts the morning early. During a late hold, it ends the hold and, with 4 or more periods, runs period 2 for its usual length from now. Turn off **Start when someone is up** to only follow the alarm.
+  - **Someone up early:** when the wake sensor turns on (and stays on for the wake duration, if set) after the earliest wake time (05:00 by default), the routine starts now, as if the alarm were early. With no alarm set, this still starts the morning early. During a late hold, it ends the hold and, with 4 or more periods, runs period 2 for its usual length from now. Leave the wake sensor empty to only follow the alarm.
 
   Each stage is a Timer override on the thermostat, so it keeps running if Home Assistant restarts.
 - **Skips:** the routine only acts when the alarm is today. It is skipped when period 2 is not warmer than period 1, when a schedule temperature cannot be read, when an override is already running, or when nobody is in the home areas.
@@ -52,7 +52,7 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | --- | --- |
 | Thermostat | the TP-WGZBA device |
 | Occupancy | heated areas, home areas, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min) |
-| Routine | next alarm sensor, lead time (30 min), start when someone is up (on), wake duration (10 min), gap tolerance (2 min), require movement in two areas (on), earliest wake time (05:00) |
+| Routine | next alarm sensor, lead time (30 min), wake sensor (none), wake duration (0), earliest wake time (05:00) |
 
 ### Example configurations
 
@@ -61,9 +61,25 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | Heated areas | Bedroom | Living room |
 | Home areas | Every area | Every area |
 | Lead time | 30 min | 10 min |
-| Start when someone is up | Off (follows the alarm only) | On |
+| Wake sensor | None (follows the alarm only) | Someone up helper |
 
 Temperatures come from each thermostat's own schedule, so set the morning periods on the device.
+
+### Wake sensor
+
+Any binary sensor or input boolean that turns on when someone is up. A wake-up starts heating only in that automation's thermostat, so a bedroom automation with no wake sensor keeps following the alarm while a downstairs one starts when someone is up.
+
+Motion sensors alone are a poor signal: they have gaps as you move between rooms, and a restless sleeper or a trip to the bathroom can look like getting up. Build a helper that smooths this out. Both of these can be set up in the UI under **Settings** > **Devices & services** > **Helpers**:
+
+- **Time active in a window (most robust):**
+  1. A **Group** (binary sensor) of your home's motion sensors.
+  2. A **History stats** sensor on the group: type **time**, state `on`, start `{{ now() - timedelta(minutes=15) }}`, end `{{ now() }}`.
+  3. A **Threshold** sensor on the history stats: upper limit 0.08 hours (5 minutes), with a small hysteresis.
+
+  This turns on after about 5 minutes of motion within 15 minutes, wherever it happens. Pauses and moving between rooms only lower the total, and a short bathroom trip stays under the limit. Use this as the wake sensor with the wake duration at zero.
+- **Motion held through short pauses (simpler):** a **Template** binary sensor that is on while any motion sensor in the group is on, with **Delay off** set to about 2 minutes. Use it with a wake duration of around 10 minutes.
+
+A Bayesian sensor that combines motion with other signals (a phone coming off charge, a bedroom light) also works.
 
 ### Requirements and caveats
 
@@ -76,7 +92,6 @@ Temperatures come from each thermostat's own schedule, so set the morning period
 - During a late hold and its period 2 stage, schedule group switching for the heated areas waits until they end, and anyone up before the routine start stays at period 1's temperature.
 - Heated areas and home areas are both required. If either is empty, the automation stops with an error.
 - The routine needs someone anywhere in the home areas, so a downstairs thermostat heats while people are still in bed upstairs. It cannot be limited to one room, so a spare bedroom thermostat sharing the same alarm sensor would also heat whenever someone is home.
-- Wake detection uses the motion sensors (device class `motion`) in the home areas. In simulations with sensors that stay on for 90 seconds after each detection, the defaults counted someone getting up about 12 minutes after they got up, and ignored a restless sleeper and a 7 minute trip to the bathroom and back. A shorter wake duration reacts sooner but can count a bathroom trip. Someone up before the earliest wake time who then stays in one room is only counted once they move into another area. A wake-up starts heating only in that automation's thermostat, so a bedroom automation with **Start when someone is up** off keeps following the alarm while a downstairs one starts when someone is up.
 - Occupancy for the heated and home areas uses occupancy sensors (device class `occupancy`) only. For an area with only a motion sensor, create an occupancy sensor from it, for example a template binary sensor with a delay off.
 - The trigger ids `prewarm`, `late-hold`, `wake`, `override-ended`, `catch-up` and `new-day` are fixed because the actions depend on them.
 
