@@ -96,7 +96,7 @@ A Bayesian sensor that combines motion with other signals (a phone coming off ch
 - Occupancy for the heated and home areas uses occupancy sensors (device class `occupancy`) only. For an area with only a motion sensor, create an occupancy sensor from it, for example a template binary sensor with a delay off.
 - The trigger ids `prewarm`, `late-hold`, `wake`, `override-ended`, `catch-up` and `new-day` are fixed because the actions depend on them.
 
-- Fetching the schedule selects today in the thermostat's **Schedule operating day** select, which replaces whatever day is shown for editing. To avoid that, the blueprint only fetches on routine runs and just after midnight, and skips the fetch when the selects already hold today's schedule (fetched today, after the last group change and schedule apply). If someone changed the operating day or a period in the UI in the last 10 minutes, the run is skipped instead, with a note in its trace. Unapplied edits left for longer than that can be replaced by the next fetch.
+- Fetching the schedule selects today in the thermostat's **Schedule operating day** select, which replaces whatever day is shown for editing. To avoid that, the blueprint only fetches on routine runs and just after midnight, and skips the fetch when the selects already hold today's schedule (fetched today, after the last group change and schedule apply). If someone changed the operating day or a period in the UI in the last 2 minutes, the run waits until they have stopped for 2 minutes (up to 15 minutes, after which it stops without fetching). Unapplied edits left untouched for longer than that can be replaced by the next fetch.
 
 ### Known issue
 

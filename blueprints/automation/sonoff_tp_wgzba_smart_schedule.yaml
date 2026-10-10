@@ -287,14 +287,27 @@ actions:
       timer_ended: >-
         {{ trigger.id == 'override-ended' and trigger.from_state is not none
            and trigger.from_state.state == 'Timer' }}
+  # Fetching selects today as the operating day, which would replace a day
+  # being edited in the UI. If a person changed the operating day or a period
+  # in the last 2 minutes, wait until they have stopped for 2 minutes. Changes
+  # from a person carry a user; restarts and automations do not. Give up
+  # after 15 minutes without fetching.
+  - alias: Wait while someone is editing the schedule
+    if:
+      - condition: template
+        value_template: >-
+          {{ trigger.id in ['prewarm', 'late-hold', 'override-ended', 'catch-up', 'wake', 'new-day']
+             and expand([operating_day] + period_entities)
+                 | selectattr('last_changed', 'ge', now() - timedelta(minutes=2))
+                 | selectattr('context.user_id', 'ne', none) | list | count > 0 }}
+    then:
+      - wait_template: >-
+          {{ expand([operating_day] + period_entities)
+             | selectattr('last_changed', 'ge', now() - timedelta(minutes=2))
+             | selectattr('context.user_id', 'ne', none) | list | count == 0 }}
+        timeout: "00:15:00"
+        continue_on_timeout: false
   - variables:
-      # Someone changed the operating day or a period in the UI in the last 10
-      # minutes. Changes from a person carry a user; restarts and automations
-      # do not.
-      user_editing: >-
-        {{ expand([operating_day] + period_entities)
-           | selectattr('last_changed', 'ge', now() - timedelta(minutes=10))
-           | selectattr('context.user_id', 'ne', none) | list | count > 0 }}
       # The selects already hold today's schedule for the active group: fetched
       # today, after the last group change and schedule apply, with today
       # selected and no edits to the periods since.
@@ -308,23 +321,12 @@ actions:
            and expand(period_entities)
                | selectattr('last_changed', 'gt', f + timedelta(seconds=30))
                | selectattr('context.user_id', 'ne', none) | list | count == 0 }}
-  # Get today's schedule for the active group, only on runs that use it.
-  # Fetching selects today as the operating day, which would replace a day
-  # being edited in the UI, so a run stops instead while someone is editing,
-  # and skips the fetch when the selects are already current. For routine
-  # triggers a failed fetch stops the run, so the routine fails closed. The
-  # new day refresh only keeps the period times current for the late start
-  # trigger, so a failure there is tolerated.
+  # Fetch today's schedule for the active group on runs that use it, unless the
+  # selects are already current. For routine triggers a failed fetch stops the
+  # run, so the routine fails closed. The new day refresh only keeps the period
+  # times current for the late start trigger, so a failure there is tolerated.
   - alias: Get today's schedule
     choose:
-      - alias: Someone is editing the schedule, so leave it alone
-        conditions:
-          - condition: template
-            value_template: >-
-              {{ trigger.id in ['prewarm', 'late-hold', 'override-ended', 'catch-up', 'wake', 'new-day']
-                 and user_editing }}
-        sequence:
-          - stop: The schedule is being edited in the UI, so this run was skipped.
       - alias: Fetch it
         conditions:
           - condition: template
