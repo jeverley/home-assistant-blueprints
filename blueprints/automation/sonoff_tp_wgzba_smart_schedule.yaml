@@ -1,10 +1,9 @@
 blueprint:
   name: Sonoff TP-WGZBA smart schedule
   description: >-
-    Switches a thermostat's active schedule group by occupancy (1 heated areas
-    occupied, 2 heated areas empty, 3 nobody home). Before the next waking alarm it
-    starts the device's morning heating early, using the times and temperatures
-    of today's on-device schedule.
+    Switches a Sonoff TP-WGZBA thermostat between its schedule groups based on
+    occupancy. Before the next waking alarm, it starts the morning heating early,
+    using the times and temperatures from the thermostat's own schedule.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_smart_schedule.yaml
   homeassistant:
@@ -35,18 +34,19 @@ blueprint:
       input:
         heated_areas:
           name: Heated areas
-          description: Areas this thermostat heats.
+          description: The areas this thermostat heats.
           selector:
             area:
               multiple: true
         home_areas:
           name: Home areas
-          description: Every area that counts as someone being home.
+          description: The areas that count as someone being home.
           selector:
             area:
               multiple: true
         home_zone:
           name: Home zone
+          description: The zone that shows whether anyone is home.
           default: zone.home
           selector:
             entity:
@@ -54,6 +54,7 @@ blueprint:
                 - domain: zone
         detect_delay:
           name: Occupied delay
+          description: The duration the heated areas must be occupied before switching to Schedule 1.
           default:
             hours: 0
             minutes: 1
@@ -62,6 +63,7 @@ blueprint:
             duration: {}
         clear_delay:
           name: Empty delay
+          description: The duration areas must be empty before switching to Schedule 2, or to Schedule 3 when nobody is home.
           default:
             hours: 0
             minutes: 5
@@ -73,18 +75,20 @@ blueprint:
       icon: mdi:alarm
       description: >-
         Before the next waking alarm, starts the morning heating on the
-        thermostat's schedule early, at the schedule's own temperatures. Only
+        thermostat's schedule early, at the schedule's own temperatures. It only
         runs while someone is in the home areas.
       collapsed: false
       input:
         alarm_sensor:
           name: Next waking alarm sensor
+          description: The sensor with the time of the next waking alarm, such as a phone's next alarm sensor.
           selector:
             entity:
               filter:
                 - domain: sensor
         prewarm_lead:
-          name: Lead time (minutes before alarm)
+          name: Lead time
+          description: The time before the alarm when the morning heating starts.
           default: 30
           selector:
             number:
