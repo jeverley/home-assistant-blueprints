@@ -105,9 +105,10 @@ blueprint:
         wake_sensors:
           name: Wake sensor
           description: >-
-            A binary sensor or toggle that turns on when someone is up, such as a
-            helper built from your motion sensors. Starts the morning heating like
-            an early alarm. Leave empty to only follow the alarm.
+            A binary sensor or toggle that turns on when someone is up in the
+            morning, such as a helper built from your motion sensors. Starts the
+            morning heating like an early alarm. Limit the hours it can turn on in
+            the sensor itself. Leave empty to only follow the alarm.
           default: []
           selector:
             entity:
@@ -127,12 +128,6 @@ blueprint:
             seconds: 0
           selector:
             duration: {}
-        earliest_wake:
-          name: Earliest wake time
-          description: The wake sensor is ignored before this time.
-          default: "05:00:00"
-          selector:
-            time: {}
 
 mode: queued
 max: 10
@@ -143,7 +138,6 @@ trigger_variables:
   alarm_sensor: !input alarm_sensor
   prewarm_lead: !input prewarm_lead
   wake_sensors: !input wake_sensors
-  earliest_wake: !input earliest_wake
 
 variables:
   # The thermostat's ZHA entities, matched on the device by domain and
@@ -171,7 +165,6 @@ variables:
   prewarm_lead: !input prewarm_lead
   heated_areas: !input heated_areas
   home_areas: !input home_areas
-  earliest_wake: !input earliest_wake
 
 triggers:
   - alias: Heated areas occupied
@@ -233,15 +226,11 @@ triggers:
       {{ start.date() == now().date() and p2 < start
          and p2 - timedelta(minutes=1) <= now() < start }}
       {% endif %}
-  # Any wake sensor on after the earliest wake time, held for the wake
-  # duration. Checking the time here means a wake-up that began earlier still
-  # counts from the earliest wake time.
+  # Any wake sensor on, held for the wake duration.
   - alias: Someone is up
     trigger: template
     id: wake
-    value_template: >-
-      {{ now() >= today_at(earliest_wake)
-         and wake_sensors | select('is_state', 'on') | list | count > 0 }}
+    value_template: "{{ wake_sensors | select('is_state', 'on') | list | count > 0 }}"
     for: !input wake_duration
   - alias: Timer override ended
     trigger: template
@@ -351,8 +340,8 @@ actions:
       # shifts the morning earlier. With 2 or 3, period 3 (if any) is the
       # evening setback, so period 2 is only started early.
       shift: "{{ periods | count >= 4 }}"
-      # The wake sensor confirmed someone up, after the earliest wake time.
-      woke: "{{ trigger.id == 'wake' and now() >= today_at(earliest_wake) }}"
+      # The wake sensor confirmed someone up.
+      woke: "{{ trigger.id == 'wake' }}"
       # Alarm minus lead time, when the alarm is today and still ahead.
       # Otherwise blank.
       alarm_start: >-

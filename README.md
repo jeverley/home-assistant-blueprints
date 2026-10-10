@@ -27,7 +27,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 
   - **Late alarm** (routine start after period 2): just before period 2's usual start, period 1's temperature is held until the routine start. With 2 or 3 periods, the device schedule then carries on with period 2. With 4 or more, period 2 then runs for its usual length (never past period 4), so period 3 starts later and later periods keep their usual times.
 
-  - **Someone up early:** when the wake sensor turns on (and stays on for the wake duration, if set) after the earliest wake time (05:00 by default), the routine starts now, as if the alarm were early. With no alarm set, this still starts the morning early. During a late hold, it ends the hold and, with 4 or more periods, runs period 2 for its usual length from now. Leave the wake sensor empty to only follow the alarm.
+  - **Someone up early:** when the wake sensor turns on (and stays on for the wake duration, if set), the routine starts now, as if the alarm were early. With no alarm set, this still starts the morning early. During a late hold, it ends the hold and, with 4 or more periods, runs period 2 for its usual length from now. Leave the wake sensor empty to only follow the alarm.
 
   Each stage is a Timer override on the thermostat, so it keeps running if Home Assistant restarts.
 - **Skips:** the routine only acts when the alarm is today. It is skipped when period 2 is not warmer than period 1, when a schedule temperature cannot be read, when an override is already running, or when nobody is in the home areas.
@@ -52,7 +52,7 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | --- | --- |
 | Thermostat | the TP-WGZBA device |
 | Occupancy | heated areas, home areas, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min) |
-| Routine | next alarm sensor, lead time (30 min), wake sensor (none), wake duration (0), earliest wake time (05:00) |
+| Routine | next alarm sensor, lead time (30 min), wake sensor (none), wake duration (0) |
 
 ### Example configurations
 
@@ -80,6 +80,8 @@ Motion sensors alone are a poor signal: they have gaps as you move between rooms
 - **Motion held through short pauses (simpler):** a **Template** binary sensor that is on while any motion sensor in the group is on, with **Delay off** set to about 2 minutes. Use it with a wake duration of around 10 minutes.
 
 A Bayesian sensor that combines motion with other signals (a phone coming off charge, a bedroom light) also works.
+
+The wake sensor should only turn on during the hours someone could be getting up for the day. Otherwise a night-time trip could start the morning heating hours early. To limit it, add a **Times of the Day** helper (for example 05:00 to 11:00), then put it and your activity sensor in a **Group** with **All entities** turned on, so the group is on only when both are. Use the group as the wake sensor.
 
 ### Requirements and caveats
 
