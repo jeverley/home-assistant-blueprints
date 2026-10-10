@@ -17,7 +17,7 @@ blueprint:
       input:
         thermostat_device:
           name: Thermostat device
-          description: A Sonoff TP-WGZBA on ZHA, with the custom quirk installed.
+          description: The thermostat whose schedule this automation manages.
           selector:
             device:
               filter:
@@ -104,7 +104,7 @@ trigger_variables:
   prewarm_lead: !input prewarm_lead
 
 variables:
-  # Entities created by the quirk, matched on the device by domain and
+  # The thermostat's ZHA entities, matched on the device by domain and
   # default entity ID ending.
   thermostat_entities: "{{ device_entities(thermostat_device) }}"
   schedule_group: >-
@@ -204,7 +204,7 @@ actions:
                     override_exit, override_state] }}
     then:
       - stop: >-
-          Could not find every quirk entity on the thermostat device. Check the
+          Could not find every schedule and override entity on the thermostat. Check the
           entity IDs still end with their default names.
         error: true
   - alias: Stop if no heated or home areas are set

@@ -59,8 +59,8 @@ Temperatures come from each thermostat's own schedule, so set the morning period
 
 ### Requirements and caveats
 
-- Needs the custom ZHA quirk for the TP-WGZBA from [zigpy/zha-device-handlers PR #5201](https://github.com/zigpy/zha-device-handlers/pull/5201). Entities are matched by their default entity ID endings (for example `select.*_schedule_group`, `sensor.*_override_mode`, `select.*_schedule_period_2_time`), so keep those. Renaming the device part is fine.
-- The option strings (`Schedule 1/2/3`, `Boost`, `Timer`, `Idle` and the day names) and entity types come from that quirk.
+- Needs ZHA support for the TP-WGZBA schedule and override entities, added in [zigpy/zha-device-handlers PR #5201](https://github.com/zigpy/zha-device-handlers/pull/5201). Entities are matched by their default entity ID endings (for example `select.*_schedule_group`, `sensor.*_override_mode`, `select.*_schedule_period_2_time`), so keep those. Renaming the device part is fine.
+- The option strings (`Schedule 1/2/3`, `Boost`, `Timer`, `Idle` and the day names) and entity types come from that ZHA support.
 - The Device work mode must be Schedule for the on-device schedule to apply. The blueprint does not check it.
 - If the early heating window starts before midnight (an alarm just after 00:00), it is skipped, because the fetched schedule would be for the wrong day.
 - The second stage only runs when the Timer that ended still has period 2's temperature as its target, which rules out most manual Timers. A manual Timer at exactly that temperature, ending before period 3, would still be followed by period 3.
