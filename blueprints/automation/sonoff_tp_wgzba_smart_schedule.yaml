@@ -3,12 +3,13 @@ blueprint:
   description: |
     Smart scheduling for a Sonoff TP-WGZBA thermostat on ZHA, using the schedules stored on the thermostat.
 
-    **Occupancy** switches the thermostat between its schedule groups:
+    **Home/Away** switches the thermostat between its schedule groups:
     - **Schedule 1** while the heated areas are occupied.
     - **Schedule 2** when the heated areas are empty. A running Boost or Timer override is left alone.
     - **Schedule 3** when nobody is home. Any running override is ended first.
+    - **Geofencing:** while nobody is home, someone heading home and close switches it to the pre-heat group early.
 
-    **Routine** moves the start of the morning heating to match the next waking alarm:
+    **Wake-up** moves the start of the morning heating to match the next waking alarm:
     - An **early alarm** starts today's schedule early, at its own temperatures.
     - A **late alarm** keeps the night temperature until shortly before it.
     - Someone **up early**, reported by the wake sensor, starts it straight away, alarm or not.
@@ -31,10 +32,25 @@ blueprint:
                 - integration: zha
                   manufacturer: SONOFF
                   model: TP-WGZBA
-    occupancy:
-      name: Occupancy
+        state_helper:
+          name: State helper
+          description: >-
+            A Text helper where the blueprint keeps its working state, such as the
+            running wake-up stage and what comes next, so it can carry on after a
+            restart or while the schedule is being edited. Create one under Settings
+            > Devices & services > Helpers, with a maximum length of 255, and use it
+            for this thermostat only.
+          selector:
+            entity:
+              filter:
+                - domain: input_text
+
+    home_away:
+      name: Home/Away
       icon: mdi:home-account
-      description: Where this thermostat looks for people, and how long to wait before switching schedule group.
+      description: >-
+        Where this thermostat looks for people, how long to wait before switching
+        schedule group, and geofencing: heating up before someone gets home.
       collapsed: false
       input:
         heated_areas:
@@ -75,8 +91,69 @@ blueprint:
             seconds: 0
           selector:
             duration: {}
-    routine:
-      name: Routine
+        geofencing_distance:
+          name: Geofencing distance
+          description: >-
+            While nobody is home, pre-heats once someone heading home is within this
+            distance, using the Proximity integration for the home zone. Set to 0 to
+            turn this off.
+          default: 5
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 0.5
+              unit_of_measurement: km
+              mode: box
+        geofencing_group:
+          name: Pre-heat schedule group
+          description: The schedule group to use while someone is on their way home.
+          default: Schedule 2
+          selector:
+            select:
+              options:
+                - Schedule 1
+                - Schedule 2
+        geofencing_timeout:
+          name: Geofencing timeout
+          description: >-
+            If nobody is home this long after pre-heating started, go back to
+            Schedule 3.
+          default: 30
+          selector:
+            number:
+              min: 5
+              max: 180
+              step: 5
+              unit_of_measurement: min
+              mode: box
+        proximity_devices:
+          name: Proximity
+          description: >-
+            The Proximity entry for the home zone is found by its name. Pick it here
+            only if it is not found, for example after renaming the zone.
+          default: []
+          selector:
+            device:
+              multiple: true
+              filter:
+                - integration: proximity
+        arriving_sensors:
+          name: Arriving sensor
+          description: >-
+            Optional binary sensors or toggles that turn on when someone is on their
+            way home, such as a travel time helper. Used as well as Proximity; set the
+            geofencing distance to 0 to use only these.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain:
+                    - binary_sensor
+                    - input_boolean
+    wake_up:
+      name: Wake-up
       icon: mdi:alarm
       description: >-
         Moves the start of the morning heating to match the next waking alarm,
@@ -128,19 +205,6 @@ blueprint:
             seconds: 0
           selector:
             duration: {}
-        state_helper:
-          name: State helper
-          description: >-
-            A Text helper where the blueprint keeps its working state, such as the
-            running routine stage and what comes next, so it can carry on after a
-            restart or while the schedule is being edited. Create one under Settings
-            > Devices & services > Helpers, with a maximum length of 255, and use it
-            for this thermostat only.
-          selector:
-            entity:
-              filter:
-                - domain: input_text
-
 mode: queued
 max: 10
 max_exceeded: silent
@@ -151,6 +215,11 @@ trigger_variables:
   prewarm_lead: !input prewarm_lead
   wake_sensors: !input wake_sensors
   state_helper: !input state_helper
+  home_zone: !input home_zone
+  geofencing_distance: !input geofencing_distance
+  geofencing_timeout: !input geofencing_timeout
+  proximity_devices: !input proximity_devices
+  arriving_sensors: !input arriving_sensors
 
 variables:
   # The thermostat's ZHA entities, matched on the device by domain and
@@ -295,6 +364,42 @@ triggers:
     event_type: sonoff_tp_wgzba_smart_schedule_catch_up
     event_data:
       device_id: "{{ thermostat_device }}"
+  # Someone is heading home and close, from Proximity's per-person distance
+  # and direction sensors for the home zone, or an arriving sensor. Keep this
+  # in step with the heading_home variable.
+  - alias: Someone heading home
+    trigger: template
+    id: heading-home
+    value_template: >-
+      {% set ns = namespace(on=false, ents=[]) %}
+      {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
+      {% if geofencing_distance | float(0) > 0 %}
+        {% if proximity_devices | count > 0 %}
+          {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
+        {% else %}
+          {% set zone_name = state_attr(home_zone, 'friendly_name') %}
+          {% for e in integration_entities('proximity') %}
+            {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
+          {% endfor %}
+        {% endif %}
+        {% for d in ns.ents | select('match', '^sensor\\..*_distance$') | reject('search', '_nearest_distance$') %}
+          {% set km = states(d) | float(none) %}
+          {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
+          {% if km is not none and is_state(d[:-9] ~ '_direction_of_travel', 'towards')
+                and km * to_km.get(state_attr(d, 'unit_of_measurement'), 1) <= geofencing_distance | float(0) %}
+            {% set ns.on = true %}
+          {% endif %}
+        {% endfor %}
+      {% endif %}
+      {{ ns.on }}
+  # The geofencing timeout has passed since pre-heating started.
+  - alias: Geofencing timed out
+    trigger: template
+    id: geofencing-timeout
+    value_template: >-
+      {% set raw = states(state_helper) %}
+      {% set a = (raw | from_json).arrival | default(0) | int if raw is match('^\\{') else 0 %}
+      {{ a > 0 and now().timestamp() >= a + geofencing_timeout | int * 60 }}
   # Refreshes the fetched schedule for the new day, for the late start trigger.
   - alias: New day
     trigger: time
@@ -332,6 +437,7 @@ actions:
       #   fetch: when our last fetch started.
       #   routine: the running stage, when it should end, and the next stage's
       #   temperature and end.
+      #   arrival: when geofencing pre-heating started.
       # Times are Unix epoch seconds, 0 when unset.
       state: >-
         {% set raw = states(state_helper) %}
@@ -356,6 +462,34 @@ actions:
           {% endif %}
         {% endfor %}
         {{ 0 < ns.n < (watched | count) / 2 }}
+      # Someone is heading home and close. Keep this in step with the Someone
+      # heading home trigger.
+      heading_home: >-
+        {% set ns = namespace(on=false, ents=[]) %}
+        {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
+        {% if geofencing_distance | float(0) > 0 %}
+          {% if proximity_devices | count > 0 %}
+            {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
+          {% else %}
+            {% set zone_name = state_attr(home_zone, 'friendly_name') %}
+            {% for e in integration_entities('proximity') %}
+              {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
+            {% endfor %}
+          {% endif %}
+          {% for d in ns.ents | select('match', '^sensor\\..*_distance$') | reject('search', '_nearest_distance$') %}
+            {% set km = states(d) | float(none) %}
+            {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
+            {% if km is not none and is_state(d[:-9] ~ '_direction_of_travel', 'towards')
+                  and km * to_km.get(state_attr(d, 'unit_of_measurement'), 1) <= geofencing_distance | float(0) %}
+              {% set ns.on = true %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+        {{ ns.on }}
+      # Geofencing pre-heating started at this time, and is still within its
+      # timeout.
+      arrival: "{{ state.arrival | default(0) | int }}"
+      preheating: "{{ arrival > 0 and now().timestamp() < arrival + geofencing_timeout | int * 60 }}"
       # When the override last went Idle (0 unless Idle now). A restart or
       # rejoin makes this later, never earlier.
       idle_since: >-
@@ -370,6 +504,23 @@ actions:
       stage_exit: false
       next_temp: null
       next_until: 0
+  # Someone got home, or pre-heating timed out and nobody is heading home any
+  # more, so the arrival is over.
+  - alias: Finish a geofencing arrival
+    if:
+      - condition: template
+        value_template: >-
+          {{ arrival > 0 and (states(home_zone) | int(0) > 0 or (not preheating and not heading_home)) }}
+    then:
+      - variables:
+          state: "{{ dict(state, arrival=0) }}"
+          arrival: 0
+          preheating: false
+      - action: input_text.set_value
+        target:
+          entity_id: "{{ state_helper }}"
+        data:
+          value: "{{ state | to_json }}"
   # Our stage ended more than 2 minutes before it should have, so someone
   # cancelled it (in the UI, on the thermostat or with a Boost). Drop the plan.
   - alias: Forget a cancelled plan
@@ -489,7 +640,7 @@ actions:
       # with no alarm), otherwise the alarm start.
       routine_start: >-
         {% if woke and (alarm_start == '' or now() < alarm_start | as_datetime) %}{{ now().isoformat() }}{% else %}{{ alarm_start }}{% endif %}
-  - alias: Choose the routine stage
+  - alias: Choose the wake-up stage
     if:
       - condition: template
         value_template: "{{ stage == '' }}"
@@ -497,7 +648,7 @@ actions:
       - choose:
           - alias: Early alarm or someone up, start period 2 early
             conditions:
-              - alias: The routine start has been reached
+              - alias: The wake-up start has been reached
                 condition: template
                 value_template: >-
                   {{ (run in ['prewarm', 'catch-up'] or woke) and routine_start != ''
@@ -549,7 +700,7 @@ actions:
                   {{ periods | count >= 2
                      and periods[0].temp is not none and periods[1].temp is not none
                      and periods[1].temp > periods[0].temp }}
-              - alias: Period 2 is due, and the routine start is at least a minute later
+              - alias: Period 2 is due, and the wake-up start is at least a minute later
                 condition: template
                 value_template: >-
                   {% set start = routine_start | as_datetime %}
@@ -611,7 +762,7 @@ actions:
                     {% set end = now() + (today_at(periods[2].time) - today_at(periods[1].time)) %}
                     {{ min(((min(end, today_at(periods[3].time)) - now()).total_seconds() / 60) | round(0) | int, 1439) }}
                     {% endif %}
-  - alias: Apply the routine stage, or switch schedule group
+  - alias: Apply the wake-up stage, or switch schedule group
     if:
       - condition: template
         value_template: "{{ stage != '' }}"
@@ -693,6 +844,37 @@ actions:
                   entity_id: "{{ schedule_group }}"
                 data:
                   option: Schedule 1
+          - alias: Nobody home but someone heading home, pre-heat
+            conditions:
+              - condition: zone.occupancy_is_not_detected
+                options:
+                  for: "00:00:00"
+                  zone: !input home_zone
+              - condition: occupancy.is_not_detected
+                target:
+                  area_id: !input home_areas
+                options:
+                  behavior: all
+                  for: !input clear_delay
+              - alias: Heading home now, or pre-heating within its timeout
+                condition: template
+                value_template: "{{ preheating or (arrival == 0 and heading_home) }}"
+            sequence:
+              - alias: Record when pre-heating started
+                if:
+                  - condition: template
+                    value_template: "{{ arrival == 0 }}"
+                then:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: "{{ state_helper }}"
+                    data:
+                      value: "{{ dict(state, arrival=now().timestamp() | int) | to_json }}"
+              - action: select.select_option
+                target:
+                  entity_id: "{{ schedule_group }}"
+                data:
+                  option: !input geofencing_group
           - alias: Nobody home, end override and set Schedule 3
             conditions:
               - condition: zone.occupancy_is_not_detected
