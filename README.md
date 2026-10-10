@@ -2,11 +2,11 @@
 
 Blueprints I've created for my own personal use, support is not guaranteed.
 
-## Zigbee thermostat, occupancy and alarm aware schedule
+## Sonoff TP-WGZBA thermostat, occupancy and alarm aware schedule
 
-[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fjeverley%2Fhome-assistant-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fzigbee_thermostat_occupancy_alarm_schedule.yaml)
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fjeverley%2Fhome-assistant-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsonoff_tp_wgzba_occupancy_alarm_schedule.yaml)
 
-File: [`blueprints/automation/zigbee_thermostat_occupancy_alarm_schedule.yaml`](blueprints/automation/zigbee_thermostat_occupancy_alarm_schedule.yaml). Requires Home Assistant 2026.10.0 or later.
+File: [`blueprints/automation/sonoff_tp_wgzba_occupancy_alarm_schedule.yaml`](blueprints/automation/sonoff_tp_wgzba_occupancy_alarm_schedule.yaml). Requires Home Assistant 2026.10.0 or later.
 
 Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per thermostat (zone) and pick the thermostat device. The blueprint finds the device's schedule and override entities itself.
 
