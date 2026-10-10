@@ -44,14 +44,15 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C. Alarm 05:30, le
 | Section | Inputs |
 | --- | --- |
 | Thermostat | the TP-WGZBA device |
-| Occupancy | heated areas, whole house, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min) |
-| Early morning heating | next alarm sensor, lead time (30 min), presence areas (none) |
+| Occupancy | heated areas and floors, whole house areas and floors, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min) |
+| Early morning heating | next alarm sensor, lead time (30 min), presence areas and floors (none) |
 
 ### Example configurations
 
 | Setting | Bedroom | Living room |
 | --- | --- | --- |
-| Heated areas | Bedroom (or the Upstairs floor) | Living room |
+| Heated areas | Bedroom | Living room |
+| Whole house floors | Upstairs, Downstairs | Upstairs, Downstairs |
 | Lead time | 30 min | 10 min |
 | Presence areas | Bedroom | Bedroom (heats downstairs while you're still in bed) |
 
@@ -65,7 +66,7 @@ Temperatures come from each thermostat's own schedule, so set the morning period
 - If the early heating window starts before midnight (an alarm just after 00:00), it is skipped, because the fetched schedule would be for the wrong day.
 - The second stage only runs when the Timer that ended still has period 2's temperature as its target, which rules out most manual Timers. A manual Timer at exactly that temperature, ending before period 3, would still be followed by period 3.
 - If Home Assistant is down at the moment the first stage ends, the second stage does not run and the device falls back to its normal schedule.
-- The heated areas, whole house and presence inputs are target selectors, so each takes areas, floors or a mix. The picker also offers devices and entities, which are passed through to the occupancy checks, but areas or floors are intended.
+- Heated, whole house and presence each have an areas input and a floors input (both multiple), which are combined. Set at least one heated and one whole house area or floor, or the automation stops with an error. Leave both presence inputs empty to skip the presence check.
 - The trigger ids `prewarm` and `override-ended` are fixed because the actions depend on them.
 
 ### Known issue
