@@ -5,7 +5,7 @@ blueprint:
 
     **Occupancy** switches the thermostat between its schedule groups:
     - **Schedule 1** while the heated areas are occupied.
-    - **Schedule 2** when the heated areas are empty. A running Boost or Timer override is left alone. With **Occupancy switching** off, Schedule 1 is used whenever someone is home.
+    - **Schedule 2** when the heated areas are empty. A running Boost or Timer override is left alone. With **Follow occupancy** off, Schedule 1 is used whenever someone is home.
     - **Schedule 3** when nobody is home. Any running override is ended first.
 
     **Geofencing** switches to the pre-heat group early while nobody is home and someone is close and heading home.
@@ -61,7 +61,7 @@ blueprint:
       collapsed: false
       input:
         occupancy_enabled:
-          name: Occupancy switching
+          name: Follow occupancy
           description: |
             Uses Schedule 1 while the heated areas are occupied and Schedule 2 when they are empty.
 
@@ -1033,8 +1033,8 @@ actions:
                 data:
                   option: Schedule 3
           # After the nobody-home branches, so Schedule 1 never applies to an
-          # empty house when occupancy switching is off.
-          - alias: Heated areas occupied (or occupancy switching off), Schedule 1
+          # empty house when follow occupancy is off.
+          - alias: Heated areas occupied (or follow occupancy off), Schedule 1
             conditions:
               - condition: or
                 conditions:
