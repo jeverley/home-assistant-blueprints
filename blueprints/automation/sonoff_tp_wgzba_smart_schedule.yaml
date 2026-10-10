@@ -209,13 +209,13 @@ blueprint:
                     - binary_sensor
                     - input_boolean
         wake_enabled:
-          name: Wake-up
+          name: Getting up
           description: When the awake sensor turns on, starts the morning heating straight away, as for an early alarm.
           default: true
           selector:
             boolean: {}
         wake_duration:
-          name: Wake-up delay
+          name: Getting up delay
           description: >-
             How long the awake sensor must stay on before someone counts as up. Leave
             at zero if the sensor already accounts for this.
@@ -355,7 +355,7 @@ triggers:
       {{ start.date() == now().date() and p2 < start
          and p2 - timedelta(minutes=1) <= now() < p2 }}
       {% endif %}
-  # Any awake sensor on, held for the wake-up delay.
+  # Any awake sensor on, held for the getting up delay.
   - alias: Someone is up
     trigger: template
     id: wake
