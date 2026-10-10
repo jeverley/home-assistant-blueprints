@@ -16,7 +16,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
   - Schedule 1 when the heated areas are occupied.
   - Schedule 2 when the heated areas are empty. A running Boost or Timer override is left alone.
   - Schedule 3 when nobody is home (the home zone is empty and every home area is clear). Any running override is ended first.
-- **Routine:** moves the start of the morning heating to match the next waking alarm. The routine start is the alarm minus the lead time. Routine runs (and a refresh just after midnight) fetch today's schedule for the active group and counts the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period).
+- **Routine:** moves the start of the morning heating to match the next waking alarm. The routine start is the alarm minus the lead time. Routine runs (and a refresh just after midnight) read today's schedule for the active group, fetching it from the thermostat when needed, and counts the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period).
   - **Early alarm** (routine start before period 2): today's morning starts early, at the schedule's own temperatures.
 
     | Configured periods | Typical schedule | What happens |
@@ -96,7 +96,7 @@ A Bayesian sensor that combines motion with other signals (a phone coming off ch
 - Occupancy for the heated and home areas uses occupancy sensors (device class `occupancy`) only. For an area with only a motion sensor, create an occupancy sensor from it, for example a template binary sensor with a delay off.
 - The trigger ids `prewarm`, `late-hold`, `wake`, `override-ended`, `catch-up` and `new-day` are fixed because the actions depend on them.
 
-- Fetching the schedule selects today in the thermostat's **Schedule operating day** select, which replaces whatever day is shown for editing. The blueprint only fetches on routine runs and just after midnight, so avoid editing the schedule in the UI around those times (or before an alarm), or disable the automation while you edit.
+- Fetching the schedule selects today in the thermostat's **Schedule operating day** select, which replaces whatever day is shown for editing. To avoid that, the blueprint only fetches on routine runs and just after midnight, and skips the fetch when the selects already hold today's schedule (fetched today, after the last group change and schedule apply). If someone changed the operating day or a period in the UI in the last 10 minutes, the run is skipped instead, with a note in its trace. Unapplied edits left for longer than that can be replaced by the next fetch.
 
 ### Known issue
 

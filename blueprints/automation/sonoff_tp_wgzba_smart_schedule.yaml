@@ -149,6 +149,11 @@ variables:
     {{ thermostat_entities | select('match', '^select\\..*_schedule_operating_day$') | first | default('') }}
   fetch_button: >-
     {{ thermostat_entities | select('match', '^button\\..*_schedule_fetch$') | first | default('') }}
+  apply_button: >-
+    {{ thermostat_entities | select('match', '^button\\..*_schedule_apply$') | first | default('') }}
+  period_entities: >-
+    {{ thermostat_entities
+       | select('match', '^(select|number)\\..*_schedule_period_[0-9]+_(time|temp)$') | list }}
   override_mode: >-
     {{ thermostat_entities | select('match', '^select\\..*_override_mode$') | first | default('') }}
   override_target: >-
@@ -282,16 +287,50 @@ actions:
       timer_ended: >-
         {{ trigger.id == 'override-ended' and trigger.from_state is not none
            and trigger.from_state.state == 'Timer' }}
-  # Fetch today's schedule for the active group, but only on runs that use
-  # it, since selecting the operating day replaces a day being edited in the
-  # UI. For routine triggers a failed fetch stops the run, so the routine
-  # fails closed. The new day refresh only keeps the period times current
-  # for the late start trigger, so a failure there is tolerated.
-  - alias: Fetch today's schedule
+  - variables:
+      # Someone changed the operating day or a period in the UI in the last 10
+      # minutes. Changes from a person carry a user; restarts and automations
+      # do not.
+      user_editing: >-
+        {{ expand([operating_day] + period_entities)
+           | selectattr('last_changed', 'ge', now() - timedelta(minutes=10))
+           | selectattr('context.user_id', 'ne', none) | list | count > 0 }}
+      # The selects already hold today's schedule for the active group: fetched
+      # today, after the last group change and schedule apply, with today
+      # selected and no edits to the periods since.
+      schedule_fresh: >-
+        {% set f = states(fetch_button) | as_datetime(none) %}
+        {% set applied = states(apply_button) | as_datetime(none) if apply_button != '' else none %}
+        {{ f is not none and f >= today_at('00:00')
+           and f >= states[schedule_group].last_changed
+           and (applied is none or applied < f)
+           and is_state(operating_day, now().strftime('%A'))
+           and expand(period_entities)
+               | selectattr('last_changed', 'gt', f + timedelta(seconds=30))
+               | selectattr('context.user_id', 'ne', none) | list | count == 0 }}
+  # Get today's schedule for the active group, only on runs that use it.
+  # Fetching selects today as the operating day, which would replace a day
+  # being edited in the UI, so a run stops instead while someone is editing,
+  # and skips the fetch when the selects are already current. For routine
+  # triggers a failed fetch stops the run, so the routine fails closed. The
+  # new day refresh only keeps the period times current for the late start
+  # trigger, so a failure there is tolerated.
+  - alias: Get today's schedule
     choose:
-      - conditions:
+      - alias: Someone is editing the schedule, so leave it alone
+        conditions:
           - condition: template
-            value_template: "{{ trigger.id in ['prewarm', 'late-hold', 'override-ended', 'catch-up', 'wake'] }}"
+            value_template: >-
+              {{ trigger.id in ['prewarm', 'late-hold', 'override-ended', 'catch-up', 'wake', 'new-day']
+                 and user_editing }}
+        sequence:
+          - stop: The schedule is being edited in the UI, so this run was skipped.
+      - alias: Fetch it
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ trigger.id in ['prewarm', 'late-hold', 'override-ended', 'catch-up', 'wake']
+                 and not schedule_fresh }}
         sequence:
           - alias: Select today as the operating day
             action: select.select_option
@@ -304,9 +343,10 @@ actions:
             action: button.press
             target:
               entity_id: "{{ fetch_button }}"
-      - conditions:
+      - alias: Refresh it for the new day
+        conditions:
           - condition: template
-            value_template: "{{ trigger.id == 'new-day' }}"
+            value_template: "{{ trigger.id == 'new-day' and not schedule_fresh }}"
         sequence:
           - alias: Select today as the operating day
             continue_on_error: true
