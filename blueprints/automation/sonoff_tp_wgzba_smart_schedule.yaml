@@ -282,39 +282,44 @@ actions:
       timer_ended: >-
         {{ trigger.id == 'override-ended' and trigger.from_state is not none
            and trigger.from_state.state == 'Timer' }}
-  # Every run fetches today's schedule for the active group. For routine
-  # triggers a failed fetch stops the run, so the routine fails closed. For
-  # other triggers it is only a refresh, so a failure must not block the
-  # schedule group switching below.
+  # Fetch today's schedule for the active group, but only on runs that use
+  # it, since selecting the operating day replaces a day being edited in the
+  # UI. For routine triggers a failed fetch stops the run, so the routine
+  # fails closed. The new day refresh only keeps the period times current
+  # for the late start trigger, so a failure there is tolerated.
   - alias: Fetch today's schedule
-    if:
-      - condition: template
-        value_template: "{{ trigger.id in ['prewarm', 'late-hold', 'override-ended', 'catch-up', 'wake'] }}"
-    then:
-      - alias: Select today as the operating day
-        action: select.select_option
-        target:
-          entity_id: "{{ operating_day }}"
-        data:
-          option: "{{ now().strftime('%A') }}"
-      # The press returns once the device has replied, so no wait is needed.
-      - alias: Fetch the active schedule
-        action: button.press
-        target:
-          entity_id: "{{ fetch_button }}"
-    else:
-      - alias: Select today as the operating day
-        continue_on_error: true
-        action: select.select_option
-        target:
-          entity_id: "{{ operating_day }}"
-        data:
-          option: "{{ now().strftime('%A') }}"
-      - alias: Fetch the active schedule
-        continue_on_error: true
-        action: button.press
-        target:
-          entity_id: "{{ fetch_button }}"
+    choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id in ['prewarm', 'late-hold', 'override-ended', 'catch-up', 'wake'] }}"
+        sequence:
+          - alias: Select today as the operating day
+            action: select.select_option
+            target:
+              entity_id: "{{ operating_day }}"
+            data:
+              option: "{{ now().strftime('%A') }}"
+          # The press returns once the device has replied, so no wait is needed.
+          - alias: Fetch the active schedule
+            action: button.press
+            target:
+              entity_id: "{{ fetch_button }}"
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'new-day' }}"
+        sequence:
+          - alias: Select today as the operating day
+            continue_on_error: true
+            action: select.select_option
+            target:
+              entity_id: "{{ operating_day }}"
+            data:
+              option: "{{ now().strftime('%A') }}"
+          - alias: Fetch the active schedule
+            continue_on_error: true
+            action: button.press
+            target:
+              entity_id: "{{ fetch_button }}"
   - alias: Read the configured periods and today's routine start
     variables:
       # Periods in order as {time, temp}, stopping at the first unset (NULL)
@@ -496,10 +501,13 @@ actions:
             condition: template
             value_template: >-
               {{ (today_at(periods[2].time) - now()).total_seconds() >= 60 }}
-          - alias: The Timer that ended was ours (target was the period 2 temperature)
+          - alias: The Timer that ended was our early start (period 2's temperature, for period 2's usual length)
             condition: template
             value_template: >-
-              {{ states(override_target) | float(none) == periods[1].temp }}
+              {% set ran = (now() - trigger.from_state.last_changed).total_seconds() %}
+              {% set usual = (today_at(periods[2].time) - today_at(periods[1].time)).total_seconds() %}
+              {{ states(override_target) | float(none) == periods[1].temp
+                 and (ran - usual) | abs <= 120 }}
           - alias: Someone is in the home areas
             condition: occupancy.is_detected
             target:
@@ -524,11 +532,12 @@ actions:
           - alias: Period 2 has a temperature
             condition: template
             value_template: "{{ periods[1].temp is not none }}"
-          - alias: The Timer that ended was our late hold (target was the period 1 temperature)
+          - alias: The Timer that ended was our late hold (period 1's temperature, ending at the alarm start)
             condition: template
             value_template: >-
               {{ periods[0].temp is not none
-                 and states(override_target) | float(none) == periods[0].temp }}
+                 and states(override_target) | float(none) == periods[0].temp
+                 and ((now() - alarm_start | as_datetime).total_seconds()) | abs <= 120 }}
           - alias: The alarm start is after period 2's usual start, and period 2 has time left
             condition: template
             value_template: >-

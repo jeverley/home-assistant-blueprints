@@ -16,7 +16,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
   - Schedule 1 when the heated areas are occupied.
   - Schedule 2 when the heated areas are empty. A running Boost or Timer override is left alone.
   - Schedule 3 when nobody is home (the home zone is empty and every home area is clear). Any running override is ended first.
-- **Routine:** moves the start of the morning heating to match the next waking alarm. The routine start is the alarm minus the lead time. Every run fetches today's schedule for the active group and counts the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period).
+- **Routine:** moves the start of the morning heating to match the next waking alarm. The routine start is the alarm minus the lead time. Routine runs (and a refresh just after midnight) fetch today's schedule for the active group and counts the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period).
   - **Early alarm** (routine start before period 2): today's morning starts early, at the schedule's own temperatures.
 
     | Configured periods | Typical schedule | What happens |
@@ -89,13 +89,14 @@ A Bayesian sensor that combines motion with other signals (a phone coming off ch
 - The option strings (`Schedule 1/2/3`, `Boost`, `Timer`, `Idle` and the day names) and entity types come from that ZHA support.
 - The Device work mode must be Schedule for the on-device schedule to apply. The blueprint does not check it.
 - If the routine start falls before midnight (an alarm just after 00:00), the routine is skipped, because the fetched schedule would be for the wrong day.
-- Checking the Timer target rules out most manual Timers. A manual Timer at exactly the expected temperature, ending inside a routine window, would still be followed by the next stage.
-- With 4 or more periods, the follow-on stages (period 3 after an early alarm, period 2 after a late hold) only run when the Timer that ended has the expected target: period 2's temperature after an early start, period 1's after a late hold. If Home Assistant is down when that Timer ends, the follow-on stage does not run and the device falls back to its normal schedule.
+- With 4 or more periods, the follow-on stages (period 3 after an early start, period 2 after a late hold) only run when the Timer that ended was the routine's own: period 2's temperature for period 2's usual length after an early start, or period 1's temperature ending at the alarm start after a late hold, each within 2 minutes. A manual Timer would have to match both to be mistaken for one. If Home Assistant restarts during an early start, the restarted stage is shorter, so its period 3 follow-on does not run and the device carries on with its normal schedule. If Home Assistant is down when a stage ends, its follow-on does not run either.
 - During a late hold and its period 2 stage, schedule group switching for the heated areas waits until they end. Without a wake sensor, anyone up before the routine start stays at period 1's temperature. With one, the hold ends when it reports someone up.
 - Heated areas and home areas are both required. If either is empty, the automation stops with an error.
 - The routine needs someone anywhere in the home areas, so a downstairs thermostat heats while people are still in bed upstairs. It cannot be limited to one room, so a spare bedroom thermostat sharing the same alarm sensor would also heat whenever someone is home.
 - Occupancy for the heated and home areas uses occupancy sensors (device class `occupancy`) only. For an area with only a motion sensor, create an occupancy sensor from it, for example a template binary sensor with a delay off.
 - The trigger ids `prewarm`, `late-hold`, `wake`, `override-ended`, `catch-up` and `new-day` are fixed because the actions depend on them.
+
+- Fetching the schedule selects today in the thermostat's **Schedule operating day** select, which replaces whatever day is shown for editing. The blueprint only fetches on routine runs and just after midnight, so avoid editing the schedule in the UI around those times (or before an alarm), or disable the automation while you edit.
 
 ### Known issue
 
