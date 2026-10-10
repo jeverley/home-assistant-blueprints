@@ -9,7 +9,7 @@ blueprint:
     - **Schedule 3** when nobody is home. Any running override is ended first.
     - **Geofencing:** while nobody is home, someone heading home and close switches it to the pre-heat group early.
 
-    **Wake-up** moves the start of the morning heating to match the next waking alarm:
+    **Routine** moves the start of the morning heating to match the next waking alarm:
     - An **early alarm** starts today's schedule early, at its own temperatures.
     - A **late alarm** keeps the night temperature until shortly before it.
     - Someone **up early**, reported by the wake sensor, starts it straight away, alarm or not.
@@ -152,8 +152,8 @@ blueprint:
                 - domain:
                     - binary_sensor
                     - input_boolean
-    wake_up:
-      name: Wake-up
+    routine:
+      name: Routine
       icon: mdi:alarm
       description: >-
         Moves the start of the morning heating to match the next waking alarm,

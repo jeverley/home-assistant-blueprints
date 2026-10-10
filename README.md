@@ -17,7 +17,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
   - Schedule 2 when the heated areas are empty. A running Boost or Timer override is left alone.
   - Schedule 3 when nobody is home (the home zone is empty and every home area is clear). Any running override is ended first.
   - **Geofencing:** while nobody is home, once someone heading home is within the geofencing distance, it switches to the pre-heat group (Schedule 2 by default) so the house warms before they arrive. See [Geofencing](#geofencing) below.
-- **Wake-up:** moves the start of the morning heating to match the next waking alarm. The wake-up start is the alarm minus the lead time. Early, late, wake and catch-up runs (and a refresh just after midnight) fetch today's schedule for the active group from the thermostat and counts the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period).
+- **Routine:** moves the start of the morning heating to match the next waking alarm. The wake-up start is the alarm minus the lead time. Early, late, wake and catch-up runs (and a refresh just after midnight) fetch today's schedule for the active group from the thermostat and counts the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period).
   - **Early alarm** (wake-up start before period 2): today's morning starts early, at the schedule's own temperatures.
 
     | Configured periods | Typical schedule | What happens |
@@ -53,7 +53,7 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | --- | --- |
 | Thermostat | the TP-WGZBA device, state helper (required) |
 | Home/Away | heated areas, home areas, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min), geofencing distance (5 km), pre-heat schedule group (Schedule 2), geofencing timeout (30 min), Proximity (found from the home zone), arriving sensor (none) |
-| Wake-up | next alarm sensor, lead time (30 min), wake sensor (none), wake duration (0) |
+| Routine | next alarm sensor, lead time (30 min), wake sensor (none), wake duration (0) |
 
 ### Example configurations
 
