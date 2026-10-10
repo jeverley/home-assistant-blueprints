@@ -73,13 +73,13 @@ Temperatures come from each thermostat's own schedule, so set the morning period
 
 ### Awake sensor
 
-Any binary sensor or input boolean that is **on while anyone is up** and **off once everyone is asleep**. It drives both ends of the day:
+Any binary sensor or input boolean that is **on while anyone is up**, **off once everyone is asleep**, and **unknown** (or unavailable) when it can't tell. Only an explicit `on` or `off` counts, so unknown never starts the morning or bedtime. It drives both ends of the day:
 - Turning on (held for the **Getting up delay**, if set) means someone is up, when **Getting up** is on.
 - Turning off (held for the **Bedtime delay**, 15 minutes by default) is bedtime, when **Bedtime** is on. If it turns on again before the usual setback time, the early setback ends.
 
 Each automation uses it only for its own thermostat, so you can turn getting up or bedtime off for a bedroom and keep them for a living room.
 
-The sensor has to tell real getting up from a trip to the bathroom, and real bedtime from a quiet evening, by itself: the blueprint has no time window of its own, since limiting the sensor to certain hours would make it turn off (and look like bedtime) when the window ends. Motion sensors alone are a poor signal, so build a helper that smooths them out. Both of these can be set up in the UI under **Settings** > **Devices & services** > **Helpers**:
+The sensor has to tell real getting up from a trip to the bathroom, and real bedtime from a quiet afternoon, by itself. The blueprint has no time window of its own. Motion sensors alone are a poor signal, so build a helper that smooths them out. Both of these can be set up in the UI under **Settings** > **Devices & services** > **Helpers**:
 
 - **Time active in a window (most robust):**
   1. A **Group** (binary sensor) of your home's motion sensors.
@@ -90,6 +90,19 @@ The sensor has to tell real getting up from a trip to the bathroom, and real bed
 - **Motion held through short pauses (simpler):** a **Template** binary sensor that is on while any motion sensor in the group is on, with **Delay off** set to about 2 minutes. Use it with a **Getting up delay** of around 10 minutes and a longer **Bedtime delay**.
 
 A quiet evening on the sofa can look like everyone asleep to motion sensors. Keep the sensor on while there are other signs of people up, for example by grouping the motion helper with the TV or the living room lights (a **Group** with **All entities** off, so it is on when any member is on), or use a **Bayesian** sensor that combines motion with signals such as phones charging or bedroom lights.
+
+To limit it to the hours when getting up or going to bed is plausible, wrap it in a **Template** binary sensor that is unknown at other times, by returning `none`. For example, to ignore the middle of the night and the daytime:
+
+```jinja
+{% set h = now().hour %}
+{% if 5 <= h < 11 or h >= 19 or h < 1 %}
+  {{ is_state('binary_sensor.someone_moving', 'on') }}
+{% else %}
+  {{ none }}
+{% endif %}
+```
+
+A 03:00 trip to the bathroom then does not start the morning, and a quiet afternoon does not start bedtime. When it becomes known again, an `off` still has to last the **Bedtime delay**.
 
 ### Geofencing
 

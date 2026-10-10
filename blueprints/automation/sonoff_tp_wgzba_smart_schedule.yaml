@@ -216,7 +216,7 @@ blueprint:
           description: |
             A binary sensor or toggle that is **on while anyone is up** and **off once everyone is asleep**, such as a helper built from your motion sensors.
 
-            It must tell a night-time trip from getting up for the day by itself.
+            Make it **unknown** when it can't tell, for example in the middle of the night or during the day. Only on and off are acted on.
           default: []
           selector:
             entity:
