@@ -284,18 +284,17 @@ actions:
       timer_ended: >-
         {{ trigger.id == 'override-ended' and trigger.from_state is not none
            and trigger.from_state.state == 'Timer' }}
-  # Someone changed the operating day or a period in the UI in the last 3
-  # minutes. Changes from a person carry a user; restarts and automations do
-  # not. Fetching selects today as the operating day, which would replace a
-  # day being edited, so routine runs wait until editing has stopped for 3
-  # minutes, giving up after 5.
+  # Fetching selects today as the operating day, which would replace a day
+  # being edited in the UI, so routine runs wait until a person has not changed
+  # the operating day or a period for 5 minutes, giving up after 10. Changes
+  # from a person carry a user; restarts and automations do not.
   - alias: Wait while someone is editing the schedule
     wait_template: >-
       {{ trigger.id not in ['prewarm', 'late-hold', 'override-ended', 'catch-up', 'wake', 'new-day']
          or expand([operating_day] + period_entities)
-            | selectattr('last_changed', 'ge', now() - timedelta(minutes=3))
+            | selectattr('last_changed', 'ge', now() - timedelta(minutes=5))
             | selectattr('context.user_id', 'ne', none) | list | count == 0 }}
-    timeout: "00:05:00"
+    timeout: "00:10:00"
     continue_on_timeout: true
   - variables:
       # False if the wait above gave up, so the routine is skipped this run.
@@ -690,7 +689,7 @@ actions:
               {{ states(schedule_group) != group_before
                  and alarm_start != '' and now() < alarm_start | as_datetime
                  and expand([operating_day] + period_entities)
-                     | selectattr('last_changed', 'ge', now() - timedelta(minutes=3))
+                     | selectattr('last_changed', 'ge', now() - timedelta(minutes=5))
                      | selectattr('context.user_id', 'ne', none) | list | count == 0 }}
         then:
           - alias: Select today as the operating day
