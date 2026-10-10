@@ -1,12 +1,12 @@
 blueprint:
-  name: Sonoff TP-WGZBA thermostat, occupancy and alarm aware schedule
+  name: Sonoff TP-WGZBA smart schedule
   description: >-
     Switches a thermostat's active schedule group by occupancy (1 floor
     occupied, 2 floor empty, 3 nobody home). Before the next waking alarm it
     starts the device's morning heating early, using the times and temperatures
     of today's on-device schedule.
   domain: automation
-  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_occupancy_alarm_schedule.yaml
+  source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_smart_schedule.yaml
   homeassistant:
     min_version: 2026.10.0
   input:
