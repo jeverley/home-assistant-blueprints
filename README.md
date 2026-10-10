@@ -16,8 +16,9 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
   - Schedule 1 when this floor is occupied.
   - Schedule 2 when this floor is empty. A running Boost or Timer override is left alone.
   - Schedule 3 when nobody is home (the home zone is empty and every floor is clear). Any running override is ended first.
-- **Pre-warm:** inside the pre-warm window before the next waking alarm, sets a Timer override at the pre-warm temperature. The period runs until the alarm or period 2, whichever is sooner, capped at 1439 minutes (the device maximum). If `require_presence` is on, someone must be on this floor.
-- **Hold:** when the Timer override ends, optionally holds a working temperature until period 2, capped by the maximum hold (90 minutes by default).
+- **Pre-warm:** inside the pre-warm window before the next waking alarm, sets a Timer override at the pre-warm temperature. The period runs until the alarm or period 2, whichever is sooner, capped at 1439 minutes (the device maximum). Someone must be on one of the presence floors, unless none are set.
+- **Hold:** when the Timer override ends, optionally holds a working temperature until period 2, capped by the maximum hold (90 minutes by default). It uses the same presence floors check.
+- **Presence floors:** usually the floor with the bedrooms. A downstairs thermostat can list Upstairs so it warms the living room while people are still in bed.
 - **Reading period 2:** period 1 is fixed at 00:00, so period 2 is the first heating period. The blueprint selects today as the operating day, presses the schedule fetch button and reads the "Schedule period 2 time" select. The press returns once the device has replied, so there is no wait. If the value is not a valid `HH:MM` time, the pre-warm and hold are skipped.
 - **Resilience:** runs in queued mode (max 10, silent) and re-applies the schedule group when its select recovers from `unavailable` or `unknown`.
 
@@ -27,7 +28,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 | --- | --- |
 | Thermostat entities | schedule group, operating day, fetch button, schedule period 2 time, override mode, override target, override period, override apply, override exit, override mode sensor |
 | Occupancy | this floor, all floors, home zone (default `zone.home`), occupied delay (1 min), empty delay (5 min) |
-| Pre-warm and hold | next alarm sensor, lead time (30 min), pre-warm temperature (21 °C), require presence (on), hold enabled (on), hold temperature (20 °C), maximum hold (90 min) |
+| Pre-warm and hold | next alarm sensor, lead time (30 min), pre-warm temperature (21 °C), presence floors (none), hold enabled (on), hold temperature (20 °C), maximum hold (90 min) |
 
 ### Example configurations
 
@@ -36,7 +37,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 | Floor | Upstairs | Downstairs |
 | Pre-warm lead time | 30 min | 10 min |
 | Pre-warm temperature | 21 °C | 20 °C |
-| Require presence | On | Off |
+| Presence floors | Upstairs | Upstairs |
 | Hold | On, 20 °C | Off |
 
 ### Requirements and caveats
