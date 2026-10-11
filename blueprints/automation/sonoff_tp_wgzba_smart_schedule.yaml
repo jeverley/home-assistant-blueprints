@@ -566,15 +566,17 @@ actions:
       # The routine plan records intent, not temperatures: its kind (morning
       # or bedtime) and start (when the morning starts, or bedtime began). Its
       # stage is worked out from today's periods on each run, so it follows a
-      # schedule group change. timer_until and timer_temp describe the Timer we
-      # last applied: when it should end, to tell one that ran out from one
-      # someone cancelled, and its temperature, to tell ours from someone
-      # else's. A cancelled plan is kept, marked, so it does not start again
-      # that day.
+      # schedule group change. timer_until, timer_temp and timer_applied
+      # describe the Timer we last applied: when it should end (to tell one
+      # that ran out from one someone cancelled), its temperature (to tell
+      # whether the stage has changed) and when we pressed Apply (to tell ours
+      # from someone else's). A cancelled plan is kept, marked, so it does not
+      # start again that day.
       plan: >-
         {% set r = state.routine | default({}) %}
         {{ {'kind': r.kind | default(''), 'start': r.start | default(0) | int,
             'timer_until': r.timer_until | default(0) | int, 'timer_temp': r.timer_temp | default(none),
+            'timer_applied': r.timer_applied | default(0) | int,
             'cancelled': r.cancelled | default(false)} }}
       # The schedule is being edited: operating day or period entities changed
       # in the last 5 minutes, other than through our own fetch (10 s before to
@@ -658,18 +660,19 @@ actions:
           state: "{{ dict(state, routine=plan) }}"
   - variables:
       # An empty plan, for clearing it.
-      no_plan: "{{ {'kind': '', 'start': 0, 'timer_until': 0, 'timer_temp': none, 'cancelled': false} }}"
+      no_plan: "{{ {'kind': '', 'start': 0, 'timer_until': 0, 'timer_temp': none, 'timer_applied': 0, 'cancelled': false} }}"
       # The plan is for today. One from an earlier day is over.
       plan_today: "{{ plan.start > 0 and plan.start | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d') }}"
       active: "{{ plan.kind != '' and not plan.cancelled and plan_today }}"
       # The routine someone cancelled today, if any, so it does not start again.
       cancelled_today: "{{ plan.kind if plan.cancelled and plan_today else '' }}"
-      # Our routine's Timer is running: a Timer at the temperature we set. A
-      # Timer someone else started has their own temperature, so it is left
-      # alone.
+      # Our routine's Timer is running: a Timer, and the override Apply button
+      # was last pressed by us. A Timer or Boost only starts from Apply, so
+      # anyone else's press makes the running override theirs, and it is
+      # left alone. Changing the target or period without applying does not.
       ours: >-
-        {{ active and is_state(override_state, 'Timer') and plan.timer_temp is not none
-           and (states(override_target) | float(0) - plan.timer_temp | float(0)) | abs < 0.05 }}
+        {{ active and is_state(override_state, 'Timer') and plan.timer_applied > 0
+           and as_timestamp(states(override_apply), 0) | int == plan.timer_applied }}
   # A plan from an earlier day is over, so clear it, including yesterday's
   # cancelled marker.
   - alias: Forget a plan from an earlier day
@@ -1103,7 +1106,7 @@ actions:
                     value_template: >-
                       {{ stage is not none and (is_state(override_state, 'Idle')
                          or (ours and ((stage.until - plan.timer_until) | abs > 90
-                                       or (states(override_target) | float(0) - stage.temp) | abs > 0.05))) }}
+                                       or (plan.timer_temp | float(0) - stage.temp) | abs > 0.05))) }}
                 sequence:
                   - variables:
                       minutes: "{{ [((stage.until - now().timestamp()) / 60) | round(0) | int, 1439] | min }}"
@@ -1158,11 +1161,14 @@ actions:
                       - wait_template: "{{ is_state(override_state, 'Timer') }}"
                         timeout: "00:00:30"
                         continue_on_timeout: true
-                      # Record the plan once the Timer is running, with when it should end
-                      # and its temperature. If it did not start, record the plan alone,
-                      # so it is not taken for a cancelled Timer. Saved at the end.
+                      # Record the plan once the Timer is running: when it should end,
+                      # its temperature and our Apply press. If it did not start, record
+                      # the plan alone, so it is not taken for a cancelled Timer. Saved
+                      # at the end.
                       - variables:
                           state: >-
-                            {{ dict(state, routine=dict(plan, timer_until=timer_until, timer_temp=stage.temp)
-                               if is_state(override_state, 'Timer') else dict(plan, timer_until=0, timer_temp=none)) }}
+                            {{ dict(state, routine=dict(plan, timer_until=timer_until, timer_temp=stage.temp,
+                                                        timer_applied=as_timestamp(states(override_apply), 0) | int)
+                               if is_state(override_state, 'Timer')
+                               else dict(plan, timer_until=0, timer_temp=none, timer_applied=0)) }}
   - *save_state
