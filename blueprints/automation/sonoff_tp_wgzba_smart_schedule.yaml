@@ -5,7 +5,8 @@ blueprint:
 
     **Occupancy** switches the thermostat between its schedule groups:
     - **Schedule 1** while the heated areas are occupied.
-    - **Schedule 2** when the heated areas are empty. A running Boost or Timer override is left alone. With **Follow occupancy** off, Schedule 1 is used whenever someone is home.
+    - **Schedule 2** when the heated areas are empty. With **Follow occupancy** off, Schedule 1 is used whenever someone is home.
+    - Schedules 1 and 2 wait for a running Boost or Timer override to end.
     - **Schedule 3** when nobody is home. Any running override is ended first.
 
     **Geofencing** switches to the pre-heat group early while nobody is home and someone is close and heading home.
@@ -313,8 +314,20 @@ variables:
   late_alarm_enabled: !input late_alarm_enabled
   wake_enabled: !input wake_enabled
   bedtime_enabled: !input bedtime_enabled
+  wake_duration: !input wake_duration
   sleep_delay: !input sleep_delay
   clear_delay: !input clear_delay
+  # The delays in seconds. A duration input is a dict from the UI, or a
+  # string or number of seconds in YAML.
+  delay_secs: >-
+    {%- macro secs(d) -%}
+      {%- if d is string -%}{{ as_timedelta(d).total_seconds() }}
+      {%- elif d is mapping -%}{{ (d.days | default(0)) * 86400 + (d.hours | default(0)) * 3600
+           + (d.minutes | default(0)) * 60 + (d.seconds | default(0)) }}
+      {%- else -%}{{ d | float(0) }}{%- endif -%}
+    {%- endmacro -%}
+    {{ {'wake': secs(wake_duration) | float(0), 'sleep': secs(sleep_delay) | float(0),
+        'clear': secs(clear_delay) | float(0)} }}
   # Occupancy sensors in any area. Someone in any area, even the garden, is
   # home.
   area_sensors: >-
@@ -324,19 +337,19 @@ variables:
     {% endfor %}
     {{ ns.e }}
   someone_in_an_area: "{{ area_sensors | select('is_state', 'on') | list | count > 0 }}"
-  # No area is occupied, and none has been for the empty delay.
-  every_area_empty: >-
-    {% set d = clear_delay %}
-    {% set secs = as_timedelta(d).total_seconds() if d is string else
-         (d.days | default(0)) * 86400 + (d.hours | default(0)) * 3600
-         + (d.minutes | default(0)) * 60 + (d.seconds | default(0)) %}
+  # Nobody is home: the home zone is empty, and no area is occupied or has
+  # been for the empty delay. The zone is checked first, so the areas are only
+  # looked at when it is empty.
+  nobody_home: >-
+    {% if states(home_zone) | int(0) > 0 %}{{ false }}{% else %}
     {% set ns = namespace(ok=true) %}
     {% for s in expand(area_sensors) %}
-      {% if s.state == 'on' or (s.state == 'off' and (now() - s.last_changed).total_seconds() < secs) %}
+      {% if s.state == 'on' or (s.state == 'off' and (now() - s.last_changed).total_seconds() < delay_secs['clear']) %}
         {% set ns.ok = false %}
       {% endif %}
     {% endfor %}
     {{ ns.ok }}
+    {% endif %}
 
 # Trigger templates cannot use the variables above, so the ones that need a
 # thermostat entity repeat its matching. Keep them in step.
@@ -451,14 +464,17 @@ triggers:
            + (ents | select('match', '^(select|number)\\..*_schedule_period_[0-9]+_(time|temp)$') | list)) %}
       {% set raw = states(state_helper) %}
       {% set f = (raw | from_json).fetch | default(0) | int if raw is match('^\\{') else 0 %}
-      {% set ns = namespace(n=0) %}
+      {% set ns = namespace(n=0, lo=0, hi=0) %}
       {% for s in watched %}
         {% set t = s.last_changed.timestamp() %}
         {% if t > now().timestamp() - 300 and not (f > 0 and f - 10 <= t <= f + 60) %}
+          {% set ns.lo = t if ns.n == 0 else min(ns.lo, t) %}
+          {% set ns.hi = t if ns.n == 0 else max(ns.hi, t) %}
           {% set ns.n = ns.n + 1 %}
         {% endif %}
       {% endfor %}
-      {{ not (0 < ns.n < (watched | count) / 2) }}
+      {% set burst = ns.n >= (watched | count) / 2 and ns.hi - ns.lo <= 30 %}
+      {{ not (ns.n > 0 and not burst) }}
   # Requested by this automation after a schedule group change.
   - alias: Catch-up requested
     trigger: event
@@ -548,27 +564,31 @@ actions:
         {% set r = state.routine | default({}) %}
         {{ {'stage': r.stage | default(''), 'ends': r.ends | default(0) | int,
             'next_temp': r.next_temp | default(none), 'next_until': r.next_until | default(0) | int} }}
-      # The schedule is being edited: some, but under half, of the operating
-      # day and period entities changed in the last 5 minutes, other than
-      # through our own fetch (10 s before to 60 s after it started). A person
-      # edits a value or two; a fetch, restart or rejoin changes them all. Keep
-      # this in step with the Schedule editing finished trigger.
+      # The schedule is being edited: operating day or period entities changed
+      # in the last 5 minutes, other than through our own fetch (10 s before to
+      # 60 s after it started), and not as a burst. A restart, rejoin or another
+      # fetch changes half or more of them within 30 s; a person edits them one
+      # at a time. Keep this in step with the Schedule editing finished trigger.
       editing: >-
         {% set f = state.fetch | default(0) | int %}
         {% set watched = expand([operating_day] + period_entities) %}
-        {% set ns = namespace(n=0) %}
+        {% set ns = namespace(n=0, lo=0, hi=0) %}
         {% for s in watched %}
           {% set t = s.last_changed.timestamp() %}
           {% if t > now().timestamp() - 300 and not (f > 0 and f - 10 <= t <= f + 60) %}
+            {% set ns.lo = t if ns.n == 0 else min(ns.lo, t) %}
+            {% set ns.hi = t if ns.n == 0 else max(ns.hi, t) %}
             {% set ns.n = ns.n + 1 %}
           {% endif %}
         {% endfor %}
-        {{ 0 < ns.n < (watched | count) / 2 }}
+        {% set burst = ns.n >= (watched | count) / 2 and ns.hi - ns.lo <= 30 %}
+        {{ ns.n > 0 and not burst }}
       # Someone is heading home and close. Keep this in step with the Someone
-      # heading home trigger.
+      # heading home trigger. Only used while the home zone is empty, so it is
+      # skipped otherwise.
       heading_home: >-
         {% set ns = namespace(on=false, ents=[]) %}
-        {% if geofencing_enabled %}
+        {% if geofencing_enabled and states(home_zone) | int(0) == 0 %}
           {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
           {% if proximity_devices | count > 0 %}
             {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
@@ -607,12 +627,14 @@ actions:
       next_temp: null
       next_until: 0
   # Someone got home, or pre-heating timed out and nobody is heading home any
-  # more, so the arrival is over.
+  # more, so the arrival is over. After the timeout, a new Someone heading home
+  # trigger means they stopped heading home and set off again: a new trip.
   - alias: Finish a geofencing arrival
     if:
       - condition: template
         value_template: >-
-          {{ arrival > 0 and (states(home_zone) | int(0) > 0 or (not preheating and not heading_home)) }}
+          {{ arrival > 0 and (states(home_zone) | int(0) > 0
+             or (not preheating and (not heading_home or run == 'heading-home'))) }}
     then:
       - variables:
           state: "{{ dict(state, arrival=0) }}"
@@ -721,8 +743,12 @@ actions:
       # shifts the morning earlier. With 2 or 3, period 3 (if any) is the
       # evening setback, so period 2 is only started early.
       shift: "{{ periods | count >= 4 }}"
-      # Any awake sensor is on.
-      wake_on: "{{ awake_sensors | select('is_state', 'on') | list | count > 0 }}"
+      # An awake sensor has been on for the getting up delay, as its trigger
+      # requires.
+      wake_on: >-
+        {{ expand(awake_sensors) | selectattr('state', 'eq', 'on')
+           | selectattr('last_changed', 'le', now() - timedelta(seconds=delay_secs['wake']))
+           | list | count > 0 }}
       # Someone is up, and wake-ups are turned on. Its trigger only fires when
       # an awake sensor turns on, so catch-up and late start runs also count
       # one that is already on.
@@ -732,11 +758,9 @@ actions:
       # for at least the bedtime delay).
       asleep: >-
         {% set sensors = expand(awake_sensors) %}
-        {% set d = sleep_delay %}
-        {% set delay = (d.hours | default(0)) * 3600 + (d.minutes | default(0)) * 60 + (d.seconds | default(0)) %}
         {{ sensors | count > 0
            and sensors | selectattr('state', 'eq', 'off') | list | count == sensors | count
-           and sensors | selectattr('last_changed', 'gt', now() - timedelta(seconds=delay)) | list | count == 0 }}
+           and sensors | selectattr('last_changed', 'gt', now() - timedelta(seconds=delay_secs['sleep'])) | list | count == 0 }}
       # The evening setback still ahead today: the last period with 3 or more
       # periods, or period 1 again at midnight with 2. Blank time if none.
       setback: >-
@@ -834,16 +858,23 @@ actions:
               # Shift: run period 2 for its usual length from the routine
               # start, then period 3 until its usual start. Otherwise: run
               # period 2 until its usual start.
+              # A catch-up after the shifted period 2 would have ended (less
+              # than a minute left) goes straight to period 3.
               - variables:
-                  stage: early
-                  stage_temp: "{{ periods[1].temp }}"
-                  stage_minutes: >-
+                  p2_end: >-
                     {% set start = routine_start | as_datetime %}
                     {% set p2 = today_at(periods[1].time) %}
-                    {% set end = start + (today_at(periods[2].time) - p2) if shift else p2 %}
+                    {{ (start + (today_at(periods[2].time) - p2) if shift else p2).isoformat() }}
+              - variables:
+                  skip_to_p3: "{{ shift and ((p2_end | as_datetime) - now()).total_seconds() < 60 }}"
+              - variables:
+                  stage: early
+                  stage_temp: "{{ periods[2].temp if skip_to_p3 else periods[1].temp }}"
+                  stage_minutes: >-
+                    {% set end = today_at(periods[2].time) if skip_to_p3 else p2_end | as_datetime %}
                     {{ min(((end - now()).total_seconds() / 60) | round(0) | int, 1439) }}
-                  next_temp: "{{ periods[2].temp if shift else none }}"
-                  next_until: "{{ today_at(periods[2].time).timestamp() | int if shift else 0 }}"
+                  next_temp: "{{ periods[2].temp if shift and not skip_to_p3 else none }}"
+                  next_until: "{{ today_at(periods[2].time).timestamp() | int if shift and not skip_to_p3 else 0 }}"
           - alias: Late alarm, hold period 1 past period 2's start
             conditions:
               - alias: Triggered for a late start, and nobody is up yet
@@ -977,13 +1008,9 @@ actions:
       - choose:
           - alias: Nobody home but someone heading home, pre-heat
             conditions:
-              - condition: zone.occupancy_is_not_detected
-                options:
-                  for: "00:00:00"
-                  zone: !input home_zone
-              - alias: Every area empty
+              - alias: Nobody home
                 condition: template
-                value_template: "{{ every_area_empty }}"
+                value_template: "{{ nobody_home }}"
               - alias: Heading home now, or pre-heating within its timeout
                 condition: template
                 value_template: "{{ preheating or (arrival == 0 and heading_home) }}"
@@ -1005,13 +1032,9 @@ actions:
                   option: !input geofencing_group
           - alias: Nobody home, end override and set Schedule 3
             conditions:
-              - condition: zone.occupancy_is_not_detected
-                options:
-                  for: "00:00:00"
-                  zone: !input home_zone
-              - alias: Every area empty
+              - alias: Nobody home
                 condition: template
-                value_template: "{{ every_area_empty }}"
+                value_template: "{{ nobody_home }}"
             sequence:
               - alias: Drop the plan
                 action: input_text.set_value
@@ -1074,15 +1097,16 @@ actions:
                   entity_id: "{{ schedule_group }}"
                 data:
                   option: Schedule 2
-      # Each group has its own periods. After a switch with a late alarm still
-      # ahead, request a catch-up: that run fetches the new group's schedule
-      # and applies a late hold if its window is now open.
+      # Each group has its own periods. After a switch with today's alarm still
+      # ahead (alarm_start is blank once it has passed), or with someone up,
+      # request a catch-up: that run fetches the new group's schedule and
+      # applies its early stage or late hold if one is due.
       - alias: Catch up after a group change
         if:
           - condition: template
             value_template: >-
               {{ states(schedule_group) != group_before
-                 and alarm_start != '' and now() < alarm_start | as_datetime }}
+                 and (alarm_start != '' or (wake_enabled and wake_on)) }}
         then:
           - event: sonoff_tp_wgzba_smart_schedule_catch_up
             event_data:

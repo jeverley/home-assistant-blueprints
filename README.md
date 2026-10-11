@@ -14,7 +14,8 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 
 - **Occupancy:** switches the thermostat's active schedule group using the native occupancy and zone triggers and conditions.
   - Schedule 1 when the heated areas are occupied.
-  - Schedule 2 when the heated areas are empty. A running Boost or Timer override is left alone.
+  - Schedule 2 when the heated areas are empty.
+  - Schedules 1 and 2 leave a running Boost or Timer override alone, and switch once it ends.
   - With **Follow occupancy** turned off, Schedule 1 is used whenever someone is home, for areas you want on their occupied schedule all day.
   - Schedule 3 when nobody is home (the home zone is empty and no area is occupied). Any running override is ended first.
 - **Geofencing:** while nobody is home, once someone heading home is within the geofencing distance, it switches to the pre-heat group (Schedule 2 by default) so the house warms before they arrive. See [Geofencing](#geofencing) below.
@@ -110,7 +111,7 @@ Geofencing uses the built-in **Proximity** integration. Add it under **Settings*
 
 The blueprint finds that Proximity entry by its name, which defaults to the home zone's name, and reads each person's distance and direction of travel sensors. Someone counts as heading home when they are within the geofencing distance and moving `towards` home. If the entry has been renamed, or the zone has, pick it under **Proximity devices**. Distances are converted from Proximity's unit (metres, kilometres or miles).
 
-While nobody is home, someone heading home switches the thermostat to the pre-heat group and records the time in the State helper. Pre-heating carries on until someone gets home, even if they stop on the way, or until the geofencing timeout passes, when it goes back to Schedule 3. Turn off **Geofencing** to stop it.
+While nobody is home, someone heading home switches the thermostat to the pre-heat group and records the time in the State helper. Pre-heating carries on until someone gets home, even if they stop on the way, or until the geofencing timeout passes, when it goes back to Schedule 3. If someone is still shown heading home then, it pre-heats again only once they stop and set off again, so a stuck reading cannot keep the house warm. Turn off **Geofencing** to stop it.
 
 **Arriving sensors** (binary sensors or toggles) count as well as Proximity, for example a template helper that is on when a Waze or Google travel time to home is under 15 minutes.
 
