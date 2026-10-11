@@ -29,7 +29,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 
   - **Late alarm** (wake-up start after period 2): just before period 2's usual start, period 1's temperature is held until the wake-up start. With 2 or 3 periods, the device schedule then carries on with period 2. With 4 or more, period 2 then runs for its usual length (never past period 4), so period 3 starts later and later periods keep their usual times.
 
-  - **Someone up early:** when the awake sensor turns on (and stays on for the **Getting up delay**, if set), the wake-up starts now, as if the alarm were early. With no alarm set, this still starts the morning early. During a late hold, it ends the hold and, with 4 or more periods, runs period 2 for its usual length from now. Leave the wake sensor empty to only follow the alarm.
+  - **Someone up early:** when the awake sensor turns on (and stays on for the **Getting up delay**, if set), the wake-up starts now, as if the alarm were early. With no alarm set, this still starts the morning early. During a late hold, it ends the hold and, with 4 or more periods, runs period 2 for its usual length from now. Leave the awake sensors empty to only follow the alarm.
   - **Bedtime:** when the awake sensor has been off for the **Bedtime delay** and the evening setback is still ahead (the last period with 3 or more periods, or period 1 again at midnight with 2), the setback starts early as a Timer at its temperature until its usual start. If someone gets up again before then, the Timer ends. Bedtime checks the home zone rather than the areas, since people asleep may not show on occupancy sensors.
   - Each of these (early alarm, late alarm, wake-up and bedtime) has its own toggle.
 
@@ -57,7 +57,7 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | Thermostat | the TP-WGZBA device, heated areas, state helper (required) |
 | Occupancy | follow occupancy (on), occupied delay (1 min), empty delay (5 min) |
 | Geofencing | geofencing (on), home zone (default `zone.home`), geofencing distance (5 km), pre-heat schedule group (Schedule 2), geofencing timeout (30 min), Proximity devices (found from the home zone), arriving sensors (none) |
-| Routine | next alarm sensor, lead time (30 min), early alarm (on), late alarm (on), awake sensor (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
+| Routine | next alarm sensor, lead time (30 min), early alarm (on), late alarm (on), awake sensors (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
 
 ### Example configurations
 
@@ -65,13 +65,13 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | --- | --- | --- |
 | Heated areas | Bedroom | Living room |
 | Lead time | 30 min | 10 min |
-| Awake sensor | Someone up helper | Someone up helper |
+| Awake sensors | Someone up helper | Someone up helper |
 | Bedtime | Off | On |
 | Pre-heat schedule group | Schedule 2 | Schedule 1 |
 
 Temperatures come from each thermostat's own schedule, so set the morning periods on the device.
 
-### Awake sensor
+### Awake sensors
 
 Any binary sensor or input boolean that is **on while anyone is up**, **off once everyone is asleep**, and **unknown** (or unavailable) when it can't tell. Only an explicit `on` or `off` counts, so unknown never starts the morning or bedtime. It drives both ends of the day:
 - Turning on (held for the **Getting up delay**, if set) means someone is up, when **Getting up** is on.

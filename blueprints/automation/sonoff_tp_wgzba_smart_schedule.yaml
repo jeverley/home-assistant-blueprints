@@ -13,9 +13,9 @@ blueprint:
     **Routine** moves the start of the morning heating to match the next waking alarm:
     - An **early alarm** starts today's schedule early, at its own temperatures.
     - A **late alarm** keeps the night temperature until shortly before it.
-    - Someone **up early**, reported by the awake sensor, starts it straight away, alarm or not.
+    - Someone **up early**, reported by the awake sensors, starts it straight away, alarm or not.
 
-    At **bedtime**, when the awake sensor reports everyone asleep, the evening setback starts early.
+    At **bedtime**, when the awake sensors report everyone asleep, the evening setback starts early.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_smart_schedule.yaml
   homeassistant:
@@ -215,9 +215,9 @@ blueprint:
           selector:
             boolean: {}
         awake_sensors:
-          name: Awake sensor
+          name: Awake sensors (optional)
           description: |
-            A binary sensor or toggle that is **on while anyone is up** and **off once everyone is asleep**, such as a helper built from your motion sensors.
+            Binary sensors or toggles that are **on while anyone is up** and **off once everyone is asleep**, such as a helper built from your motion sensors. Any one on counts as someone up, and all off as everyone asleep.
 
             Make it **unknown** when it can't tell, for example in the middle of the night or during the day. Only on and off are acted on.
           default: []
@@ -230,14 +230,14 @@ blueprint:
                     - input_boolean
         wake_enabled:
           name: Getting up
-          description: When the awake sensor turns on, starts the morning heating straight away, as for an early alarm.
+          description: When an awake sensor turns on, starts the morning heating straight away, as for an early alarm.
           default: true
           selector:
             boolean: {}
         wake_duration:
           name: Getting up delay
           description: |
-            How long the awake sensor must stay on before someone counts as up.
+            How long an awake sensor must stay on before someone counts as up.
 
             Leave at zero if the sensor already accounts for this.
           default:
@@ -249,7 +249,7 @@ blueprint:
         bedtime_enabled:
           name: Bedtime
           description: |
-            When the awake sensor turns off, starts the schedule's night temperature early.
+            When every awake sensor is off, starts the schedule's night temperature early.
 
             It ends again if someone gets up before the usual time.
           default: true
@@ -257,7 +257,7 @@ blueprint:
             boolean: {}
         sleep_delay:
           name: Bedtime delay
-          description: How long the awake sensor must stay off before everyone counts as asleep.
+          description: How long every awake sensor must stay off before everyone counts as asleep.
           default:
             hours: 0
             minutes: 15
