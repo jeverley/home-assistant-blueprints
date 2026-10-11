@@ -310,6 +310,8 @@ variables:
     {{ thermostat_entities | select('match', '^button\\..*_override_exit$') | first | default('') }}
   override_state: >-
     {{ thermostat_entities | select('match', '^sensor\\..*_override_mode$') | first | default('') }}
+  work_mode: >-
+    {{ thermostat_entities | select('match', '^sensor\\..*_device_work_mode_state$') | first | default('') }}
   heated_areas: !input heated_areas
   occupancy_enabled: !input occupancy_enabled
   early_alarm_enabled: !input early_alarm_enabled
@@ -447,6 +449,15 @@ triggers:
       {% set e = device_entities(thermostat_device)
            | select('match', '^sensor\\..*_override_mode$') | first | default('') %}
       {{ e != '' and is_state(e, 'Idle') }}
+  # The thermostat is back on its schedule after a hand adjustment (at the
+  # next period) or manual mode, so the routine picks up where it left off.
+  - alias: Back on schedule
+    trigger: template
+    id: catch-up
+    value_template: >-
+      {% set e = device_entities(thermostat_device)
+           | select('match', '^sensor\\..*_device_work_mode_state$') | first | default('') %}
+      {{ e != '' and is_state(e, 'Schedule') }}
   # The early or late window may already be open when Home Assistant starts or
   # automations reload, so the template triggers above would not fire.
   - alias: Home Assistant started
@@ -531,7 +542,7 @@ actions:
         value_template: >-
           {% set ents = [schedule_group, operating_day, fetch_button, override_mode,
                          override_target, override_period, override_apply,
-                         override_exit, override_state] %}
+                         override_exit, override_state, work_mode] %}
           {{ '' in ents or expand(ents) | count < ents | count }}
     then:
       - stop: >-
@@ -567,16 +578,17 @@ actions:
       # or bedtime) and start (when the morning starts, or bedtime began). Its
       # stage is worked out from today's periods on each run, so it follows a
       # schedule group change. timer_until, timer_temp and timer_applied
-      # describe the Timer we last applied: when it should end (to tell one
-      # that ran out from one someone cancelled), its temperature (to tell
-      # whether the stage has changed) and when we pressed Apply (to tell ours
-      # from someone else's). A cancelled plan is kept, marked, so it does not
-      # start again that day.
+      # describe the Timer we last applied: when it should end and its
+      # temperature (to tell whether the stage has changed), and when we
+      # pressed Apply (to tell ours from someone else's). exiting is when we
+      # last ended our own Timer, so that Exit press is not taken for someone
+      # cancelling. A cancelled plan is kept, marked, so it does not start
+      # again that day.
       plan: >-
         {% set r = state.routine | default({}) %}
         {{ {'kind': r.kind | default(''), 'start': r.start | default(0) | int,
             'timer_until': r.timer_until | default(0) | int, 'timer_temp': r.timer_temp | default(none),
-            'timer_applied': r.timer_applied | default(0) | int,
+            'timer_applied': r.timer_applied | default(0) | int, 'exiting': r.exiting | default(0) | int,
             'cancelled': r.cancelled | default(false)} }}
       # The schedule is being edited: operating day or period entities changed
       # in the last 5 minutes, other than through our own fetch (10 s before to
@@ -626,11 +638,10 @@ actions:
       # timeout.
       arrival: "{{ state.arrival | default(0) | int }}"
       preheating: "{{ arrival > 0 and now().timestamp() < arrival + geofencing_timeout | int * 60 }}"
-      # When the override last went Idle (0 unless Idle now). A restart or
-      # rejoin makes this later, never earlier.
-      idle_since: >-
-        {% set o = expand(override_state) | first %}
-        {{ o.last_changed.timestamp() | int if o.state == 'Idle' else 0 }}
+      # The thermostat is on its schedule. A hand adjustment puts it in
+      # Temporary_Manual until the next period; Manual and Off are yours too.
+      # The routine applies nothing until it is back on its schedule.
+      on_schedule: "{{ is_state(work_mode, 'Schedule') }}"
   # Someone got home, or pre-heating timed out and nobody is heading home any
   # more, so the arrival is over. After the timeout, a new Someone heading home
   # trigger means they stopped heading home and set off again: a new trip.
@@ -645,27 +656,33 @@ actions:
           state: "{{ dict(state, arrival=0) }}"
           arrival: 0
           preheating: false
-  # Our Timer ran and ended more than 2 minutes before it should have, with
-  # our Apply press still the last one, so someone ended it (with Exit or on
-  # the thermostat). If someone pressed Apply for their own Timer or Boost
-  # instead, they only took over for a while: the routine leaves their
-  # override alone and carries on once it ends.
+  # When the override Apply and Exit buttons were last pressed. Pressing one
+  # updates its state, even when the thermostat does not answer.
+  - variables:
+      applied_at: "{{ as_timestamp(states(override_apply), 0) | int }}"
+      exited_at: "{{ as_timestamp(states(override_exit), 0) | int }}"
+  # Someone pressed Exit after we applied our Timer, and it was not us ending
+  # it to apply the next one, so they cancelled the routine for today. Taking
+  # over with your own Timer or Boost (Apply), adjusting the thermostat by
+  # hand, or the thermostat restarting does not cancel it: the routine steps
+  # aside and carries on afterwards.
   - alias: Note a cancelled plan
     if:
       - condition: template
         value_template: >-
-          {{ idle_since > 0 and plan.kind != '' and not plan.cancelled
-             and plan.timer_until > 0 and idle_since < plan.timer_until - 120
-             and plan.timer_applied > 0 and idle_since > plan.timer_applied
-             and as_timestamp(states(override_apply), 0) | int == plan.timer_applied }}
+          {{ plan.kind != '' and not plan.cancelled and plan.timer_applied > 0
+             and exited_at > plan.timer_applied
+             and not (plan.exiting > 0 and 0 <= exited_at - plan.exiting <= 60) }}
     then:
       - variables:
-          plan: "{{ dict(plan, timer_until=0, cancelled=true) }}"
+          plan: "{{ dict(plan, cancelled=true) }}"
       - variables:
           state: "{{ dict(state, routine=plan) }}"
   - variables:
       # An empty plan, for clearing it.
-      no_plan: "{{ {'kind': '', 'start': 0, 'timer_until': 0, 'timer_temp': none, 'timer_applied': 0, 'cancelled': false} }}"
+      no_plan: >-
+        {{ {'kind': '', 'start': 0, 'timer_until': 0, 'timer_temp': none, 'timer_applied': 0,
+            'exiting': 0, 'cancelled': false} }}
       # The plan is for today. One from an earlier day is over.
       plan_today: "{{ plan.start > 0 and plan.start | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d') }}"
       active: "{{ plan.kind != '' and not plan.cancelled and plan_today }}"
@@ -677,7 +694,7 @@ actions:
       # left alone. Changing the target or period without applying does not.
       ours: >-
         {{ active and is_state(override_state, 'Timer') and plan.timer_applied > 0
-           and as_timestamp(states(override_apply), 0) | int == plan.timer_applied }}
+           and applied_at == plan.timer_applied }}
   # A plan from an earlier day is over, so clear it, including yesterday's
   # cancelled marker.
   - alias: Forget a plan from an earlier day
@@ -1109,22 +1126,22 @@ actions:
                 conditions:
                   - condition: template
                     value_template: >-
-                      {{ stage is not none and (is_state(override_state, 'Idle')
+                      {{ stage is not none and on_schedule and (is_state(override_state, 'Idle')
                          or (ours and ((stage.until - plan.timer_until) | abs > 90
                                        or (plan.timer_temp | float(0) - stage.temp) | abs > 0.05))) }}
                 sequence:
                   - variables:
                       minutes: "{{ [((stage.until - now().timestamp()) / 60) | round(0) | int, 1439] | min }}"
                       timer_until: "{{ (now().timestamp() + minutes * 60) | int }}"
-                  # Record that we are ending our own Timer before ending it, so
-                  # when it goes Idle it is not taken for a cancellation.
+                  # Record that we are ending our own Timer before pressing Exit,
+                  # so the press is not taken for someone cancelling.
                   - alias: End our Timer first
                     if:
                       - condition: template
                         value_template: "{{ ours }}"
                     then:
                       - variables:
-                          plan: "{{ dict(plan, timer_until=now().timestamp() | int) }}"
+                          plan: "{{ dict(plan, exiting=now().timestamp() | int) }}"
                       - variables:
                           state: "{{ dict(state, routine=plan) }}"
                       - *save_state
@@ -1163,16 +1180,16 @@ actions:
                         action: button.press
                         target:
                           entity_id: "{{ override_apply }}"
+                      # Record the Timer straight after our press: when it should
+                      # end, its temperature and our Apply press, so a Timer the
+                      # thermostat reports late is still ours. Saved at the end.
+                      - variables:
+                          plan: >-
+                            {{ dict(plan, timer_until=timer_until, timer_temp=stage.temp,
+                                    timer_applied=as_timestamp(states(override_apply), 0) | int) }}
+                      - variables:
+                          state: "{{ dict(state, routine=plan) }}"
                       - wait_template: "{{ is_state(override_state, 'Timer') }}"
                         timeout: "00:00:30"
                         continue_on_timeout: true
-                      # Record the Timer: when it should end, its temperature and our
-                      # Apply press. The press is recorded even if the Timer is reported
-                      # late, so it is still ours. One that never starts stays Idle from
-                      # before the press, so it is not taken for a cancellation. Saved
-                      # at the end.
-                      - variables:
-                          state: >-
-                            {{ dict(state, routine=dict(plan, timer_until=timer_until, timer_temp=stage.temp,
-                                                        timer_applied=as_timestamp(states(override_apply), 0) | int)) }}
   - *save_state
