@@ -569,9 +569,9 @@ actions:
       state: >-
         {% set raw = states(state_helper) %}
         {{ raw | from_json if raw is match('^\\{') else {} }}
-      # What the State helper holds. Steps change state, and the run saves it
-      # (only if it changed) before any thermostat call that depends on it,
-      # and at the end. A thermostat call that fails stops the run, and the
+      # What the State helper holds. Steps change state and plan, and the run
+      # saves them (only if they changed) before any thermostat call that
+      # depends on them, and at the end. A thermostat call that fails stops the run, and the
       # saved state lets a later run pick up from there.
       saved: "{{ state }}"
       # The routine plan records intent, not temperatures: its kind (morning
@@ -676,8 +676,6 @@ actions:
     then:
       - variables:
           plan: "{{ dict(plan, cancelled=true) }}"
-      - variables:
-          state: "{{ dict(state, routine=plan) }}"
   - variables:
       # An empty plan, for clearing it.
       no_plan: >-
@@ -688,6 +686,8 @@ actions:
       active: "{{ plan.kind != '' and not plan.cancelled and plan_today }}"
       # The routine someone cancelled today, if any, so it does not start again.
       cancelled_today: "{{ plan.kind if plan.cancelled and plan_today else '' }}"
+      # Someone's Boost or Timer (ours or not) is running.
+      override_running: "{{ states(override_state) in ['Boost', 'Timer'] }}"
       # Our routine's Timer is running: a Timer, and the override Apply button
       # was last pressed by us. A Timer or Boost only starts from Apply, so
       # anyone else's press makes the running override theirs, and it is
@@ -703,7 +703,6 @@ actions:
         value_template: "{{ plan.kind != '' and not plan_today }}"
     then:
       - variables:
-          state: "{{ dict(state, routine={}) }}"
           plan: "{{ no_plan }}"
   # While the schedule is being edited its selects cannot be trusted, and a
   # fetch would replace the day being edited. The run saves its state and
@@ -715,17 +714,24 @@ actions:
     then:
       - &save_state
         alias: Save the state
-        if:
-          - condition: template
-            value_template: "{{ state != saved }}"
-        then:
-          - action: input_text.set_value
-            target:
-              entity_id: "{{ state_helper }}"
-            data:
-              value: "{{ state | to_json }}"
+        sequence:
+          # The routine key always comes from the plan, so the two cannot
+          # drift apart.
           - variables:
-              saved: "{{ state }}"
+              state: >-
+                {{ dict(state, routine=plan) if plan.kind != ''
+                   else dict(state, routine={}) if 'routine' in state else state }}
+          - if:
+              - condition: template
+                value_template: "{{ state != saved }}"
+            then:
+              - action: input_text.set_value
+                target:
+                  entity_id: "{{ state_helper }}"
+                data:
+                  value: "{{ state | to_json }}"
+              - variables:
+                  saved: "{{ state }}"
       - stop: >-
           Deferred: the schedule is being edited in the UI. A catch-up runs 5 minutes
           after the last change.
@@ -744,7 +750,7 @@ actions:
         sequence:
           # The routine plan does not apply while nobody is home.
           - variables:
-              state: "{{ dict(state, routine={}, arrival=arrival if arrival > 0 else now().timestamp() | int) }}"
+              state: "{{ dict(state, arrival=arrival if arrival > 0 else now().timestamp() | int) }}"
               plan: "{{ no_plan }}"
               active: false
           - *save_state
@@ -768,13 +774,12 @@ actions:
             value_template: "{{ nobody_home }}"
         sequence:
           - variables:
-              state: "{{ dict(state, routine={}) }}"
               plan: "{{ no_plan }}"
               active: false
           - *save_state
           - if:
               - condition: template
-                value_template: "{{ states(override_state) in ['Boost', 'Timer'] }}"
+                value_template: "{{ override_running }}"
             then:
               - alias: End the override
                 action: button.press
@@ -801,7 +806,7 @@ actions:
                   for: !input detect_delay
           - alias: No override running, or only our routine's Timer
             condition: template
-            value_template: "{{ states(override_state) not in ['Boost', 'Timer'] or ours }}"
+            value_template: "{{ not override_running or ours }}"
         sequence:
           - action: select.select_option
             target:
@@ -820,7 +825,7 @@ actions:
               for: !input clear_delay
           - alias: No override running, or only our routine's Timer
             condition: template
-            value_template: "{{ states(override_state) not in ['Boost', 'Timer'] or ours }}"
+            value_template: "{{ not override_running or ours }}"
         sequence:
           - action: select.select_option
             target:
@@ -947,6 +952,21 @@ actions:
           # with no alarm), otherwise the alarm start.
           routine_start: >-
             {% if woke and (alarm_start == '' or now() < alarm_start | as_datetime) %}{{ now().isoformat() }}{% else %}{{ alarm_start }}{% endif %}
+          # An early start is due: the alarm start has been reached (early alarm
+          # on) or someone is up, at least a minute before period 2.
+          early_start_due: >-
+            {{ (((run == 'prewarm' or catchup) and early_alarm_enabled) or woke)
+               and routine_start != '' and (routine_start | as_datetime) <= now()
+               and periods | count >= 2 and (today_at(periods[1].time) - now()).total_seconds() >= 60 }}
+          # A late start is due: nobody is up, period 2 is about to start (or has),
+          # and the routine start is at least a minute after it.
+          late_start_due: >-
+            {% if late_alarm_enabled and (run == 'late-hold' or catchup) and not woke
+                  and routine_start != '' and periods | count >= 2 %}
+              {% set start = routine_start | as_datetime %}
+              {% set p2 = today_at(periods[1].time) %}
+              {{ p2 < start and now() >= p2 - timedelta(minutes=1) and (start - now()).total_seconds() >= 60 }}
+            {% else %}{{ false }}{% endif %}
         # An unreadable schedule (unavailable selects) leaves everything as
         # it is.
       - alias: With a readable schedule
@@ -990,7 +1010,7 @@ actions:
                          and ((setback.until | as_datetime) - now()).total_seconds() >= 60 }}
                   - alias: No override running
                     condition: template
-                    value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
+                    value_template: "{{ not override_running }}"
                   - alias: Not cancelled today
                     condition: template
                     value_template: "{{ cancelled_today != 'bedtime' }}"
@@ -1003,52 +1023,19 @@ actions:
                   - variables:
                       plan: "{{ dict(no_plan, kind='bedtime', start=now().timestamp() | int) }}"
                       active: true
-              - alias: Early alarm or someone up, start the morning early
+              # Early: the morning starts at the routine start, before period 2.
+              # Late: period 1 is held until the routine start, after period 2.
+              - alias: Early or late alarm, or someone up, start the morning
                 conditions:
-                  - alias: The routine start has been reached
+                  - alias: An early or late start is due
                     condition: template
-                    value_template: >-
-                      {{ not active and (((run == 'prewarm' or catchup) and early_alarm_enabled) or woke)
-                         and routine_start != '' and (routine_start | as_datetime) <= now() }}
+                    value_template: "{{ not active and (early_start_due or late_start_due) }}"
                   - alias: Period 2 is set and warmer than period 1
                     condition: template
                     value_template: "{{ p2_warmer }}"
-                  - alias: At least a minute before period 2
-                    condition: template
-                    value_template: "{{ (today_at(periods[1].time) - now()).total_seconds() >= 60 }}"
                   - alias: No override running
                     condition: template
-                    value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
-                  - alias: Someone is in an area
-                    condition: template
-                    value_template: "{{ someone_in_an_area }}"
-                  - alias: Not cancelled today
-                    condition: template
-                    value_template: "{{ cancelled_today != 'morning' }}"
-                sequence:
-                  - variables:
-                      plan: "{{ dict(no_plan, kind='morning', start=(routine_start | as_datetime).timestamp() | int) }}"
-                      active: true
-              - alias: Late alarm, hold period 1 past period 2's start
-                conditions:
-                  - alias: Due for a late start, and nobody is up yet
-                    condition: template
-                    value_template: >-
-                      {{ not active and late_alarm_enabled and (run == 'late-hold' or catchup)
-                         and not woke and routine_start != '' }}
-                  - alias: Period 2 is set and warmer than period 1
-                    condition: template
-                    value_template: "{{ p2_warmer }}"
-                  - alias: Period 2 is due, and the routine start is at least a minute later
-                    condition: template
-                    value_template: >-
-                      {% set start = routine_start | as_datetime %}
-                      {% set p2 = today_at(periods[1].time) %}
-                      {{ p2 < start and now() >= p2 - timedelta(minutes=1)
-                         and (start - now()).total_seconds() >= 60 }}
-                  - alias: No override running
-                    condition: template
-                    value_template: "{{ states(override_state) not in ['Boost', 'Timer'] }}"
+                    value_template: "{{ not override_running }}"
                   - alias: Someone is in an area
                     condition: template
                     value_template: "{{ someone_in_an_area }}"
@@ -1099,10 +1086,10 @@ actions:
           # has no stage left.
           - variables:
               over: "{{ stage is none and state.routine | default({}) != {} and not plan.cancelled }}"
-          # Save the plan before any thermostat call, so a run that fails part
-          # way leaves it for the next run.
+          # Save the plan (dropped if the routine is over) before any thermostat
+          # call, so a run that fails part way leaves it for the next run.
           - variables:
-              state: "{{ dict(state, routine={} if over or plan.kind == '' else plan) }}"
+              plan: "{{ no_plan if over else plan }}"
           - *save_state
           - alias: Apply the routine's stage
             choose:
@@ -1142,8 +1129,6 @@ actions:
                     then:
                       - variables:
                           plan: "{{ dict(plan, exiting=now().timestamp() | int) }}"
-                      - variables:
-                          state: "{{ dict(state, routine=plan) }}"
                       - *save_state
                       - action: button.press
                         target:
@@ -1187,8 +1172,6 @@ actions:
                           plan: >-
                             {{ dict(plan, timer_until=timer_until, timer_temp=stage.temp,
                                     timer_applied=as_timestamp(states(override_apply), 0) | int) }}
-                      - variables:
-                          state: "{{ dict(state, routine=plan) }}"
                       - wait_template: "{{ is_state(override_state, 'Timer') }}"
                         timeout: "00:00:30"
                         continue_on_timeout: true
