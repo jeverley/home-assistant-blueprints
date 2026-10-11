@@ -672,6 +672,21 @@ actions:
         {{ active and is_state(override_state, 'Timer') and plan.timer_temp is not none
            and (states(override_target) | float(0) - plan.timer_temp | float(0)) | abs < 0.05
            and now().timestamp() < plan.timer_until + 120 }}
+  # A plan from an earlier day is over, so clear it, including yesterday's
+  # cancelled marker.
+  - alias: Forget a plan from an earlier day
+    if:
+      - condition: template
+        value_template: "{{ plan.kind != '' and not plan_today }}"
+    then:
+      - variables:
+          state: "{{ dict(state, routine={}) }}"
+          plan: "{{ no_plan }}"
+      - action: input_text.set_value
+        target:
+          entity_id: "{{ state_helper }}"
+        data:
+          value: "{{ state | to_json }}"
   # While the schedule is being edited its selects cannot be trusted, and a
   # fetch would replace the day being edited. The run defers, and the Schedule
   # editing finished trigger catches up. The plan is kept in the State helper,
