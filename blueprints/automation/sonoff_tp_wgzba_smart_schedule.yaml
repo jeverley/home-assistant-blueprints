@@ -392,8 +392,11 @@ triggers:
     options:
       for: "00:00:00"
       zone: !input home_zone
+  # The thermostat is back after being unavailable, so catch up on anything
+  # a failed run left undone.
   - alias: Schedule group came back
     trigger: template
+    id: catch-up
     value_template: >-
       {% set e = device_entities(thermostat_device)
            | select('match', '^select\\..*_schedule_group$') | first | default('') %}
@@ -526,10 +529,10 @@ actions:
     if:
       - condition: template
         value_template: >-
-          {{ '' in [schedule_group, operating_day, fetch_button, override_mode,
-                    override_target, override_period, override_apply,
-                    override_exit, override_state]
-             or expand(override_state) | count == 0 }}
+          {% set ents = [schedule_group, operating_day, fetch_button, override_mode,
+                         override_target, override_period, override_apply,
+                         override_exit, override_state] %}
+          {{ '' in ents or expand(ents) | count < ents | count }}
     then:
       - stop: >-
           Could not find every schedule and override entity on the thermostat. Check they
@@ -556,7 +559,9 @@ actions:
         {% set raw = states(state_helper) %}
         {{ raw | from_json if raw is match('^\\{') else {} }}
       # What the State helper holds. Steps change state, and the run saves it
-      # once at the end if it changed (and once before a fetch).
+      # (only if it changed) before any thermostat call that depends on it,
+      # and at the end. A thermostat call that fails stops the run, and the
+      # saved state lets a later run pick up from there.
       saved: "{{ state }}"
       # The routine plan records intent, not temperatures: its kind (morning
       # or bedtime) and start (when the morning starts, or bedtime began). Its
@@ -622,8 +627,8 @@ actions:
       # When the override last went Idle (0 unless Idle now). A restart or
       # rejoin makes this later, never earlier.
       idle_since: >-
-        {% set o = expand(override_state) | first | default(none) %}
-        {{ o.last_changed.timestamp() | int if o is not none and o.state == 'Idle' else 0 }}
+        {% set o = expand(override_state) | first %}
+        {{ o.last_changed.timestamp() | int if o.state == 'Idle' else 0 }}
   # Someone got home, or pre-heating timed out and nobody is heading home any
   # more, so the arrival is over. After the timeout, a new Someone heading home
   # trigger means they stopped heading home and set off again: a new trip.
@@ -659,13 +664,12 @@ actions:
       active: "{{ plan.kind != '' and not plan.cancelled and plan_today }}"
       # The routine someone cancelled today, if any, so it does not start again.
       cancelled_today: "{{ plan.kind if plan.cancelled and plan_today else '' }}"
-      # Our routine's Timer is running: a Timer at the temperature we set, and
-      # not past when ours should have ended. A Timer someone else started
-      # has their own temperature, so it is left alone.
+      # Our routine's Timer is running: a Timer at the temperature we set. A
+      # Timer someone else started has their own temperature, so it is left
+      # alone.
       ours: >-
         {{ active and is_state(override_state, 'Timer') and plan.timer_temp is not none
-           and (states(override_target) | float(0) - plan.timer_temp | float(0)) | abs < 0.05
-           and now().timestamp() < plan.timer_until + 120 }}
+           and (states(override_target) | float(0) - plan.timer_temp | float(0)) | abs < 0.05 }}
   # A plan from an earlier day is over, so clear it, including yesterday's
   # cancelled marker.
   - alias: Forget a plan from an earlier day
@@ -677,15 +681,15 @@ actions:
           state: "{{ dict(state, routine={}) }}"
           plan: "{{ no_plan }}"
   # While the schedule is being edited its selects cannot be trusted, and a
-  # fetch would replace the day being edited. The run defers, and the Schedule
-  # editing finished trigger catches up. The plan is kept in the State helper,
-  # so nothing is lost.
+  # fetch would replace the day being edited. The run saves its state and
+  # defers, and the Schedule editing finished trigger catches up.
   - alias: Defer while the schedule is being edited
     if:
       - condition: template
         value_template: "{{ editing }}"
     then:
-      - alias: Save the state
+      - &save_state
+        alias: Save the state
         if:
           - condition: template
             value_template: "{{ state != saved }}"
@@ -695,7 +699,8 @@ actions:
               entity_id: "{{ state_helper }}"
             data:
               value: "{{ state | to_json }}"
-
+          - variables:
+              saved: "{{ state }}"
       - stop: >-
           Deferred: the schedule is being edited in the UI. A catch-up runs 5 minutes
           after the last change.
@@ -717,6 +722,7 @@ actions:
               state: "{{ dict(state, routine={}, arrival=arrival if arrival > 0 else now().timestamp() | int) }}"
               plan: "{{ no_plan }}"
               active: false
+          - *save_state
           - if:
               - condition: template
                 value_template: "{{ ours }}"
@@ -740,6 +746,7 @@ actions:
               state: "{{ dict(state, routine={}) }}"
               plan: "{{ no_plan }}"
               active: false
+          - *save_state
           - if:
               - condition: template
                 value_template: "{{ states(override_state) in ['Boost', 'Timer'] }}"
@@ -820,9 +827,8 @@ actions:
     then:
       # Fetch today's schedule for the active group. An override-ended run only
       # needs one if the selects are not showing today. The start time is recorded
-      # first, so its changes are not taken for an edit. Errors are tolerated: the
-      # selects still hold today's schedule from the new day fetch, and if the
-      # thermostat is not answering, applying a stage fails too.
+      # first, so its changes are not taken for an edit. If the fetch fails the
+      # run stops rather than act on a schedule it could not read.
       - alias: Fetch today's schedule
         if:
           - condition: template
@@ -831,15 +837,8 @@ actions:
         then:
           - variables:
               state: "{{ dict(state, fetch=now().timestamp() | int) }}"
-          - action: input_text.set_value
-            target:
-              entity_id: "{{ state_helper }}"
-            data:
-              value: "{{ state | to_json }}"
-          - variables:
-              saved: "{{ state }}"
+          - *save_state
           - alias: Select today as the operating day
-            continue_on_error: true
             action: select.select_option
             target:
               entity_id: "{{ operating_day }}"
@@ -847,7 +846,6 @@ actions:
               option: "{{ now().strftime('%A') }}"
           # The press returns once the device has replied, so no wait is needed.
           - alias: Fetch the active schedule
-            continue_on_error: true
             action: button.press
             target:
               entity_id: "{{ fetch_button }}"
@@ -1072,15 +1070,22 @@ actions:
                 {% endif %}
                 {% set o = ns.ph | selectattr('until', 'ge', t + 60) | first | default(none) %}
                 {{ {'temp': o.temp, 'until': o.until | int} if o is not none and o.temp is not none else none }}
+          # The routine has finished: a recorded plan that is not cancelled
+          # has no stage left.
+          - variables:
+              over: "{{ stage is none and state.routine | default({}) != {} and not plan.cancelled }}"
+          # Save the plan before any thermostat call, so a run that fails part
+          # way leaves it for the next run.
+          - variables:
+              state: "{{ dict(state, routine={} if over or plan.kind == '' else plan) }}"
+          - *save_state
           - alias: Apply the routine's stage
             choose:
               - alias: The routine is over, end our Timer
                 conditions:
                   - condition: template
-                    value_template: "{{ stage is none and state.routine | default({}) != {} and not plan.cancelled }}"
+                    value_template: "{{ over }}"
                 sequence:
-                  - variables:
-                      state: "{{ dict(state, routine={}) }}"
                   - if:
                       - condition: template
                         value_template: "{{ ours }}"
@@ -1103,11 +1108,18 @@ actions:
                   - variables:
                       minutes: "{{ [((stage.until - now().timestamp()) / 60) | round(0) | int, 1439] | min }}"
                       timer_until: "{{ (now().timestamp() + minutes * 60) | int }}"
+                  # Record that we are ending our own Timer before ending it, so
+                  # when it goes Idle it is not taken for a cancellation.
                   - alias: End our Timer first
                     if:
                       - condition: template
                         value_template: "{{ ours }}"
                     then:
+                      - variables:
+                          plan: "{{ dict(plan, timer_until=now().timestamp() | int) }}"
+                      - variables:
+                          state: "{{ dict(state, routine=plan) }}"
+                      - *save_state
                       - action: button.press
                         target:
                           entity_id: "{{ override_exit }}"
@@ -1153,13 +1165,4 @@ actions:
                           state: >-
                             {{ dict(state, routine=dict(plan, timer_until=timer_until, timer_temp=stage.temp)
                                if is_state(override_state, 'Timer') else dict(plan, timer_until=0, timer_temp=none)) }}
-  - alias: Save the state
-    if:
-      - condition: template
-        value_template: "{{ state != saved }}"
-    then:
-      - action: input_text.set_value
-        target:
-          entity_id: "{{ state_helper }}"
-        data:
-          value: "{{ state | to_json }}"
+  - *save_state
