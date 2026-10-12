@@ -5,10 +5,10 @@ blueprint:
 
     **Occupancy** switches the thermostat between its schedule groups:
     - **Schedule 1** while the heated areas are occupied.
-    - **Schedule 2** when the heated areas are empty. With **Follow occupancy** off, Schedule 1 is used whenever someone is home.
+    - **Schedule 2** when the heated areas are empty. With **Follow occupancy** off or no heated areas, Schedule 1 is used whenever someone is home.
     - Schedules 1 and 2 wait for your own Boost or Timer override to end. The routine's Timers follow a group change.
 
-    **Geofencing** uses **Schedule 3** when nobody is home, ending any running override first. It switches to the pre-heat group early when someone is close and heading home.
+    **Geofencing**, with **Away schedule** on, uses **Schedule 3** when nobody is home, ending any running override first. **Pre-heat** switches to the pre-heat group early when someone is close and heading home.
 
     **Routine** moves the start of the morning heating to match the next waking alarm:
     - An **early alarm** starts today's schedule early, at its own temperatures.
@@ -113,7 +113,7 @@ blueprint:
           description: |
             The zone people head home to, used to find its **Proximity** entry.
 
-            It also shows whether anyone is home, for **Occupancy**.
+            It also shows whether anyone is home, for **Away schedule** and **Bedtime**.
           default: zone.home
           selector:
             entity:
@@ -153,9 +153,7 @@ blueprint:
                 - Schedule 2
         geofencing_timeout:
           name: Geofencing timeout
-          description: >-
-            If nobody is home this long after pre-heating started, go back to
-            Schedule 3.
+          description: If nobody is home this long after pre-heating started, switches back to Schedule 3.
           default: 30
           selector:
             number:
@@ -167,9 +165,9 @@ blueprint:
         proximity_devices:
           name: Proximity devices (optional)
           description: |
-            Normally found automatically: the Proximity entry named after the home zone.
+            The Proximity entry named after the home zone is normally found automatically.
 
-            Pick it here only if it is not found, for example after renaming the zone.
+            Pick it here only if it isn't, for example after renaming the zone.
           default: []
           selector:
             device:
