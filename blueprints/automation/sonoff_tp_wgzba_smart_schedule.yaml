@@ -7,9 +7,8 @@ blueprint:
     - **Schedule 1** while the heated areas are occupied.
     - **Schedule 2** when the heated areas are empty. With **Follow occupancy** off, Schedule 1 is used whenever someone is home.
     - Schedules 1 and 2 wait for your own Boost or Timer override to end. The routine's Timers follow a group change.
-    - **Schedule 3** when nobody is home. Any running override is ended first.
 
-    **Geofencing** switches to the pre-heat group early while nobody is home and someone is close and heading home.
+    **Geofencing** uses **Schedule 3** when nobody is home, ending any running override first. It switches to the pre-heat group early when someone is close and heading home.
 
     **Routine** moves the start of the morning heating to match the next waking alarm:
     - An **early alarm** starts today's schedule early, at its own temperatures.
@@ -94,12 +93,15 @@ blueprint:
     geofencing:
       name: Geofencing
       icon: mdi:map-marker-radius
-      description: While nobody is home, heats up before someone gets home.
+      description: Switches to Schedule 3 while nobody is home, and heats up before someone gets home.
       collapsed: true
       input:
-        geofencing_enabled:
-          name: Geofencing
-          description: Switches to the pre-heat schedule group while someone is on their way home.
+        away_enabled:
+          name: Away schedule
+          description: |
+            Uses Schedule 3 while nobody is home (the home zone is empty and no area is occupied). Any running override is ended first.
+
+            When off, the group follows **Occupancy** while nobody is home.
           default: true
           selector:
             boolean: {}
@@ -114,6 +116,15 @@ blueprint:
             entity:
               filter:
                 - domain: zone
+        preheat_enabled:
+          name: Pre-heat
+          description: |
+            Switches to the pre-heat schedule group while nobody is home and someone is on their way home.
+
+            Needs **Away schedule**.
+          default: true
+          selector:
+            boolean: {}
         geofencing_distance:
           name: Geofencing distance
           description: |
@@ -284,7 +295,8 @@ trigger_variables:
   awake_sensors: !input awake_sensors
   state_helper: !input state_helper
   home_zone: !input home_zone
-  geofencing_enabled: !input geofencing_enabled
+  away_enabled: !input away_enabled
+  preheat_enabled: !input preheat_enabled
   geofencing_distance: !input geofencing_distance
   geofencing_timeout: !input geofencing_timeout
   proximity_devices: !input proximity_devices
@@ -504,7 +516,7 @@ triggers:
     id: heading-home
     value_template: >-
       {% set ns = namespace(on=false, ents=[]) %}
-      {% if geofencing_enabled %}
+      {% if away_enabled and preheat_enabled %}
         {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
         {% if proximity_devices | count > 0 %}
           {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
@@ -618,7 +630,7 @@ actions:
       # skipped otherwise.
       heading_home: >-
         {% set ns = namespace(on=false, ents=[]) %}
-        {% if geofencing_enabled and states(home_zone) | int(0) == 0 %}
+        {% if away_enabled and preheat_enabled and states(home_zone) | int(0) == 0 %}
           {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
           {% if proximity_devices | count > 0 %}
             {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
@@ -639,9 +651,11 @@ actions:
         {% endif %}
         {{ ns.on }}
       # Geofencing pre-heating started at this time, and is still within its
-      # timeout.
+      # timeout. Turning off pre-heating ends it.
       arrival: "{{ state.arrival | default(0) | int }}"
-      preheating: "{{ arrival > 0 and now().timestamp() < arrival + geofencing_timeout | int * 60 }}"
+      preheating: >-
+        {{ away_enabled and preheat_enabled and arrival > 0
+           and now().timestamp() < arrival + geofencing_timeout | int * 60 }}
       # The thermostat is on its schedule. A hand adjustment puts it in
       # Temporary_Manual until the next period; Manual and Off are yours too.
       # The routine applies nothing until it is back on its schedule.
@@ -726,6 +740,28 @@ actions:
       - stop: >-
           Deferred: the schedule is being edited in the UI. A catch-up runs 5 minutes
           after the last change.
+  # The routine plan does not apply while nobody is home, so drop it and end
+  # its Timer.
+  - alias: Nobody home, end the routine
+    if:
+      - condition: template
+        value_template: "{{ nobody_home }}"
+    then:
+      - variables:
+          plan: "{{ empty_plan }}"
+          plan_active: false
+      - *save_state
+      - if:
+          - condition: template
+            value_template: "{{ routine_timer_running }}"
+        then:
+          - alias: End our Timer
+            action: button.press
+            target:
+              entity_id: "{{ override_exit }}"
+          - variables:
+              routine_timer_running: false
+              override_running: false
   - alias: Note the schedule group before switching
     variables:
       group_before: "{{ states(schedule_group) }}"
@@ -739,22 +775,9 @@ actions:
             condition: template
             value_template: "{{ preheating or (arrival == 0 and heading_home) }}"
         sequence:
-          # The routine plan does not apply while nobody is home.
           - variables:
               state: "{{ dict(state, arrival=arrival if arrival > 0 else now().timestamp() | int) }}"
-              plan: "{{ empty_plan }}"
-              plan_active: false
           - *save_state
-          - if:
-              - condition: template
-                value_template: "{{ routine_timer_running }}"
-            then:
-              - alias: End our Timer
-                action: button.press
-                target:
-                  entity_id: "{{ override_exit }}"
-              - variables:
-                  routine_timer_running: false
           - action: select.select_option
             target:
               entity_id: "{{ schedule_group }}"
@@ -765,11 +788,10 @@ actions:
           - alias: Nobody home
             condition: template
             value_template: "{{ nobody_home }}"
+          - alias: Away schedule on
+            condition: template
+            value_template: "{{ away_enabled }}"
         sequence:
-          - variables:
-              plan: "{{ empty_plan }}"
-              plan_active: false
-          - *save_state
           - if:
               - condition: template
                 value_template: "{{ override_running }}"
@@ -778,15 +800,13 @@ actions:
                 action: button.press
                 target:
                   entity_id: "{{ override_exit }}"
-              - variables:
-                  routine_timer_running: false
           - action: select.select_option
             target:
               entity_id: "{{ schedule_group }}"
             data:
               option: Schedule 3
-      # After the nobody-home branches, so Schedule 1 never applies to an
-      # empty house when follow occupancy is off.
+      # After the nobody-home branches, so Schedule 1 only applies to an empty
+      # house when follow occupancy and the away schedule are off.
       - alias: Heated areas occupied (or follow occupancy off), Schedule 1
         conditions:
           - condition: or
