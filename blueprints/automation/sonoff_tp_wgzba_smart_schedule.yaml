@@ -497,6 +497,7 @@ triggers:
            + (ents | select('match', '^(select|number)\\..*_schedule_period_[0-9]+_(time|temp)$') | list)) %}
       {% set raw = states(state_helper) %}
       {% set f = (raw | from_json).fetch | default(0) | int if raw is match('^\\{') else 0 %}
+      {% set f = f if f <= now().timestamp() else 0 %}
       {% set ns = namespace(n=0, lo=0, hi=0) %}
       {% for s in watched %}
         {% set t = s.last_changed.timestamp() %}
@@ -609,11 +610,13 @@ actions:
       # The schedule is being edited: operating day or period entities changed
       # in the last 5 minutes and after our last fetch (allowing 60 s for its
       # own changes), and not as a burst. A fetch replaces the selects, so
-      # anything older is gone. A restart, rejoin or a fetch from the UI changes
-      # half or more of them within 30 s; a person edits them one at a time.
-      # Keep this in step with the Schedule editing finished trigger.
+      # anything older is gone. A fetch time in the future (the clock went back)
+      # is ignored. A restart or the thermostat rejoining changes half or more
+      # of them within 30 s; a person edits them one at a time. Keep this in
+      # step with the Schedule editing finished trigger.
       schedule_editing: >-
         {% set f = state.fetch | default(0) | int %}
+        {% set f = f if f <= now().timestamp() else 0 %}
         {% set watched = expand([operating_day] + period_entities) %}
         {% set ns = namespace(n=0, lo=0, hi=0) %}
         {% for s in watched %}
