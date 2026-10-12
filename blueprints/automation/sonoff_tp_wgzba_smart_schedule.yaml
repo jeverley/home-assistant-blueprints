@@ -350,6 +350,18 @@ variables:
     {%- endmacro -%}
     {{ {'getting_up': secs(getting_up_delay) | float(0), 'bedtime': secs(bedtime_delay) | float(0),
         'empty': secs(empty_delay) | float(0)} }}
+  # Timings in seconds used in more than one place. The Schedule editing
+  # finished trigger cannot read variables, so it repeats the first three.
+  #   fetch_grace: a fetch's own changes land within this after it starts.
+  #   editing_window: schedule changes this recent may be an edit in progress.
+  #   burst_span: changes this close together are a restart or rejoin.
+  #   min_stage: the shortest override period, so the shortest stage.
+  #   exit_window: our own Exit press lands within this after we record it.
+  fetch_grace: 60
+  editing_window: 300
+  burst_span: 30
+  min_stage: 60
+  exit_window: 60
   # Occupancy sensors in any area. Someone in any area, even the garden, is
   # home.
   area_sensors: >-
@@ -490,7 +502,8 @@ triggers:
     event_type: automation_reloaded
   # Fires 5 minutes after the last edit to the schedule's operating day or
   # periods, so runs deferred while it was edited catch up. Keep this in step
-  # with the schedule_editing variable.
+  # with the schedule_editing variable: 300, 60 and 30 are its editing_window,
+  # fetch_grace and burst_span.
   - alias: Schedule editing finished
     trigger: template
     id: catch-up
@@ -571,8 +584,8 @@ actions:
           are enabled and their entity IDs still end with their default names.
         error: true
   - variables:
-      # Following occupancy needs at least one heated area.
-      follow_occupancy: "{{ follow_occupancy and heated_areas | count > 0 }}"
+      # Follow occupancy is on and has at least one heated area to follow.
+      following_occupancy: "{{ follow_occupancy and heated_areas | count > 0 }}"
       # The trigger id. A run without one (Run actions in the UI) is a catch-up.
       run: >-
         {{ trigger.id if trigger is defined and trigger.id is defined and trigger.id else 'catch-up' }}
@@ -624,13 +637,13 @@ actions:
         {% set ns = namespace(n=0, lo=0, hi=0) %}
         {% for s in watched %}
           {% set t = s.last_changed.timestamp() %}
-          {% if t > now().timestamp() - 300 and t > f + 60 %}
+          {% if t > now().timestamp() - editing_window and t > f + fetch_grace %}
             {% set ns.lo = t if ns.n == 0 else min(ns.lo, t) %}
             {% set ns.hi = t if ns.n == 0 else max(ns.hi, t) %}
             {% set ns.n = ns.n + 1 %}
           {% endif %}
         {% endfor %}
-        {% set burst = ns.n >= (watched | count) / 2 and ns.hi - ns.lo <= 30 %}
+        {% set burst = ns.n >= (watched | count) / 2 and ns.hi - ns.lo <= burst_span %}
         {{ ns.n > 0 and not burst }}
       # Someone is heading home and close. Keep this in step with the Someone
       # heading home trigger. Only used while the home zone is empty, so it is
@@ -697,7 +710,7 @@ actions:
         value_template: >-
           {{ plan.kind != '' and not plan.cancelled and plan.timer_applied > 0
              and apply_pressed_at == plan.timer_applied and exit_pressed_at > plan.timer_applied
-             and not (plan.timer_exited > 0 and 0 <= exit_pressed_at - plan.timer_exited <= 60) }}
+             and not (plan.timer_exited > 0 and 0 <= exit_pressed_at - plan.timer_exited <= exit_window) }}
     then:
       - variables:
           plan: "{{ dict(plan, cancelled=true) }}"
@@ -821,7 +834,7 @@ actions:
           - condition: or
             conditions:
               - condition: template
-                value_template: "{{ not follow_occupancy }}"
+                value_template: "{{ not following_occupancy }}"
               - condition: occupancy.is_detected
                 target:
                   area_id: !input heated_areas
@@ -840,7 +853,7 @@ actions:
       - alias: Heated areas clear, Schedule 2
         conditions:
           - condition: template
-            value_template: "{{ follow_occupancy }}"
+            value_template: "{{ following_occupancy }}"
           - condition: occupancy.is_not_detected
             target:
               area_id: !input heated_areas
@@ -983,7 +996,7 @@ actions:
           early_start_due: >-
             {{ (((run == 'early-alarm' or catch_up) and early_alarm_enabled) or getting_up)
                and routine_start != '' and (routine_start | as_datetime) <= now()
-               and periods | count >= 2 and (today_at(periods[1].time) - now()).total_seconds() >= 60 }}
+               and periods | count >= 2 and (today_at(periods[1].time) - now()).total_seconds() >= min_stage }}
           # A late start is due: nobody is up, period 2 is about to start (or has),
           # and the routine start is at least a minute after it.
           late_start_due: >-
@@ -991,7 +1004,7 @@ actions:
                   and routine_start != '' and periods | count >= 2 %}
               {% set start = routine_start | as_datetime %}
               {% set p2 = today_at(periods[1].time) %}
-              {{ p2 < start and now() >= p2 - timedelta(minutes=1) and (start - now()).total_seconds() >= 60 }}
+              {{ p2 < start and now() >= p2 - timedelta(minutes=1) and (start - now()).total_seconds() >= min_stage }}
             {% else %}{{ false }}{% endif %}
         # An unreadable schedule (unavailable selects) leaves everything as
         # it is.
@@ -1033,18 +1046,16 @@ actions:
                     value_template: >-
                       {{ setback.until != '' and setback.temp is not none and current_temp is not none
                          and current_temp > setback.temp
-                         and ((setback.until | as_datetime) - now()).total_seconds() >= 60 }}
+                         and ((setback.until | as_datetime) - now()).total_seconds() >= min_stage }}
                   - alias: No override running
                     condition: template
                     value_template: "{{ not override_running }}"
                   - alias: Not cancelled today
                     condition: template
                     value_template: "{{ cancelled_today != 'bedtime' }}"
-                  # Sleepers may not show on occupancy sensors, so check the home zone
-                  # instead of the areas.
                   - alias: Someone is home
                     condition: template
-                    value_template: "{{ states(home_zone) | int(0) > 0 }}"
+                    value_template: "{{ not nobody_home }}"
                 sequence:
                   - variables:
                       plan: "{{ dict(empty_plan, kind='bedtime', start=now().timestamp() | int) }}"
@@ -1106,7 +1117,7 @@ actions:
                 {% elif plan_active and plan.kind == 'bedtime' and setback.until != '' %}
                   {% set ns.ph = [{'temp': setback.temp, 'until': (setback.until | as_datetime).timestamp()}] %}
                 {% endif %}
-                {% set o = ns.ph | selectattr('until', 'ge', t + 60) | first | default(none) %}
+                {% set o = ns.ph | selectattr('until', 'ge', t + min_stage) | first | default(none) %}
                 {{ {'temp': o.temp, 'until': o.until | int} if o is not none and o.temp is not none else none }}
           # The routine has finished: the plan has no stage left, or it was
           # cleared this run (someone got up during bedtime) while our Timer
