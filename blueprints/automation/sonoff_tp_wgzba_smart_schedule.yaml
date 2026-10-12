@@ -188,8 +188,12 @@ blueprint:
       collapsed: false
       input:
         alarm_sensor:
-          name: Next waking alarm sensor
-          description: The sensor with the time of the next waking alarm, such as a phone's next alarm sensor.
+          name: Next waking alarm sensor (optional)
+          description: |
+            The sensor with the time of the next waking alarm, such as a phone's next alarm sensor.
+
+            Needed for **Early alarm** and **Late alarm**. **Getting up** and **Bedtime** work without it.
+          default: ""
           selector:
             entity:
               filter:

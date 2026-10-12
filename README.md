@@ -58,7 +58,7 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | Thermostat | the TP-WGZBA device, heated areas, state helper (required) |
 | Occupancy | follow occupancy (on), occupied delay (1 min), empty delay (5 min) |
 | Geofencing | geofencing (on), home zone (default `zone.home`), geofencing distance (5 km), pre-heat schedule group (Schedule 2), geofencing timeout (30 min), Proximity devices (found from the home zone), arriving sensors (none) |
-| Routine | next alarm sensor, lead time (30 min), early alarm (on), late alarm (on), awake sensors (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
+| Routine | next waking alarm sensor (optional, none), lead time (30 min), early alarm (on), late alarm (on), awake sensors (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
 
 ### Example configurations
 
