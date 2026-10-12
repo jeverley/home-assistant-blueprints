@@ -753,6 +753,8 @@ actions:
                 action: button.press
                 target:
                   entity_id: "{{ override_exit }}"
+              - variables:
+                  ours: false
           - action: select.select_option
             target:
               entity_id: "{{ schedule_group }}"
@@ -776,6 +778,8 @@ actions:
                 action: button.press
                 target:
                   entity_id: "{{ override_exit }}"
+              - variables:
+                  ours: false
           - action: select.select_option
             target:
               entity_id: "{{ schedule_group }}"
@@ -1073,13 +1077,11 @@ actions:
                 {% endif %}
                 {% set o = ns.ph | selectattr('until', 'ge', t + 60) | first | default(none) %}
                 {{ {'temp': o.temp, 'until': o.until | int} if o is not none and o.temp is not none else none }}
-          # The routine has finished: a recorded plan that is not cancelled
-          # has no stage left.
+          # The routine has finished: the plan has no stage left, or it was
+          # cleared this run (someone got up during bedtime) while our Timer
+          # runs. Its Timer is ended and the plan dropped.
           - variables:
-              over: >-
-                {% set raw = states(state_helper) %}
-                {% set recorded = (raw | from_json).routine | default({}) if raw is match('^\\{') else {} %}
-                {{ stage is none and recorded != {} and not plan.cancelled }}
+              over: "{{ stage is none and not plan.cancelled and (plan.kind != '' or ours) }}"
           # Save the plan (dropped if the routine is over) before any thermostat
           # call, so a run that fails part way leaves it for the next run.
           - variables:
