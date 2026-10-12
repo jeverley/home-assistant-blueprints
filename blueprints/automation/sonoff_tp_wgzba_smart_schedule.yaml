@@ -61,7 +61,7 @@ blueprint:
       name: Occupancy
       icon: mdi:home-account
       description: Who is home, and how long to wait before switching schedule group.
-      collapsed: false
+      collapsed: true
       input:
         follow_occupancy:
           name: Follow occupancy
@@ -94,7 +94,7 @@ blueprint:
       name: Geofencing
       icon: mdi:map-marker-radius
       description: While nobody is home, heats up before someone gets home.
-      collapsed: false
+      collapsed: true
       input:
         geofencing_enabled:
           name: Geofencing
@@ -185,7 +185,7 @@ blueprint:
         - **Bedtime** starts the night temperature early when everyone goes to bed.
 
         It only runs while someone is home.
-      collapsed: false
+      collapsed: true
       input:
         alarm_sensor:
           name: Next waking alarm sensor (optional)
