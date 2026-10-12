@@ -38,12 +38,6 @@ blueprint:
                 - integration: zha
                   manufacturer: SONOFF
                   model: TP-WGZBA
-        heated_areas:
-          name: Heated areas
-          description: The areas this thermostat heats.
-          selector:
-            area:
-              multiple: true
         state_helper:
           name: State helper
           description: |
@@ -68,10 +62,17 @@ blueprint:
           description: |
             Uses Schedule 1 while the heated areas are occupied and Schedule 2 when they are empty.
 
-            When off, Schedule 1 is used whenever someone is home.
+            When off, or with no heated areas set, Schedule 1 is used whenever someone is home.
           default: true
           selector:
             boolean: {}
+        heated_areas:
+          name: Heated areas
+          description: The areas this thermostat heats, used by **Follow occupancy**.
+          default: []
+          selector:
+            area:
+              multiple: true
         occupied_delay:
           name: Occupied delay
           description: The duration the heated areas must be occupied before switching to Schedule 1.
@@ -553,14 +554,9 @@ actions:
           Could not find every schedule and override entity on the thermostat. Check they
           are enabled and their entity IDs still end with their default names.
         error: true
-  - alias: Stop if no heated areas are set
-    if:
-      - condition: template
-        value_template: "{{ heated_areas | count == 0 }}"
-    then:
-      - stop: Set at least one heated area.
-        error: true
   - variables:
+      # Following occupancy needs at least one heated area.
+      follow_occupancy: "{{ follow_occupancy and heated_areas | count > 0 }}"
       # The trigger id. A run without one (Run actions in the UI) is a catch-up.
       run: >-
         {{ trigger.id if trigger is defined and trigger.id is defined and trigger.id else 'catch-up' }}
