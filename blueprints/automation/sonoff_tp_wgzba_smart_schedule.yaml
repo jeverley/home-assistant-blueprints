@@ -561,19 +561,23 @@ actions:
       run: >-
         {{ trigger.id if trigger is defined and trigger.id is defined and trigger.id else 'catch-up' }}
       # The blueprint's working state, kept as JSON in the State helper, one key
-      # per feature. Writes merge into it, so other keys are kept.
+      # per feature:
       #   fetch: when our last fetch started.
       #   routine: the plan, see below.
       #   arrival: when geofencing pre-heating started.
-      # Times are Unix epoch seconds, 0 when unset.
-      state: >-
+      # Times are Unix epoch seconds, 0 when unset. The helper is the only
+      # copy: state holds its keys other than routine, plan holds the routine,
+      # and the save step writes both back before any thermostat call that
+      # depends on them and at the end. Writing an unchanged value changes
+      # nothing. A thermostat call that fails stops the run, and what was
+      # written lets a later run pick up from there.
+      stored: >-
         {% set raw = states(state_helper) %}
         {{ raw | from_json if raw is match('^\\{') else {} }}
-      # What the State helper holds. Steps change state and plan, and the run
-      # saves them (only if they changed) before any thermostat call that
-      # depends on them, and at the end. A thermostat call that fails stops the run, and the
-      # saved state lets a later run pick up from there.
-      saved: "{{ state }}"
+      state: >-
+        {% set ns = namespace(out={}) %}
+        {% for k, v in stored.items() if k != 'routine' %}{% set ns.out = dict(ns.out, **{k: v}) %}{% endfor %}
+        {{ ns.out }}
       # The routine plan records intent, not temperatures: its kind (morning
       # or bedtime) and start (when the morning starts, or bedtime began). Its
       # stage is worked out from today's periods on each run, so it follows a
@@ -585,7 +589,7 @@ actions:
       # cancelling. A cancelled plan is kept, marked, so it does not start
       # again that day.
       plan: >-
-        {% set r = state.routine | default({}) %}
+        {% set r = stored.routine | default({}) %}
         {{ {'kind': r.kind | default(''), 'start': r.start | default(0) | int,
             'timer_until': r.timer_until | default(0) | int, 'timer_temp': r.timer_temp | default(none),
             'timer_applied': r.timer_applied | default(0) | int, 'exiting': r.exiting | default(0) | int,
@@ -714,24 +718,11 @@ actions:
     then:
       - &save_state
         alias: Save the state
-        sequence:
-          # The routine key always comes from the plan, so the two cannot
-          # drift apart.
-          - variables:
-              state: >-
-                {{ dict(state, routine=plan) if plan.kind != ''
-                   else dict(state, routine={}) if 'routine' in state else state }}
-          - if:
-              - condition: template
-                value_template: "{{ state != saved }}"
-            then:
-              - action: input_text.set_value
-                target:
-                  entity_id: "{{ state_helper }}"
-                data:
-                  value: "{{ state | to_json }}"
-              - variables:
-                  saved: "{{ state }}"
+        action: input_text.set_value
+        target:
+          entity_id: "{{ state_helper }}"
+        data:
+          value: "{{ dict(state, routine={} if plan.kind == '' else plan) | to_json }}"
       - stop: >-
           Deferred: the schedule is being edited in the UI. A catch-up runs 5 minutes
           after the last change.
@@ -1085,7 +1076,10 @@ actions:
           # The routine has finished: a recorded plan that is not cancelled
           # has no stage left.
           - variables:
-              over: "{{ stage is none and state.routine | default({}) != {} and not plan.cancelled }}"
+              over: >-
+                {% set raw = states(state_helper) %}
+                {% set recorded = (raw | from_json).routine | default({}) if raw is match('^\\{') else {} %}
+                {{ stage is none and recorded != {} and not plan.cancelled }}
           # Save the plan (dropped if the routine is over) before any thermostat
           # call, so a run that fails part way leaves it for the next run.
           - variables:
