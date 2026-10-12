@@ -500,7 +500,7 @@ triggers:
       {% set ns = namespace(n=0, lo=0, hi=0) %}
       {% for s in watched %}
         {% set t = s.last_changed.timestamp() %}
-        {% if t > now().timestamp() - 300 and not (f > 0 and f - 10 <= t <= f + 60) %}
+        {% if t > now().timestamp() - 300 and t > f + 60 %}
           {% set ns.lo = t if ns.n == 0 else min(ns.lo, t) %}
           {% set ns.hi = t if ns.n == 0 else max(ns.hi, t) %}
           {% set ns.n = ns.n + 1 %}
@@ -607,17 +607,18 @@ actions:
             'timer_applied': r.timer_applied | default(0) | int, 'timer_exited': r.timer_exited | default(0) | int,
             'cancelled': r.cancelled | default(false)} }}
       # The schedule is being edited: operating day or period entities changed
-      # in the last 5 minutes, other than through our own fetch (10 s before to
-      # 60 s after it started), and not as a burst. A restart, rejoin or another
-      # fetch changes half or more of them within 30 s; a person edits them one
-      # at a time. Keep this in step with the Schedule editing finished trigger.
+      # in the last 5 minutes and after our last fetch (allowing 60 s for its
+      # own changes), and not as a burst. A fetch replaces the selects, so
+      # anything older is gone. A restart, rejoin or a fetch from the UI changes
+      # half or more of them within 30 s; a person edits them one at a time.
+      # Keep this in step with the Schedule editing finished trigger.
       schedule_editing: >-
         {% set f = state.fetch | default(0) | int %}
         {% set watched = expand([operating_day] + period_entities) %}
         {% set ns = namespace(n=0, lo=0, hi=0) %}
         {% for s in watched %}
           {% set t = s.last_changed.timestamp() %}
-          {% if t > now().timestamp() - 300 and not (f > 0 and f - 10 <= t <= f + 60) %}
+          {% if t > now().timestamp() - 300 and t > f + 60 %}
             {% set ns.lo = t if ns.n == 0 else min(ns.lo, t) %}
             {% set ns.hi = t if ns.n == 0 else max(ns.hi, t) %}
             {% set ns.n = ns.n + 1 %}
