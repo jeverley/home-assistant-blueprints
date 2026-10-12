@@ -53,7 +53,7 @@ blueprint:
     occupancy:
       name: Occupancy
       icon: mdi:home-account
-      description: Who is home, and how long to wait before switching schedule group.
+      description: Switches between Schedule 1 and Schedule 2 as the heated areas become occupied or empty.
       collapsed: true
       input:
         follow_occupancy:
@@ -83,7 +83,10 @@ blueprint:
             duration: {}
         empty_delay:
           name: Empty delay
-          description: The duration areas must be empty before switching to Schedule 2, or to Schedule 3 when nobody is home (the home zone is empty and no area is occupied).
+          description: |
+            The duration the heated areas must be empty before switching to Schedule 2.
+
+            Also how long every area must be empty before nobody counts as home, for **Away schedule**.
           default:
             hours: 0
             minutes: 5
