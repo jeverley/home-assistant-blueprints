@@ -8,7 +8,7 @@ blueprint:
     - **Schedule 2** when the heated areas are empty. With **Follow occupancy** off or no heated areas, Schedule 1 is used whenever someone is home.
     - Schedules 1 and 2 wait for your own Boost or Timer override to end. The routine's Timers follow a group change.
 
-    **Geofencing**, with **Away schedule** on, uses **Schedule 3** when nobody is home, ending any running override first. **Pre-heat** switches to the pre-heat group early when someone is close and heading home.
+    **Geofencing**, with **Away schedule** on, uses **Schedule 3** when nobody is home, ending any running override as it switches. **Pre-heat** switches to the pre-heat group early when someone is close and heading home.
 
     **Routine** moves the start of the morning heating to match the next waking alarm:
     - An **early alarm** starts today's schedule early, at its own temperatures.
@@ -102,7 +102,7 @@ blueprint:
         away_enabled:
           name: Away schedule
           description: |
-            Uses Schedule 3 while nobody is home (the home zone is empty and no area is occupied). Any running override is ended first.
+            Uses Schedule 3 while nobody is home (the home zone is empty and no area is occupied). Any running override is ended as it switches, and one started while away is left alone.
 
             When off, the group follows **Occupancy** while nobody is home.
           default: true
@@ -358,12 +358,14 @@ variables:
       {% set ns.e = ns.e + [s.entity_id] %}
     {% endfor %}
     {{ ns.e }}
-  someone_in_an_area: "{{ area_sensors | select('is_state', 'on') | list | count > 0 }}"
   # Nobody is home: the home zone is empty, and no area is occupied or has
   # been for the empty delay. The zone is checked first, so the areas are only
-  # looked at when it is empty.
+  # looked at when it is empty. A zone not yet known (at startup) counts as
+  # someone home. An unavailable area sensor counts as empty, so a dead
+  # sensor cannot keep the house occupied.
   nobody_home: >-
-    {% if states(home_zone) | int(0) > 0 %}{{ false }}{% else %}
+    {% set z = states(home_zone) %}
+    {% if z in ['unknown', 'unavailable'] or z | int(0) > 0 %}{{ false }}{% else %}
     {% set ns = namespace(ok=true) %}
     {% for s in expand(area_sensors) %}
       {% if s.state == 'on' or (s.state == 'off' and (now() - s.last_changed).total_seconds() < delay_secs['empty']) %}
@@ -497,7 +499,7 @@ triggers:
       {% set watched = expand((ents | select('match', '^select\\..*_schedule_operating_day$') | list)
            + (ents | select('match', '^(select|number)\\..*_schedule_period_[0-9]+_(time|temp)$') | list)) %}
       {% set raw = states(state_helper) %}
-      {% set f = (raw | from_json).fetch | default(0) | int if raw is match('^\\{') else 0 %}
+      {% set f = (raw | from_json(default={})).fetch | default(0) | int if raw is match('^\\{') else 0 %}
       {% set f = f if f <= now().timestamp() else 0 %}
       {% set ns = namespace(n=0, lo=0, hi=0) %}
       {% for s in watched %}
@@ -544,7 +546,7 @@ triggers:
     id: geofencing-timeout
     value_template: >-
       {% set raw = states(state_helper) %}
-      {% set a = (raw | from_json).arrival | default(0) | int if raw is match('^\\{') else 0 %}
+      {% set a = (raw | from_json(default={})).arrival | default(0) | int if raw is match('^\\{') else 0 %}
       {{ a > 0 and now().timestamp() >= a + geofencing_timeout | int * 60 }}
   # Refreshes the fetched schedule for the new day, for the late start trigger.
   - alias: New day
@@ -587,7 +589,7 @@ actions:
       # written lets a later run pick up from there.
       stored: >-
         {% set raw = states(state_helper) %}
-        {{ raw | from_json if raw is match('^\\{') else {} }}
+        {{ raw | from_json(default={}) if raw is match('^\\{') else {} }}
       state: >-
         {% set ns = namespace(out={}) %}
         {% for k, v in stored.items() if k != 'routine' %}{% set ns.out = dict(ns.out, **{k: v}) %}{% endfor %}
@@ -684,17 +686,17 @@ actions:
   - variables:
       apply_pressed_at: "{{ as_timestamp(states(override_apply), 0) | int }}"
       exit_pressed_at: "{{ as_timestamp(states(override_exit), 0) | int }}"
-  # Someone pressed Exit after we applied our Timer, and it was not us ending
-  # it to apply the next one, so they cancelled the routine for today. Taking
-  # over with your own Timer or Boost (Apply), adjusting the thermostat by
-  # hand, or the thermostat restarting does not cancel it: the routine steps
-  # aside and carries on afterwards.
+  # Someone pressed Exit on our Timer (our Apply was the last one), and it was
+  # not us ending it to apply the next one, so they cancelled the routine for
+  # today. Taking over with your own Timer or Boost (Apply) and then ending it,
+  # adjusting the thermostat by hand, or the thermostat restarting does not
+  # cancel it: the routine steps aside and carries on afterwards.
   - alias: Note a cancelled plan
     if:
       - condition: template
         value_template: >-
           {{ plan.kind != '' and not plan.cancelled and plan.timer_applied > 0
-             and exit_pressed_at > plan.timer_applied
+             and apply_pressed_at == plan.timer_applied and exit_pressed_at > plan.timer_applied
              and not (plan.timer_exited > 0 and 0 <= exit_pressed_at - plan.timer_exited <= 60) }}
     then:
       - variables:
@@ -797,9 +799,11 @@ actions:
             condition: template
             value_template: "{{ away_enabled }}"
         sequence:
+          # Only on switching to Schedule 3, so a Boost started while away is
+          # left alone.
           - if:
               - condition: template
-                value_template: "{{ override_running }}"
+                value_template: "{{ override_running and group_before != 'Schedule 3' }}"
             then:
               - alias: End the override
                 action: button.press
@@ -876,14 +880,16 @@ actions:
              or (plan_active and run == 'override-ended' and is_state(override_state, 'Idle')) }}
     then:
       # Fetch today's schedule for the active group. An override-ended run only
-      # needs one if the selects are not showing today. The start time is recorded
+      # needs one if the selects are not showing today, or the group changed
+      # since the last fetch (by this run or by hand). The start time is recorded
       # first, so its changes are not taken for an edit. If the fetch fails the
       # run stops rather than act on a schedule it could not read.
       - alias: Fetch today's schedule
         if:
           - condition: template
             value_template: >-
-              {{ run != 'override-ended' or states(operating_day) != now().strftime('%A') }}
+              {{ run != 'override-ended' or states(operating_day) != now().strftime('%A')
+                 or states[schedule_group].last_changed.timestamp() > state.fetch | default(0) }}
         then:
           - variables:
               state: "{{ dict(state, fetch=now().timestamp() | int) }}"
@@ -1011,9 +1017,9 @@ actions:
                 conditions:
                   - condition: template
                     value_template: "{{ getting_up and plan_active and plan.kind == 'morning' and now().timestamp() < plan.start }}"
-                  - alias: Someone is in an area
+                  - alias: Someone is home
                     condition: template
-                    value_template: "{{ someone_in_an_area }}"
+                    value_template: "{{ not nobody_home }}"
                 sequence:
                   - variables:
                       plan: "{{ dict(plan, start=now().timestamp() | int) }}"
@@ -1056,9 +1062,9 @@ actions:
                   - alias: No override running
                     condition: template
                     value_template: "{{ not override_running }}"
-                  - alias: Someone is in an area
+                  - alias: Someone is home
                     condition: template
-                    value_template: "{{ someone_in_an_area }}"
+                    value_template: "{{ not nobody_home }}"
                   - alias: Not cancelled today
                     condition: template
                     value_template: "{{ cancelled_today != 'morning' }}"
