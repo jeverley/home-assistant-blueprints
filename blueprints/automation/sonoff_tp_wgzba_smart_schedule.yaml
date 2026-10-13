@@ -14,10 +14,10 @@ blueprint:
     - **Pre-heat** switches to the pre-heat group early when someone is close and heading home.
 
     **Routine** follows your day rather than the clock:
-    - An **early alarm** starts today's schedule early, at its own temperatures.
-    - A **late alarm** keeps the night temperature until shortly before it.
-    - **Getting up**, reported by the awake sensors, starts the morning straight away, alarm or not.
-    - At **bedtime**, when the awake sensors report everyone asleep, the evening setback starts early.
+    - An **early alarm** starts the morning heating early.
+    - A **late alarm** delays the morning heating.
+    - **Getting up** starts the morning heating as soon as an awake sensor reports someone up.
+    - **Bedtime** starts the night temperature early once the awake sensors report everyone asleep.
 
     Each stage is a **Timer** override worked out from the active group's schedule, so it follows a group change.
   domain: automation
