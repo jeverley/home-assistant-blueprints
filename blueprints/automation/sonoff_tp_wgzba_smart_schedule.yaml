@@ -126,10 +126,10 @@ blueprint:
         geofencing_distance:
           name: Geofencing distance
           description: |
-            Pre-heats once someone heading home is within this distance.
+            Pre-heats once someone heading home is within this distance. Allow roughly the distance you travel in the time your heating takes to warm up.
 
             Uses the **Proximity** integration for the home zone. Set to 0 to pre-heat from the arriving sensors only.
-          default: 5
+          default: 10
           selector:
             number:
               min: 0
@@ -148,8 +148,11 @@ blueprint:
                 - Schedule 2
         geofencing_timeout:
           name: Geofencing timeout
-          description: Switches back to Schedule 3 if nobody is home this long after pre-heating started.
-          default: 30
+          description: |
+            Switches back to Schedule 3 if nobody is home this long after pre-heating started.
+
+            Allow for the slowest trip home from the geofencing distance.
+          default: 45
           selector:
             number:
               min: 5
