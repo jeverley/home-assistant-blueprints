@@ -42,7 +42,7 @@ blueprint:
         state_helper:
           name: State helper
           description: |
-            Where the blueprint keeps its working state, such as the running routine stage and what comes next, so it can carry on after a restart or while the schedule is being edited.
+            Keeps the blueprint's working state, such as the routine's plan, so it carries on after a restart or while the schedule is being edited.
 
             Create a **Text** helper under **Settings > Devices & services > Helpers**:
             - Set its **Maximum length** to 255.
@@ -63,7 +63,7 @@ blueprint:
           description: |
             Uses Schedule 1 while the heated areas are occupied and Schedule 2 when they are empty.
 
-            When off, or with no heated areas set, Schedule 1 is used whenever someone is home.
+            When off, or with no heated areas, uses Schedule 1 whenever someone is home.
           default: true
           selector:
             boolean: {}
@@ -98,7 +98,7 @@ blueprint:
     geofencing:
       name: Geofencing
       icon: mdi:map-marker-radius
-      description: Switches to Schedule 3 while nobody is home, and heats up before someone gets home.
+      description: Uses Schedule 3 while nobody is home, and pre-heats before someone gets home.
       collapsed: true
       input:
         away_enabled:
@@ -106,7 +106,7 @@ blueprint:
           description: |
             Uses Schedule 3 while nobody is home (the home zone is empty and no area is occupied). Any running override is ended as it switches, and one started while away is left alone.
 
-            When off, the group follows **Occupancy** while nobody is home.
+            When off, **Occupancy** continues to choose the group while nobody is home.
           default: true
           selector:
             boolean: {}
@@ -133,7 +133,7 @@ blueprint:
         geofencing_distance:
           name: Geofencing distance
           description: |
-            While nobody is home, pre-heats once someone heading home is within this distance.
+            Pre-heats once someone heading home is within this distance.
 
             Uses the **Proximity** integration for the home zone.
           default: 5
@@ -155,7 +155,7 @@ blueprint:
                 - Schedule 2
         geofencing_timeout:
           name: Geofencing timeout
-          description: If nobody is home this long after pre-heating started, switches back to Schedule 3.
+          description: Switches back to Schedule 3 if nobody is home this long after pre-heating started.
           default: 30
           selector:
             number:
