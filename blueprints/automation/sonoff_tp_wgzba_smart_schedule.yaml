@@ -11,7 +11,7 @@ blueprint:
 
     **Geofencing** follows whether anyone is home:
     - **Away schedule** uses **Schedule 3** while nobody is home, ending any running override as it switches.
-    - **Pre-heat** switches to the pre-heat group early when someone is close and heading home.
+    - It pre-heats, switching to the pre-heat group early, when someone is close and heading home.
 
     **Routine** follows your day rather than the clock:
     - An **early alarm** starts the morning heating early.
@@ -106,6 +106,8 @@ blueprint:
           description: |
             Uses Schedule 3 while nobody is home (the home zone is empty and no area is occupied). Any running override is ended as it switches, and one started while away is left alone.
 
+            Pre-heats by switching to the pre-heat schedule group when someone is on their way home.
+
             When off, **Occupancy** continues to choose the group while nobody is home.
           default: true
           selector:
@@ -121,25 +123,16 @@ blueprint:
             entity:
               filter:
                 - domain: zone
-        preheat_enabled:
-          name: Pre-heat
-          description: |
-            Switches to the pre-heat schedule group while nobody is home and someone is on their way home.
-
-            Needs **Away schedule**.
-          default: true
-          selector:
-            boolean: {}
         geofencing_distance:
           name: Geofencing distance
           description: |
             Pre-heats once someone heading home is within this distance.
 
-            Uses the **Proximity** integration for the home zone.
+            Uses the **Proximity** integration for the home zone. Set to 0 to pre-heat from the arriving sensors only.
           default: 5
           selector:
             number:
-              min: 0.5
+              min: 0
               max: 100
               step: 0.5
               unit_of_measurement: km
@@ -299,7 +292,6 @@ trigger_variables:
   state_helper: !input state_helper
   home_zone: !input home_zone
   away_enabled: !input away_enabled
-  preheat_enabled: !input preheat_enabled
   geofencing_distance: !input geofencing_distance
   geofencing_timeout: !input geofencing_timeout
   proximity_devices: !input proximity_devices
@@ -535,7 +527,7 @@ triggers:
     id: heading-home
     value_template: >-
       {% set ns = namespace(on=false, ents=[]) %}
-      {% if away_enabled and preheat_enabled %}
+      {% if away_enabled %}
         {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
         {% if proximity_devices | count > 0 %}
           {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
@@ -549,6 +541,7 @@ triggers:
           {% set km = states(d) | float(none) %}
           {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
           {% if km is not none and is_state(d[:-9] ~ '_direction_of_travel', 'towards')
+                and geofencing_distance | float(0) > 0
                 and km * to_km.get(state_attr(d, 'unit_of_measurement'), 1) <= geofencing_distance | float(0) %}
             {% set ns.on = true %}
           {% endif %}
@@ -652,7 +645,7 @@ actions:
       # skipped otherwise.
       heading_home: >-
         {% set ns = namespace(on=false, ents=[]) %}
-        {% if away_enabled and preheat_enabled and states(home_zone) | int(0) == 0 %}
+        {% if away_enabled and states(home_zone) | int(0) == 0 %}
           {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
           {% if proximity_devices | count > 0 %}
             {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
@@ -666,6 +659,7 @@ actions:
             {% set km = states(d) | float(none) %}
             {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
             {% if km is not none and is_state(d[:-9] ~ '_direction_of_travel', 'towards')
+                  and geofencing_distance | float(0) > 0
                   and km * to_km.get(state_attr(d, 'unit_of_measurement'), 1) <= geofencing_distance | float(0) %}
               {% set ns.on = true %}
             {% endif %}
@@ -673,10 +667,10 @@ actions:
         {% endif %}
         {{ ns.on }}
       # Geofencing pre-heating started at this time, and is still within its
-      # timeout. Turning off pre-heating ends it.
+      # timeout. Turning off the away schedule ends it.
       arrival: "{{ state.arrival | default(0) | int }}"
       preheating: >-
-        {{ away_enabled and preheat_enabled and arrival > 0
+        {{ away_enabled and arrival > 0
            and now().timestamp() < arrival + geofencing_timeout | int * 60 }}
       # The thermostat is on its schedule. A hand adjustment puts it in
       # Temporary_Manual until the next period; Manual and Off are yours too.
