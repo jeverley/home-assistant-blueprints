@@ -226,13 +226,13 @@ blueprint:
               mode: box
         early_alarm_enabled:
           name: Early alarm
-          description: When the alarm is earlier than the schedule, starts the morning heating that much earlier.
+          description: Starts the morning heating early when the alarm is earlier than the schedule.
           default: true
           selector:
             boolean: {}
         late_alarm_enabled:
           name: Late alarm
-          description: When the alarm is later than the schedule, keeps the night temperature until shortly before it.
+          description: Delays the morning heating when the alarm is later than the schedule.
           default: true
           selector:
             boolean: {}
@@ -252,7 +252,7 @@ blueprint:
                     - input_boolean
         getting_up_enabled:
           name: Getting up
-          description: When an awake sensor turns on, starts the morning heating straight away, as for an early alarm.
+          description: Starts the morning heating as soon as an awake sensor reports someone up.
           default: true
           selector:
             boolean: {}
@@ -271,7 +271,7 @@ blueprint:
         bedtime_enabled:
           name: Bedtime
           description: |
-            When every awake sensor is off, starts the schedule's night temperature early.
+            Starts the night temperature early once the awake sensors report everyone asleep.
 
             It ends again if someone gets up before the usual time.
           default: true
