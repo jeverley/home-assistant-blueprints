@@ -5,19 +5,21 @@ blueprint:
 
     **Occupancy** switches the thermostat between its schedule groups:
     - **Schedule 1** while the heated areas are occupied.
-    - **Schedule 2** when the heated areas are empty. With **Follow occupancy** off or no heated areas, Schedule 1 is used whenever someone is home.
-    - Schedules 1 and 2 wait for your own Boost or Timer override to end. The routine's Timers follow a group change.
+    - **Schedule 2** when the heated areas are empty.
+    - With **Follow occupancy** off or no heated areas, **Schedule 1** whenever someone is home.
+    - A switch waits for your own **Boost** or **Timer** override to end.
 
-    **Geofencing**, with **Away schedule** on, uses **Schedule 3** when nobody is home, ending any running override as it switches. **Pre-heat** switches to the pre-heat group early when someone is close and heading home.
+    **Geofencing** follows whether anyone is home:
+    - **Away schedule** uses **Schedule 3** while nobody is home, ending any running override as it switches.
+    - **Pre-heat** switches to the pre-heat group early when someone is close and heading home.
 
-    **Routine** moves the start of the morning heating to match the next waking alarm:
+    **Routine** follows your day rather than the clock:
     - An **early alarm** starts today's schedule early, at its own temperatures.
     - A **late alarm** keeps the night temperature until shortly before it.
-    - Someone **up early**, reported by the awake sensors, starts it straight away, alarm or not.
+    - **Getting up**, reported by the awake sensors, starts the morning straight away, alarm or not.
+    - At **bedtime**, when the awake sensors report everyone asleep, the evening setback starts early.
 
-    At **bedtime**, when the awake sensors report everyone asleep, the evening setback starts early.
-
-    Each stage is a Timer override, worked out from the active group's schedule, so it moves with a group change.
+    Each stage is a **Timer** override worked out from the active group's schedule, so it follows a group change.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_smart_schedule.yaml
   homeassistant:
