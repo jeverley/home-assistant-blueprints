@@ -781,9 +781,12 @@ actions:
           - variables:
               routine_timer_running: false
               override_running: false
+  # Each branch below picks the group, and it is only written when it
+  # differs, saving a Zigbee write on most runs.
   - alias: Note the schedule group before switching
     variables:
       group_before: "{{ states(schedule_group) }}"
+      group_target: ""
   - choose:
       - alias: Nobody home but someone heading home, pre-heat
         conditions:
@@ -797,11 +800,8 @@ actions:
           - variables:
               state: "{{ dict(state, arrival=arrival if arrival > 0 else now().timestamp() | int) }}"
           - *save_state
-          - action: select.select_option
-            target:
-              entity_id: "{{ schedule_group }}"
-            data:
-              option: !input geofencing_group
+          - variables:
+              group_target: !input geofencing_group
       - alias: Nobody home, end override and set Schedule 3
         conditions:
           - alias: Nobody home
@@ -821,11 +821,8 @@ actions:
                 action: button.press
                 target:
                   entity_id: "{{ override_exit }}"
-          - action: select.select_option
-            target:
-              entity_id: "{{ schedule_group }}"
-            data:
-              option: Schedule 3
+          - variables:
+              group_target: Schedule 3
       # After the nobody-home branches, so Schedule 1 only applies to an empty
       # house when follow occupancy and the away schedule are off.
       - alias: Heated areas occupied (or follow occupancy off), Schedule 1
@@ -844,11 +841,8 @@ actions:
             condition: template
             value_template: "{{ not override_running or routine_timer_running }}"
         sequence:
-          - action: select.select_option
-            target:
-              entity_id: "{{ schedule_group }}"
-            data:
-              option: Schedule 1
+          - variables:
+              group_target: Schedule 1
       - alias: Heated areas clear, Schedule 2
         conditions:
           - condition: template
@@ -863,11 +857,18 @@ actions:
             condition: template
             value_template: "{{ not override_running or routine_timer_running }}"
         sequence:
-          - action: select.select_option
-            target:
-              entity_id: "{{ schedule_group }}"
-            data:
-              option: Schedule 2
+          - variables:
+              group_target: Schedule 2
+  - alias: Switch the schedule group
+    if:
+      - condition: template
+        value_template: "{{ group_target != '' and group_target != group_before }}"
+    then:
+      - action: select.select_option
+        target:
+          entity_id: "{{ schedule_group }}"
+        data:
+          option: "{{ group_target }}"
   - variables:
       # Each group has its own periods. A group change made by this run plans
       # the routine again when it matters: a plan is running, or a morning
@@ -891,17 +892,30 @@ actions:
              or (run == 'bedtime' and bedtime_enabled)
              or (plan_active and run == 'override-ended' and is_state(override_state, 'Idle')) }}
     then:
-      # Fetch today's schedule for the active group. An override-ended run only
-      # needs one if the selects are not showing today, or the group changed
-      # since the last fetch (by this run or by hand). The start time is recorded
-      # first, so its changes are not taken for an edit. If the fetch fails the
-      # run stops rather than act on a schedule it could not read.
+      # The selects show the last fetched schedule. It is out of date when no
+      # fetch is recorded, they show another day, the group changed after the
+      # fetch, a schedule entity changed after it (an edit, a restart or the
+      # thermostat rejoining), or a period cannot be read.
+      - variables:
+          schedule_stale: >-
+            {% set f = state.fetch | default(0) | int %}
+            {% set f = f if f <= now().timestamp() else 0 %}
+            {% set ns = namespace(stale=f == 0 or states(operating_day) != now().strftime('%A')
+                                  or states[schedule_group].last_changed.timestamp() > f) %}
+            {% for s in expand([operating_day] + period_entities) %}
+              {% if s.state in ['unavailable', 'unknown'] or s.last_changed.timestamp() > f + fetch_grace %}
+                {% set ns.stale = true %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.stale }}
+      # Fetch today's schedule for the active group when the selects are out of
+      # date. The start time is recorded first, so its changes are not taken
+      # for an edit. If the fetch fails the run stops rather than act on a
+      # schedule it could not read.
       - alias: Fetch today's schedule
         if:
           - condition: template
-            value_template: >-
-              {{ run != 'override-ended' or states(operating_day) != now().strftime('%A')
-                 or states[schedule_group].last_changed.timestamp() > state.fetch | default(0) }}
+            value_template: "{{ schedule_stale }}"
         then:
           - variables:
               state: "{{ dict(state, fetch=now().timestamp() | int) }}"
