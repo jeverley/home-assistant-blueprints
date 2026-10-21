@@ -359,14 +359,12 @@ variables:
   burst_span: 30
   min_stage: 60
   exit_window: 60
-  # Occupancy sensors in any area. Someone in any area, even the garden, is
-  # home.
+  # Occupancy sensors in any area, including those whose device is in the
+  # area. Someone in any area, even the garden, is home. Keep this in step
+  # with the Every area empty trigger.
   area_sensors: >-
-    {% set ns = namespace(e=[]) %}
-    {% for s in states.binary_sensor if s.attributes.device_class == 'occupancy' and area_id(s.entity_id) %}
-      {% set ns.e = ns.e + [s.entity_id] %}
-    {% endfor %}
-    {{ ns.e }}
+    {{ areas() | map('area_entities') | flatten | select('contains', 'binary_sensor.')
+       | select('is_state_attr', 'device_class', 'occupancy') | unique | list }}
   # Nobody is home: the home zone is empty, and no area is occupied or has
   # been for the empty delay. The zone is checked first, so the areas are only
   # looked at when it is empty. A zone not yet known (at startup) counts as
@@ -401,17 +399,15 @@ triggers:
     options:
       behavior: all
       for: !input empty_delay
-  # No occupancy sensor in any area is on. Keep this in step with the
-  # area_sensors variable.
+  # No occupancy sensor in any area is on. It only reads the areas' sensors,
+  # so other binary sensors changing do not re-render it. Keep this in step
+  # with the area_sensors variable.
   - alias: Every area empty
     trigger: template
     value_template: >-
-      {% set ns = namespace(on=false) %}
-      {% for s in states.binary_sensor
-           if s.state == 'on' and s.attributes.device_class == 'occupancy' and area_id(s.entity_id) %}
-        {% set ns.on = true %}
-      {% endfor %}
-      {{ not ns.on }}
+      {{ areas() | map('area_entities') | flatten | select('contains', 'binary_sensor.')
+         | select('is_state_attr', 'device_class', 'occupancy') | select('is_state', 'on')
+         | list | count == 0 }}
     for: !input empty_delay
   - alias: Home zone occupied
     trigger: zone.occupancy_detected
