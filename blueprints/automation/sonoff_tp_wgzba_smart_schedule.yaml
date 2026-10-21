@@ -407,7 +407,7 @@ triggers:
     value_template: >-
       {{ areas() | map('area_entities') | flatten | select('contains', 'binary_sensor.')
          | select('is_state_attr', 'device_class', 'occupancy') | select('is_state', 'on')
-         | list | count == 0 }}
+         | first is not defined }}
     for: !input empty_delay
   - alias: Home zone occupied
     trigger: zone.occupancy_detected
@@ -455,15 +455,15 @@ triggers:
   - alias: Someone is up
     trigger: template
     id: getting-up
-    value_template: "{{ awake_sensors | select('is_state', 'on') | list | count > 0 }}"
+    value_template: "{{ awake_sensors | select('is_state', 'on') | first is defined }}"
     for: !input getting_up_delay
   # Every awake sensor off, held for the bedtime delay.
   - alias: Everyone asleep
     trigger: template
     id: bedtime
     value_template: >-
-      {{ awake_sensors | count > 0
-         and awake_sensors | select('is_state', 'off') | list | count == awake_sensors | count }}
+      {{ awake_sensors | first is defined
+         and awake_sensors | reject('is_state', 'off') | first is not defined }}
     for: !input bedtime_delay
   # Any change to Idle. Whether a next stage is due is worked out from the plan
   # in the State helper, so this run does not need to know what changed.
@@ -507,17 +507,10 @@ triggers:
       {% set raw = states(state_helper) %}
       {% set f = (raw | from_json(default={})).fetch | default(0) | int if raw is match('^\\{') else 0 %}
       {% set f = f if f <= now().timestamp() else 0 %}
-      {% set ns = namespace(n=0, lo=0, hi=0) %}
-      {% for s in watched %}
-        {% set t = s.last_changed.timestamp() %}
-        {% if t > now().timestamp() - 300 and t > f + 60 %}
-          {% set ns.lo = t if ns.n == 0 else min(ns.lo, t) %}
-          {% set ns.hi = t if ns.n == 0 else max(ns.hi, t) %}
-          {% set ns.n = ns.n + 1 %}
-        {% endif %}
-      {% endfor %}
-      {% set burst = ns.n >= (watched | count) / 2 and ns.hi - ns.lo <= 30 %}
-      {{ not (ns.n > 0 and not burst) }}
+      {% set cut = [now().timestamp() - 300, f + 60] | max %}
+      {% set ts = watched | map(attribute='last_changed') | map('as_timestamp') | select('gt', cut) | list %}
+      {{ ts | first is not defined
+         or (ts | count >= (watched | count) / 2 and ts | max - ts | min <= 30) }}
   # Someone is heading home and close, from Proximity's per-person distance
   # and direction sensors for the home zone, or an arriving sensor. Keep this
   # in step with the heading_home variable.
@@ -528,7 +521,7 @@ triggers:
       {% set ns = namespace(on=false, ents=[]) %}
       {% if away_enabled %}
         {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
-        {% if proximity_devices | count > 0 %}
+        {% if proximity_devices %}
           {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
         {% else %}
           {% set zone_name = state_attr(home_zone, 'friendly_name') %}
@@ -579,7 +572,7 @@ actions:
         error: true
   - variables:
       # Follow occupancy is on and has at least one heated area to follow.
-      following_occupancy: "{{ follow_occupancy and heated_areas | count > 0 }}"
+      following_occupancy: "{{ follow_occupancy and heated_areas | first is defined }}"
       # The trigger id. A run without one (Run actions in the UI) is a catch-up.
       run: >-
         {{ trigger.id if trigger is defined and trigger.id is defined and trigger.id else 'catch-up' }}
@@ -628,17 +621,10 @@ actions:
         {% set f = state.fetch | default(0) | int %}
         {% set f = f if f <= now().timestamp() else 0 %}
         {% set watched = expand([operating_day] + period_entities) %}
-        {% set ns = namespace(n=0, lo=0, hi=0) %}
-        {% for s in watched %}
-          {% set t = s.last_changed.timestamp() %}
-          {% if t > now().timestamp() - editing_window and t > f + fetch_grace %}
-            {% set ns.lo = t if ns.n == 0 else min(ns.lo, t) %}
-            {% set ns.hi = t if ns.n == 0 else max(ns.hi, t) %}
-            {% set ns.n = ns.n + 1 %}
-          {% endif %}
-        {% endfor %}
-        {% set burst = ns.n >= (watched | count) / 2 and ns.hi - ns.lo <= burst_span %}
-        {{ ns.n > 0 and not burst }}
+        {% set cut = [now().timestamp() - editing_window, f + fetch_grace] | max %}
+        {% set ts = watched | map(attribute='last_changed') | map('as_timestamp') | select('gt', cut) | list %}
+        {{ ts | first is defined
+           and not (ts | count >= (watched | count) / 2 and ts | max - ts | min <= burst_span) }}
       # Someone is heading home and close. Keep this in step with the Someone
       # heading home trigger. Only used while the home zone is empty, so it is
       # skipped otherwise.
@@ -646,7 +632,7 @@ actions:
         {% set ns = namespace(on=false, ents=[]) %}
         {% if away_enabled and states(home_zone) | int(0) == 0 %}
           {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
-          {% if proximity_devices | count > 0 %}
+          {% if proximity_devices %}
             {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
           {% else %}
             {% set zone_name = state_attr(home_zone, 'friendly_name') %}
@@ -873,7 +859,7 @@ actions:
       morning_ahead: >-
         {% set a = states(alarm_sensor) | as_datetime(none) %}
         {{ (a is not none and (a | as_local).date() == now().date() and now() < a)
-           or awake_sensors | select('is_state', 'on') | list | count > 0 }}
+           or awake_sensors | select('is_state', 'on') | first is defined }}
       catch_up: "{{ run == 'catch-up' or (group_changed and (plan_active or morning_ahead)) }}"
   # Runs that can start, continue or end a routine plan it. An override-ended
   # run carries on only while still Idle: replacing our own Timer passes
@@ -896,14 +882,12 @@ actions:
           schedule_stale: >-
             {% set f = state.fetch | default(0) | int %}
             {% set f = f if f <= now().timestamp() else 0 %}
-            {% set ns = namespace(stale=f == 0 or states(operating_day) != now().strftime('%A')
-                                  or states[schedule_group].last_changed.timestamp() > f) %}
-            {% for s in expand([operating_day] + period_entities) %}
-              {% if s.state in ['unavailable', 'unknown'] or s.last_changed.timestamp() > f + fetch_grace %}
-                {% set ns.stale = true %}
-              {% endif %}
-            {% endfor %}
-            {{ ns.stale }}
+            {% set ents = expand([operating_day] + period_entities) %}
+            {{ f == 0 or states(operating_day) != now().strftime('%A')
+               or states[schedule_group].last_changed.timestamp() > f
+               or ents | selectattr('state', 'in', ['unavailable', 'unknown']) | first is defined
+               or ents | map(attribute='last_changed') | map('as_timestamp')
+                  | select('gt', f + fetch_grace) | first is defined }}
       # Fetch today's schedule for the active group when the selects are out of
       # date. The start time is recorded first, so its changes are not taken
       # for an edit. If the fetch fails the run stops rather than act on a
@@ -960,7 +944,7 @@ actions:
           someone_up: >-
             {{ expand(awake_sensors) | selectattr('state', 'eq', 'on')
                | selectattr('last_changed', 'le', now() - timedelta(seconds=delay_secs['getting_up']))
-               | list | count > 0 }}
+               | first is defined }}
           # Someone is up, and getting up is turned on. Its trigger only fires when
           # an awake sensor turns on, so catch-up and late start runs also count
           # one that is already on.
@@ -970,9 +954,9 @@ actions:
           # for at least the bedtime delay).
           everyone_asleep: >-
             {% set sensors = expand(awake_sensors) %}
-            {{ sensors | count > 0
-               and sensors | selectattr('state', 'eq', 'off') | list | count == sensors | count
-               and sensors | selectattr('last_changed', 'gt', now() - timedelta(seconds=delay_secs['bedtime'])) | list | count == 0 }}
+            {{ sensors | first is defined
+               and sensors | rejectattr('state', 'eq', 'off') | first is not defined
+               and sensors | selectattr('last_changed', 'gt', now() - timedelta(seconds=delay_secs['bedtime'])) | first is not defined }}
           # The evening setback, while in the period just before it: the last
           # period with 3 or more periods, or period 1 again at midnight with 2.
           # Blank time otherwise, so bedtime never reaches into the next day.
@@ -1020,7 +1004,7 @@ actions:
       - alias: With a readable schedule
         if:
           - condition: template
-            value_template: "{{ periods | count > 0 }}"
+            value_template: "{{ periods | first is defined }}"
         then:
           - alias: Someone got up during bedtime, end it
             if:
