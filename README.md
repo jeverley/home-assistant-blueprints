@@ -108,7 +108,7 @@ A 03:00 trip to the bathroom then does not start the morning, and a quiet aftern
 
 ### Geofencing
 
-Geofencing uses the built-in **Proximity** integration. Add it under **Settings** > **Devices & services** > **Add integration** > **Proximity**: track the home zone, add the household's people (they need a location from GPS, such as the companion app), ignore zones like Work if you want, and set a tolerance of 50 to 100 m to steady the direction of travel.
+Geofencing uses the built-in **Proximity** integration. Add it under **Settings** > **Devices & services** > **Add integration** > **Proximity**: track the home zone, add the household's people (they need a location from GPS, such as the companion app), ignore zones like Work if you want, and set the **tolerance** to 100 m, its maximum. Proximity compares each location update with the previous one, so a small tolerance turns GPS wobble while someone stays put (often 10 to 40 m) into a stream of `towards` readings, and each one starts pre-heating. A drive home moves hundreds of metres between updates, so it is still picked up straight away. Walking may read as `stationary` if the phone reports location very often.
 
 The blueprint finds that Proximity entry by its name, which defaults to the home zone's name, and reads each person's distance and direction of travel sensors. Someone counts as heading home when they are within the geofencing distance and moving `towards` home. If the entry has been renamed, or the zone has, pick it under **Proximity devices**. Distances are converted from Proximity's unit (metres, kilometres or miles).
 
