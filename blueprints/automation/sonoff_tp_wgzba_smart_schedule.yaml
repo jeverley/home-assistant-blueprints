@@ -419,15 +419,15 @@ triggers:
     options:
       for: "00:00:00"
       zone: !input home_zone
-  # The thermostat is back after being unavailable, so catch up on anything
-  # a failed run left undone.
-  - alias: Schedule group came back
+  # The thermostat is back after being unavailable (at startup or after
+  # dropping off), so catch up on anything runs skipped or left undone.
+  - alias: Thermostat came back
     trigger: template
     id: catch-up
     value_template: >-
       {% set e = device_entities(thermostat_device)
            | select('match', '^select\\..*_schedule_group$') | first | default('') %}
-      {{ e != '' and states(e) not in ['unavailable', 'unknown'] }}
+      {{ e != '' and has_value(e) }}
   - alias: Early start window opened
     trigger: template
     id: early-alarm
@@ -570,6 +570,15 @@ actions:
           Could not find every schedule and override entity on the thermostat. Check they
           are enabled and their entity IDs still end with their default names.
         error: true
+  # The thermostat is not ready yet (at startup or after dropping off), so
+  # nothing is written, fetched or decided. Checked when the run starts, so
+  # queued runs and Run actions are covered too.
+  - alias: Stop if the thermostat is not available
+    if:
+      - condition: template
+        value_template: "{{ not has_value(schedule_group) }}"
+    then:
+      - stop: The thermostat is not available yet. A catch-up runs once it is back.
   - variables:
       # Follow occupancy is on and has at least one heated area to follow.
       following_occupancy: "{{ follow_occupancy and heated_areas | first is defined }}"
