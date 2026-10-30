@@ -656,20 +656,24 @@ actions:
         {% for k, v in stored.items() if k != 'routine' %}{% set ns.out = dict(ns.out, **{k: v}) %}{% endfor %}
         {{ ns.out }}
       # The routine plan records intent, not temperatures: its kind (morning
-      # or bedtime) and start (when the morning starts, or bedtime began). Its
-      # stage is worked out from today's periods on each run, so it follows a
-      # schedule group change. timer_until, timer_temp and timer_applied
-      # describe the Timer we last applied: when it should end and its
-      # temperature (to tell whether the stage has changed), and when we
-      # pressed Apply (to tell ours from someone else's). timer_exited is when we
-      # last ended our own Timer, so that Exit press is not taken for someone
-      # cancelling. A cancelled plan is kept, marked, so it does not start
-      # again that day.
+      # or bedtime), start (when the morning heating starts, or bedtime began)
+      # and wake (when people get up: the alarm, or the start if someone got up
+      # first). Its stage is worked out from today's periods on each run, so it
+      # follows a schedule group change. until, temp and applied describe the
+      # Timer we last applied: when it should end and its temperature (to tell
+      # whether the stage has changed), and when we pressed Apply (to tell ours
+      # from someone else's). exited is when we last ended our own Timer, so
+      # that Exit press is not taken for someone cancelling. A cancelled plan is
+      # kept, marked, so it does not start again that day. Plans saved before
+      # the keys were shortened are read too.
       plan: >-
         {% set r = stored.routine | default({}) %}
-        {{ {'kind': r.kind | default(''), 'start': r.start | default(0) | int,
-            'timer_until': r.timer_until | default(0) | int, 'timer_temp': r.timer_temp | default(none),
-            'timer_applied': r.timer_applied | default(0) | int, 'timer_exited': r.timer_exited | default(0) | int,
+        {% set start = r.start | default(0) | int %}
+        {{ {'kind': r.kind | default(''), 'start': start, 'wake': r.wake | default(start) | int,
+            'until': r.until | default(r.timer_until | default(0)) | int,
+            'temp': r.temp | default(r.timer_temp | default(none)),
+            'applied': r.applied | default(r.timer_applied | default(0)) | int,
+            'exited': r.exited | default(r.timer_exited | default(0)) | int,
             'cancelled': r.cancelled | default(false)} }}
       # The schedule is being edited: operating day or period entities changed
       # in the last 5 minutes and after our last fetch (allowing 60 s for its
@@ -750,17 +754,17 @@ actions:
     if:
       - condition: template
         value_template: >-
-          {{ plan.kind != '' and not plan.cancelled and plan.timer_applied > 0
-             and apply_pressed_at == plan.timer_applied and exit_pressed_at > plan.timer_applied
-             and not (plan.timer_exited > 0 and 0 <= exit_pressed_at - plan.timer_exited <= exit_window) }}
+          {{ plan.kind != '' and not plan.cancelled and plan.applied > 0
+             and apply_pressed_at == plan.applied and exit_pressed_at > plan.applied
+             and not (plan.exited > 0 and 0 <= exit_pressed_at - plan.exited <= exit_window) }}
     then:
       - variables:
           plan: "{{ dict(plan, cancelled=true) }}"
   - variables:
       # An empty plan, for clearing it.
       empty_plan: >-
-        {{ {'kind': '', 'start': 0, 'timer_until': 0, 'timer_temp': none, 'timer_applied': 0,
-            'timer_exited': 0, 'cancelled': false} }}
+        {{ {'kind': '', 'start': 0, 'wake': 0, 'until': 0, 'temp': none, 'applied': 0,
+            'exited': 0, 'cancelled': false} }}
       # The plan is for today. One from an earlier day is over.
       plan_today: "{{ plan.start > 0 and plan.start | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d') }}"
       plan_active: "{{ plan.kind != '' and not plan.cancelled and plan_today }}"
@@ -773,8 +777,8 @@ actions:
       # anyone else's press makes the running override theirs, and it is
       # left alone. Changing the target or period without applying does not.
       routine_timer_running: >-
-        {{ plan_active and is_state(override_state, 'Timer') and plan.timer_applied > 0
-           and apply_pressed_at == plan.timer_applied }}
+        {{ plan_active and is_state(override_state, 'Timer') and plan.applied > 0
+           and apply_pressed_at == plan.applied }}
   # A plan from an earlier day is over, so clear it, including yesterday's
   # cancelled marker.
   - alias: Forget a plan from an earlier day
@@ -1077,19 +1081,22 @@ actions:
             {{ ([[l.mpd | default(0) | float(0) * (p2t - room_temp), 10] | max, 180] | min) | int
                if learn_warm_up and l.n | default(0) | int >= 2 and room_temp is not none and p2t is not none
                else lead_time | int }}
-          # Alarm minus the lead, when the alarm is today and still ahead.
-          # Otherwise blank.
-          alarm_start: >-
+          # The alarm when it is today and still ahead, and the alarm minus the
+          # lead, when that is today too. Otherwise blank.
+          alarm_time: >-
             {% set a = states(alarm_sensor) | as_datetime(none) %}
-            {% if a is none %}{{ '' }}{% else %}
-            {% set a = a | as_local %}
-            {% set start = a - timedelta(minutes=lead_minutes) %}
-            {{ start.isoformat() if start.date() == now().date() and now() < a else '' }}
+            {{ (a | as_local).isoformat() if a is not none and (a | as_local).date() == now().date() and now() < a else '' }}
+          alarm_start: >-
+            {% if alarm_time == '' %}{{ '' }}{% else %}
+            {% set start = (alarm_time | as_datetime) - timedelta(minutes=lead_minutes) %}
+            {{ start.isoformat() if start.date() == now().date() else '' }}
             {% endif %}
-          # The routine start: now if someone is up before the alarm start (or
-          # with no alarm), otherwise the alarm start.
-          routine_start: >-
-            {% if getting_up and (alarm_start == '' or now() < alarm_start | as_datetime) %}{{ now().isoformat() }}{% else %}{{ alarm_start }}{% endif %}
+          # The routine start and wake: now for both if someone is up before the
+          # alarm start (or with no alarm), otherwise the alarm start and the
+          # alarm.
+          routine_now: "{{ getting_up and (alarm_start == '' or now() < alarm_start | as_datetime) }}"
+          routine_start: "{{ now().isoformat() if routine_now else alarm_start }}"
+          routine_wake: "{{ now().isoformat() if routine_now else alarm_time }}"
           # An early start is due: the alarm start has been reached (early alarm
           # on) or someone is up, at least a minute before period 2.
           early_start_due: >-
@@ -1134,7 +1141,7 @@ actions:
                     value_template: "{{ not nobody_home }}"
                 sequence:
                   - variables:
-                      plan: "{{ dict(plan, start=now().timestamp() | int) }}"
+                      plan: "{{ dict(plan, start=now().timestamp() | int, wake=now().timestamp() | int) }}"
               - alias: Everyone asleep, start bedtime
                 conditions:
                   - alias: Everyone has been asleep long enough
@@ -1180,18 +1187,23 @@ actions:
                     value_template: "{{ cancelled_today != 'morning' }}"
                 sequence:
                   - variables:
-                      plan: "{{ dict(empty_plan, kind='morning', start=(routine_start | as_datetime).timestamp() | int) }}"
+                      plan: >-
+                        {{ dict(empty_plan, kind='morning', start=(routine_start | as_datetime).timestamp() | int,
+                                wake=(routine_wake | as_datetime).timestamp() | int) }}
                       plan_active: true
           - alias: Work out the routine's stage
             variables:
               # What our Timer should be now, as {temp, until}, or none when the
               # schedule should carry on. The routine's phases, in order (with 4 or
-              # more periods, D2 is period 2's usual length):
-              #   Morning starting before period 2: with 4 or more periods, period 2
-              #   for D2 from the start, then period 3 until its usual start. With 2
-              #   or 3, period 2 until its usual start.
-              #   Morning starting after period 2: period 1 until the start. Then,
-              #   with 4 or more periods, period 2 for D2, never past period 4.
+              # more periods, D2 is period 2's usual length). The heating starts
+              # at the start, and period 2's length counts from the wake, so the
+              # room is warm when people get up and stays warm as long as usual:
+              #   Waking before period 2: with 4 or more periods, period 2 until
+              #   the wake plus D2, then period 3 until its usual start. With 2 or
+              #   3, period 2 until its usual start.
+              #   Waking after period 2: period 1 until the start. Then, with 4
+              #   or more periods, period 2 until the wake plus D2, never past
+              #   period 4.
               #   Bedtime: the setback until its usual start.
               # The stage is the first phase with at least a minute left, the
               # shortest override period. A Timer rounded to whole minutes can end a
@@ -1201,14 +1213,15 @@ actions:
                 {% set ns = namespace(ph=[]) %}
                 {% if plan_active and plan.kind == 'morning' and periods | count >= 2 %}
                   {% set s = plan.start %}
+                  {% set w = plan.wake %}
                   {% set p2 = today_at(periods[1].time).timestamp() %}
-                  {% if s <= p2 and morning_shifts %}
+                  {% if w <= p2 and morning_shifts %}
                     {% set p3 = today_at(periods[2].time).timestamp() %}
-                    {% set ns.ph = [{'temp': periods[1].temp, 'until': s + (p3 - p2)}, {'temp': periods[2].temp, 'until': p3}] %}
-                  {% elif s <= p2 %}
+                    {% set ns.ph = [{'temp': periods[1].temp, 'until': w + (p3 - p2)}, {'temp': periods[2].temp, 'until': p3}] %}
+                  {% elif w <= p2 %}
                     {% set ns.ph = [{'temp': periods[1].temp, 'until': p2}] %}
                   {% elif morning_shifts %}
-                    {% set e = [s + (today_at(periods[2].time).timestamp() - p2), today_at(periods[3].time).timestamp()] | min %}
+                    {% set e = [w + (today_at(periods[2].time).timestamp() - p2), today_at(periods[3].time).timestamp()] | min %}
                     {% set ns.ph = [{'temp': periods[0].temp, 'until': s}, {'temp': periods[1].temp, 'until': e}] %}
                   {% else %}
                     {% set ns.ph = [{'temp': periods[0].temp, 'until': s}] %}
@@ -1251,8 +1264,8 @@ actions:
                   - condition: template
                     value_template: >-
                       {{ stage is not none and on_schedule and (is_state(override_state, 'Idle')
-                         or (routine_timer_running and ((stage.until - plan.timer_until) | abs > 90
-                                       or (plan.timer_temp | float(0) - stage.temp) | abs > 0.05))) }}
+                         or (routine_timer_running and ((stage.until - plan.until) | abs > 90
+                                       or (plan.temp | float(0) - stage.temp) | abs > 0.05))) }}
                 sequence:
                   - variables:
                       minutes: "{{ [((stage.until - now().timestamp()) / 60) | round(0) | int, 1439] | min }}"
@@ -1265,7 +1278,7 @@ actions:
                         value_template: "{{ routine_timer_running }}"
                     then:
                       - variables:
-                          plan: "{{ dict(plan, timer_exited=now().timestamp() | int) }}"
+                          plan: "{{ dict(plan, exited=now().timestamp() | int) }}"
                       - *save_state
                       - action: button.press
                         target:
@@ -1307,8 +1320,8 @@ actions:
                       # thermostat reports late is still the routine's. Saved at the end.
                       - variables:
                           plan: >-
-                            {{ dict(plan, timer_until=timer_until, timer_temp=stage.temp,
-                                    timer_applied=as_timestamp(states(override_apply), 0) | int) }}
+                            {{ dict(plan, until=timer_until, temp=stage.temp,
+                                    applied=as_timestamp(states(override_apply), 0) | int) }}
                       # The morning's warm-up starts now (period 2's temperature,
                       # within 2 minutes of the start), so measure it if the room
                       # has at least 1 degree to rise. Saved at the end.
