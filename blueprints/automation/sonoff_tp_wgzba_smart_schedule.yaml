@@ -211,7 +211,10 @@ blueprint:
                 - domain: sensor
         lead_time:
           name: Lead time
-          description: The time before the alarm when the morning heating starts.
+          description: |
+            The time before the alarm when the morning heating starts.
+
+            With **Learn warm-up time** on, used until two mornings have been measured.
           default: 30
           selector:
             number:
@@ -220,6 +223,15 @@ blueprint:
               step: 5
               unit_of_measurement: min
               mode: box
+        learn_warm_up:
+          name: Learn warm-up time
+          description: |
+            Learns how long the room takes to warm up from the routine's own morning starts, and starts the morning heating that long before the alarm, allowing for how cold the room is.
+
+            The learned time is kept between 10 and 180 minutes.
+          default: true
+          selector:
+            boolean: {}
         early_alarm_enabled:
           name: Early alarm
           description: Starts the morning heating early when the alarm is earlier than the schedule.
@@ -291,6 +303,7 @@ trigger_variables:
   thermostat_device: !input thermostat_device
   alarm_sensor: !input alarm_sensor
   lead_time: !input lead_time
+  learn_warm_up: !input learn_warm_up
   awake_sensors: !input awake_sensors
   state_helper: !input state_helper
   home_zone: !input home_zone
@@ -327,6 +340,14 @@ variables:
     {{ thermostat_entities | select('match', '^sensor\\..*_override_mode$') | first | default('') }}
   work_mode_state: >-
     {{ thermostat_entities | select('match', '^sensor\\..*_device_work_mode_state$') | first | default('') }}
+  # For learning the warm-up time. The hvac action sensor ends each
+  # measurement, so it is required while learning is on.
+  climate_entity: >-
+    {{ thermostat_entities | select('match', '^climate\\.') | first | default('') }}
+  hvac_action_sensor: >-
+    {{ thermostat_entities | select('match', '^sensor\\..*_hvac_action$') | first | default('') }}
+  room_temp: >-
+    {{ state_attr(climate_entity, 'current_temperature') | float(none) if climate_entity != '' else none }}
   heated_areas: !input heated_areas
   follow_occupancy: !input follow_occupancy
   early_alarm_enabled: !input early_alarm_enabled
@@ -359,21 +380,20 @@ variables:
   burst_span: 30
   min_stage: 60
   exit_window: 60
-  # Occupancy sensors in any area, including those whose device is in the
-  # area. Someone in any area, even the garden, is home. Keep this in step
-  # with the Every area empty trigger.
-  area_sensors: >-
-    {{ areas() | map('area_entities') | flatten | select('contains', 'binary_sensor.')
-       | select('is_state_attr', 'device_class', 'occupancy') | unique | list }}
   # Nobody is home: the home zone is empty, and no area is occupied or has
   # been for the empty delay. The zone is checked first, so the areas are only
-  # looked at when it is empty. A zone not yet known (at startup) counts as
+  # looked at when it is empty. Area sensors are occupancy sensors in any
+  # area, including those whose device is in the area, so someone in any
+  # area, even the garden, is home. Keep them in step with the Every area
+  # empty trigger. A zone not yet known (at startup) counts as
   # someone home. An unavailable area sensor counts as empty, so a dead
   # sensor cannot keep the house occupied.
   nobody_home: >-
     {% set z = states(home_zone) %}
     {% if z in ['unknown', 'unavailable'] or z | int(0) > 0 %}{{ false }}{% else %}
     {% set ns = namespace(ok=true) %}
+    {% set area_sensors = areas() | map('area_entities') | flatten | select('contains', 'binary_sensor.')
+         | select('is_state_attr', 'device_class', 'occupancy') | unique | list %}
     {% for s in expand(area_sensors) %}
       {% if s.state == 'on' or (s.state == 'off' and (now() - s.last_changed).total_seconds() < delay_secs['empty']) %}
         {% set ns.ok = false %}
@@ -401,7 +421,7 @@ triggers:
       for: !input empty_delay
   # No occupancy sensor in any area is on. It only reads the areas' sensors,
   # so other binary sensors changing do not re-render it. Keep this in step
-  # with the area_sensors variable.
+  # with the nobody_home variable.
   - alias: Every area empty
     trigger: template
     value_template: >-
@@ -428,12 +448,25 @@ triggers:
       {% set e = device_entities(thermostat_device)
            | select('match', '^select\\..*_schedule_group$') | first | default('') %}
       {{ e != '' and has_value(e) }}
+  # The lead is the learned warm-up time once two mornings have been measured,
+  # otherwise Lead time. Keep this in step with the lead_minutes variable and
+  # the Late start hold due trigger.
   - alias: Early start window opened
     trigger: template
     id: early-alarm
     value_template: >-
       {% set a = states(alarm_sensor) | as_datetime(none) %}
-      {{ a is not none and a - timedelta(minutes=lead_time | int) <= now() < a }}
+      {% set ents = device_entities(thermostat_device) %}
+      {% set c = ents | select('match', '^climate\\.') | first | default('') %}
+      {% set t2 = ents | select('match', '^number\\..*_schedule_period_2_temp$') | first | default('') %}
+      {% set raw = states(state_helper) %}
+      {% set l = (raw | from_json(default={})).learn | default({}) if raw is match('^\\{') else {} %}
+      {% set room = state_attr(c, 'current_temperature') | float(none) if c != '' else none %}
+      {% set p2t = states(t2) | float(none) if t2 != '' else none %}
+      {% set lead = ([[l.mpd | default(0) | float(0) * (p2t - room), 10] | max, 180] | min) | int
+           if learn_warm_up and l.n | default(0) | int >= 2 and room is not none and p2t is not none
+           else lead_time | int %}
+      {{ a is not none and a - timedelta(minutes=lead) <= now() < a }}
   # Reads the period 2 time from the last fetch, so it can fire just before
   # period 2 starts when the alarm is later than usual. It is only true in the
   # minute before period 2, so it fires again if a fetch moves period 2 later.
@@ -442,11 +475,20 @@ triggers:
     id: late-alarm
     value_template: >-
       {% set a = states(alarm_sensor) | as_datetime(none) %}
-      {% set p = device_entities(thermostat_device)
-           | select('match', '^select\\..*_schedule_period_2_time$') | first | default('') %}
+      {% set ents = device_entities(thermostat_device) %}
+      {% set c = ents | select('match', '^climate\\.') | first | default('') %}
+      {% set t2 = ents | select('match', '^number\\..*_schedule_period_2_temp$') | first | default('') %}
+      {% set raw = states(state_helper) %}
+      {% set l = (raw | from_json(default={})).learn | default({}) if raw is match('^\\{') else {} %}
+      {% set room = state_attr(c, 'current_temperature') | float(none) if c != '' else none %}
+      {% set p2t = states(t2) | float(none) if t2 != '' else none %}
+      {% set lead = ([[l.mpd | default(0) | float(0) * (p2t - room), 10] | max, 180] | min) | int
+           if learn_warm_up and l.n | default(0) | int >= 2 and room is not none and p2t is not none
+           else lead_time | int %}
+      {% set p = ents | select('match', '^select\\..*_schedule_period_2_time$') | first | default('') %}
       {% set s = states(p) if p != '' else '' %}
       {% if a is none or s is not match('^[0-9]{2}:[0-9]{2}') %}{{ false }}{% else %}
-      {% set start = (a | as_local) - timedelta(minutes=lead_time | int) %}
+      {% set start = (a | as_local) - timedelta(minutes=lead) %}
       {% set p2 = today_at(s[:5]) %}
       {{ start.date() == now().date() and p2 < start
          and p2 - timedelta(minutes=1) <= now() < p2 }}
@@ -474,6 +516,18 @@ triggers:
       {% set e = device_entities(thermostat_device)
            | select('match', '^sensor\\..*_override_mode$') | first | default('') %}
       {{ e != '' and is_state(e, 'Idle') }}
+  # The thermostat went idle after a warm-up the routine is measuring, so the
+  # room has reached its target (or the target dropped). Only true while a
+  # measurement is pending, so its everyday top-ups do not start runs.
+  - alias: Warmed up
+    trigger: template
+    id: warmed
+    value_template: >-
+      {% set h = device_entities(thermostat_device)
+           | select('match', '^sensor\\..*_hvac_action$') | first | default('') %}
+      {% set raw = states(state_helper) %}
+      {% set m = ((raw | from_json(default={})).learn | default({})).m | default([]) if raw is match('^\\{') else [] %}
+      {{ m | count == 3 and h != '' and is_state(h, 'idle') and states[h].last_changed.timestamp() > m[0] }}
   # The thermostat is back on its schedule after a hand adjustment (at the
   # next period) or manual mode, so the routine picks up where it left off.
   - alias: Back on schedule
@@ -563,12 +617,14 @@ actions:
         value_template: >-
           {% set ents = [schedule_group, operating_day, fetch_button, override_mode,
                          override_target, override_period, override_apply,
-                         override_exit, override_state, work_mode_state] %}
+                         override_exit, override_state, work_mode_state]
+                        + ([hvac_action_sensor] if learn_warm_up else []) %}
           {{ '' in ents or expand(ents) | count < ents | count }}
     then:
       - stop: >-
-          Could not find every schedule and override entity on the thermostat. Check they
-          are enabled and their entity IDs still end with their default names.
+          Could not find every schedule and override entity on the thermostat (and its
+          HVAC action sensor, while learning the warm-up time). Check they are enabled
+          and their entity IDs still end with their default names.
         error: true
   # The thermostat is not ready yet (at startup or after dropping off), so
   # nothing is written, fetched or decided. Checked when the run starts, so
@@ -604,20 +660,24 @@ actions:
         {% for k, v in stored.items() if k != 'routine' %}{% set ns.out = dict(ns.out, **{k: v}) %}{% endfor %}
         {{ ns.out }}
       # The routine plan records intent, not temperatures: its kind (morning
-      # or bedtime) and start (when the morning starts, or bedtime began). Its
-      # stage is worked out from today's periods on each run, so it follows a
-      # schedule group change. timer_until, timer_temp and timer_applied
-      # describe the Timer we last applied: when it should end and its
-      # temperature (to tell whether the stage has changed), and when we
-      # pressed Apply (to tell ours from someone else's). timer_exited is when we
-      # last ended our own Timer, so that Exit press is not taken for someone
-      # cancelling. A cancelled plan is kept, marked, so it does not start
-      # again that day.
+      # or bedtime), start (when the morning heating starts, or bedtime began)
+      # and wake (when people get up: the alarm, or the start if someone got up
+      # first). Its stage is worked out from today's periods on each run, so it
+      # follows a schedule group change. until, temp and applied describe the
+      # Timer we last applied: when it should end and its temperature (to tell
+      # whether the stage has changed), and when we pressed Apply (to tell ours
+      # from someone else's). exited is when we last ended our own Timer, so
+      # that Exit press is not taken for someone cancelling. A cancelled plan is
+      # kept, marked, so it does not start again that day. Plans saved before
+      # the keys were shortened are read too.
       plan: >-
         {% set r = stored.routine | default({}) %}
-        {{ {'kind': r.kind | default(''), 'start': r.start | default(0) | int,
-            'timer_until': r.timer_until | default(0) | int, 'timer_temp': r.timer_temp | default(none),
-            'timer_applied': r.timer_applied | default(0) | int, 'timer_exited': r.timer_exited | default(0) | int,
+        {% set start = r.start | default(0) | int %}
+        {{ {'kind': r.kind | default(''), 'start': start, 'wake': r.wake | default(start) | int,
+            'until': r.until | default(r.timer_until | default(0)) | int,
+            'temp': r.temp | default(r.timer_temp | default(none)),
+            'applied': r.applied | default(r.timer_applied | default(0)) | int,
+            'exited': r.exited | default(r.timer_exited | default(0)) | int,
             'cancelled': r.cancelled | default(false)} }}
       # The schedule is being edited: operating day or period entities changed
       # in the last 5 minutes and after our last fetch (allowing 60 s for its
@@ -698,17 +758,17 @@ actions:
     if:
       - condition: template
         value_template: >-
-          {{ plan.kind != '' and not plan.cancelled and plan.timer_applied > 0
-             and apply_pressed_at == plan.timer_applied and exit_pressed_at > plan.timer_applied
-             and not (plan.timer_exited > 0 and 0 <= exit_pressed_at - plan.timer_exited <= exit_window) }}
+          {{ plan.kind != '' and not plan.cancelled and plan.applied > 0
+             and apply_pressed_at == plan.applied and exit_pressed_at > plan.applied
+             and not (plan.exited > 0 and 0 <= exit_pressed_at - plan.exited <= exit_window) }}
     then:
       - variables:
           plan: "{{ dict(plan, cancelled=true) }}"
   - variables:
       # An empty plan, for clearing it.
       empty_plan: >-
-        {{ {'kind': '', 'start': 0, 'timer_until': 0, 'timer_temp': none, 'timer_applied': 0,
-            'timer_exited': 0, 'cancelled': false} }}
+        {{ {'kind': '', 'start': 0, 'wake': 0, 'until': 0, 'temp': none, 'applied': 0,
+            'exited': 0, 'cancelled': false} }}
       # The plan is for today. One from an earlier day is over.
       plan_today: "{{ plan.start > 0 and plan.start | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d') }}"
       plan_active: "{{ plan.kind != '' and not plan.cancelled and plan_today }}"
@@ -721,8 +781,8 @@ actions:
       # anyone else's press makes the running override theirs, and it is
       # left alone. Changing the target or period without applying does not.
       routine_timer_running: >-
-        {{ plan_active and is_state(override_state, 'Timer') and plan.timer_applied > 0
-           and apply_pressed_at == plan.timer_applied }}
+        {{ plan_active and is_state(override_state, 'Timer') and plan.applied > 0
+           and apply_pressed_at == plan.applied }}
   # A plan from an earlier day is over, so clear it, including yesterday's
   # cancelled marker.
   - alias: Forget a plan from an earlier day
@@ -732,6 +792,53 @@ actions:
     then:
       - variables:
           plan: "{{ empty_plan }}"
+  # A warm-up measurement (learn.m: when it started, the room temperature then
+  # and the target) ends when the thermostat goes idle (Warmed up), on the
+  # first run after that. It runs before a run defers, so a deferred Warmed up
+  # run still counts. The minutes taken per degree the room actually rose
+  # (whichever target stopped it) move the learned value 30% of the way, or
+  # set it the first time. It is dropped if the room rose less than 1 degree,
+  # took over 4 hours, or was not read within 10 minutes of the idle (the room
+  # keeps rising after the heating stops). Before the idle, it is dropped if
+  # the group changed (also when the thermostat dropped off or Home Assistant
+  # restarted), someone else takes over, the thermostat leaves its schedule or
+  # the heating stopped and started again unseen. Times are in whole seconds,
+  # like m's start.
+  - alias: Learn the warm-up time
+    if:
+      - condition: template
+        value_template: "{{ (state.learn | default({})).m | default([]) | count == 3 }}"
+    then:
+      - variables:
+          state: >-
+            {% set l = state.learn %}
+            {% set m = l.m %}
+            {% set n = l.n | default(0) | int %}
+            {% set mpd = l.mpd | default(0) | float(0) %}
+            {% set kept = {'mpd': mpd, 'n': n} if n > 0 else {} %}
+            {% set h = states[hvac_action_sensor] %}
+            {% set since = h.last_changed.timestamp() if h is not none else 0 %}
+            {% set warmed = h is not none and h.state == 'idle' and since > m[0] %}
+            {% set end = since if warmed else now().timestamp() %}
+            {% set elapsed = (end - m[0]) / 60 %}
+            {% set rose = room_temp - m[1] if room_temp is not none else 0 %}
+            {% set g = states[schedule_group].last_changed.timestamp() | int %}
+            {% set regrouped = m[0] < g <= end + 60 %}
+            {% if warmed and not regrouped %}
+              {% if rose >= 1 and elapsed <= 240 and now().timestamp() - since <= 600 %}
+                {% set obs = elapsed / rose %}
+                {% set new = obs if n == 0 else mpd + 0.3 * (obs - mpd) %}
+                {% set out = {'mpd': ([[new, 1] | max, 90] | min) | round(1), 'n': [n + 1, 9] | min} %}
+              {% else %}
+                {% set out = kept %}
+              {% endif %}
+            {% elif regrouped or ((override_running or not on_schedule) and not routine_timer_running)
+                  or elapsed > 240 or (h is not none and h.state == 'heating' and since > m[0] + 300) %}
+              {% set out = kept %}
+            {% else %}
+              {% set out = l %}
+            {% endif %}
+            {{ dict(state, learn=out) }}
   # While the schedule is being edited its selects cannot be trusted, and a
   # fetch would replace the day being edited. The run saves its state and
   # defers, and the Schedule editing finished trigger catches up.
@@ -886,14 +993,16 @@ actions:
       # The selects show the last fetched schedule. It is out of date when no
       # fetch is recorded, they show another day, the group changed after the
       # fetch, a schedule entity changed after it (an edit, a restart or the
-      # thermostat rejoining), or a period cannot be read.
+      # thermostat rejoining), or a period cannot be read. The fetch is recorded
+      # in whole seconds, so the group is too: a run that switches the group
+      # and then fetches within the same second fetched the new group.
       - variables:
           schedule_stale: >-
             {% set f = state.fetch | default(0) | int %}
             {% set f = f if f <= now().timestamp() else 0 %}
             {% set ents = expand([operating_day] + period_entities) %}
             {{ f == 0 or states(operating_day) != now().strftime('%A')
-               or states[schedule_group].last_changed.timestamp() > f
+               or states[schedule_group].last_changed.timestamp() | int > f
                or ents | selectattr('state', 'in', ['unavailable', 'unknown']) | first is defined
                or ents | map(attribute='last_changed') | map('as_timestamp')
                   | select('gt', f + fetch_grace) | first is defined }}
@@ -980,25 +1089,49 @@ actions:
             {% set ns = namespace(t=none) %}
             {% for p in periods %}{% if today_at(p.time) <= now() %}{% set ns.t = p.temp %}{% endif %}{% endfor %}
             {{ ns.t }}
-          # Alarm minus lead time, when the alarm is today and still ahead.
-          # Otherwise blank.
-          alarm_start: >-
+          # Minutes before the alarm to start: the learned minutes per degree
+          # times the rise from the room temperature now to period 2's, kept
+          # within 10 and 180, once two mornings have been measured. Otherwise
+          # Lead time. Keep this in step with the alarm triggers.
+          lead_minutes: >-
+            {% set l = state.learn | default({}) %}
+            {% set p2t = periods[1].temp if periods | count >= 2 else none %}
+            {{ ([[l.mpd | default(0) | float(0) * (p2t - room_temp), 10] | max, 180] | min) | int
+               if learn_warm_up and l.n | default(0) | int >= 2 and room_temp is not none and p2t is not none
+               else lead_time | int }}
+          # The alarm when it is today and still ahead, and the alarm minus the
+          # lead, when that is today too. Otherwise blank.
+          alarm_time: >-
             {% set a = states(alarm_sensor) | as_datetime(none) %}
-            {% if a is none %}{{ '' }}{% else %}
-            {% set a = a | as_local %}
-            {% set start = a - timedelta(minutes=lead_time | int) %}
-            {{ start.isoformat() if start.date() == now().date() and now() < a else '' }}
+            {{ (a | as_local).isoformat() if a is not none and (a | as_local).date() == now().date() and now() < a else '' }}
+          alarm_start: >-
+            {% if alarm_time == '' %}{{ '' }}{% else %}
+            {% set start = (alarm_time | as_datetime) - timedelta(minutes=lead_minutes) %}
+            {{ start.isoformat() if start.date() == now().date() else '' }}
             {% endif %}
-          # The routine start: now if someone is up before the alarm start (or
-          # with no alarm), otherwise the alarm start.
-          routine_start: >-
-            {% if getting_up and (alarm_start == '' or now() < alarm_start | as_datetime) %}{{ now().isoformat() }}{% else %}{{ alarm_start }}{% endif %}
+          # The routine start and wake: now for both if someone is up before the
+          # alarm start (or with no alarm), otherwise the alarm start and the
+          # alarm.
+          routine_now: "{{ getting_up and (alarm_start == '' or now() < alarm_start | as_datetime) }}"
+          routine_start: "{{ now().isoformat() if routine_now else alarm_start }}"
+          routine_wake: "{{ now().isoformat() if routine_now else alarm_time }}"
           # An early start is due: the alarm start has been reached (early alarm
-          # on) or someone is up, at least a minute before period 2.
+          # on) or someone is up, the start is at or before period 2, and the
+          # morning has at least a minute left (see the routine's stage below).
           early_start_due: >-
-            {{ (((run == 'early-alarm' or catch_up) and early_alarm_enabled) or getting_up)
-               and routine_start != '' and (routine_start | as_datetime) <= now()
-               and periods | count >= 2 and (today_at(periods[1].time) - now()).total_seconds() >= min_stage }}
+            {% if (((run == 'early-alarm' or catch_up) and early_alarm_enabled) or getting_up)
+                  and routine_start != '' and periods | count >= 2 %}
+              {% set s = (routine_start | as_datetime).timestamp() %}
+              {% set w = (routine_wake | as_datetime).timestamp() %}
+              {% set p2 = today_at(periods[1].time).timestamp() %}
+              {% if morning_shifts %}
+                {% set p3 = today_at(periods[2].time).timestamp() %}
+                {% set end = [[w + (p3 - p2), today_at(periods[3].time).timestamp()] | min, p3] | max %}
+              {% else %}
+                {% set end = p2 %}
+              {% endif %}
+              {{ s <= now().timestamp() and s <= p2 and end - now().timestamp() >= min_stage }}
+            {% else %}{{ false }}{% endif %}
           # A late start is due: nobody is up, period 2 is about to start (or has),
           # and the routine start is at least a minute after it.
           late_start_due: >-
@@ -1037,7 +1170,7 @@ actions:
                     value_template: "{{ not nobody_home }}"
                 sequence:
                   - variables:
-                      plan: "{{ dict(plan, start=now().timestamp() | int) }}"
+                      plan: "{{ dict(plan, start=now().timestamp() | int, wake=now().timestamp() | int) }}"
               - alias: Everyone asleep, start bedtime
                 conditions:
                   - alias: Everyone has been asleep long enough
@@ -1083,18 +1216,25 @@ actions:
                     value_template: "{{ cancelled_today != 'morning' }}"
                 sequence:
                   - variables:
-                      plan: "{{ dict(empty_plan, kind='morning', start=(routine_start | as_datetime).timestamp() | int) }}"
+                      plan: >-
+                        {{ dict(empty_plan, kind='morning', start=(routine_start | as_datetime).timestamp() | int,
+                                wake=(routine_wake | as_datetime).timestamp() | int) }}
                       plan_active: true
           - alias: Work out the routine's stage
             variables:
               # What our Timer should be now, as {temp, until}, or none when the
               # schedule should carry on. The routine's phases, in order (with 4 or
-              # more periods, D2 is period 2's usual length):
-              #   Morning starting before period 2: with 4 or more periods, period 2
-              #   for D2 from the start, then period 3 until its usual start. With 2
-              #   or 3, period 2 until its usual start.
-              #   Morning starting after period 2: period 1 until the start. Then,
-              #   with 4 or more periods, period 2 for D2, never past period 4.
+              # more periods, D2 is period 2's usual length). The start decides
+              # whether the morning is early or late. Period 2's length counts
+              # from the wake, so the room is warm when people get up and stays
+              # warm as long as usual:
+              #   Starting at or before period 2: with 4 or more periods, period
+              #   2 until the wake plus D2 (never past period 4), then period 3
+              #   until its usual start. With 2 or 3, period 2 until its usual
+              #   start.
+              #   Starting after period 2: period 1 until the start. Then, with 4
+              #   or more periods, period 2 until the wake plus D2, never past
+              #   period 4.
               #   Bedtime: the setback until its usual start.
               # The stage is the first phase with at least a minute left, the
               # shortest override period. A Timer rounded to whole minutes can end a
@@ -1104,14 +1244,16 @@ actions:
                 {% set ns = namespace(ph=[]) %}
                 {% if plan_active and plan.kind == 'morning' and periods | count >= 2 %}
                   {% set s = plan.start %}
+                  {% set w = plan.wake %}
                   {% set p2 = today_at(periods[1].time).timestamp() %}
                   {% if s <= p2 and morning_shifts %}
                     {% set p3 = today_at(periods[2].time).timestamp() %}
-                    {% set ns.ph = [{'temp': periods[1].temp, 'until': s + (p3 - p2)}, {'temp': periods[2].temp, 'until': p3}] %}
+                    {% set e = [w + (p3 - p2), today_at(periods[3].time).timestamp()] | min %}
+                    {% set ns.ph = [{'temp': periods[1].temp, 'until': e}, {'temp': periods[2].temp, 'until': p3}] %}
                   {% elif s <= p2 %}
                     {% set ns.ph = [{'temp': periods[1].temp, 'until': p2}] %}
                   {% elif morning_shifts %}
-                    {% set e = [s + (today_at(periods[2].time).timestamp() - p2), today_at(periods[3].time).timestamp()] | min %}
+                    {% set e = [w + (today_at(periods[2].time).timestamp() - p2), today_at(periods[3].time).timestamp()] | min %}
                     {% set ns.ph = [{'temp': periods[0].temp, 'until': s}, {'temp': periods[1].temp, 'until': e}] %}
                   {% else %}
                     {% set ns.ph = [{'temp': periods[0].temp, 'until': s}] %}
@@ -1154,8 +1296,8 @@ actions:
                   - condition: template
                     value_template: >-
                       {{ stage is not none and on_schedule and (is_state(override_state, 'Idle')
-                         or (routine_timer_running and ((stage.until - plan.timer_until) | abs > 90
-                                       or (plan.timer_temp | float(0) - stage.temp) | abs > 0.05))) }}
+                         or (routine_timer_running and ((stage.until - plan.until) | abs > 90
+                                       or (plan.temp | float(0) - stage.temp) | abs > 0.05))) }}
                 sequence:
                   - variables:
                       minutes: "{{ [((stage.until - now().timestamp()) / 60) | round(0) | int, 1439] | min }}"
@@ -1168,7 +1310,7 @@ actions:
                         value_template: "{{ routine_timer_running }}"
                     then:
                       - variables:
-                          plan: "{{ dict(plan, timer_exited=now().timestamp() | int) }}"
+                          plan: "{{ dict(plan, exited=now().timestamp() | int) }}"
                       - *save_state
                       - action: button.press
                         target:
@@ -1210,8 +1352,24 @@ actions:
                       # thermostat reports late is still the routine's. Saved at the end.
                       - variables:
                           plan: >-
-                            {{ dict(plan, timer_until=timer_until, timer_temp=stage.temp,
-                                    timer_applied=as_timestamp(states(override_apply), 0) | int) }}
+                            {{ dict(plan, until=timer_until, temp=stage.temp,
+                                    applied=as_timestamp(states(override_apply), 0) | int) }}
+                      # The morning's warm-up starts now (period 2's temperature,
+                      # within 2 minutes of the start), so measure it if the room
+                      # has at least 1 degree to rise. Saved at the end.
+                      - alias: Start measuring the warm-up
+                        if:
+                          - condition: template
+                            value_template: >-
+                              {{ learn_warm_up and plan.kind == 'morning' and periods | count >= 2
+                                 and stage.temp == periods[1].temp and room_temp is not none
+                                 and stage.temp - room_temp >= 1
+                                 and (now().timestamp() - plan.start) | abs <= 120 }}
+                        then:
+                          - variables:
+                              state: >-
+                                {{ dict(state, learn=dict(state.learn | default({}),
+                                        m=[now().timestamp() | int, room_temp | round(1), stage.temp])) }}
                       - wait_template: "{{ is_state(override_state, 'Timer') }}"
                         timeout: "00:00:30"
                         continue_on_timeout: true
