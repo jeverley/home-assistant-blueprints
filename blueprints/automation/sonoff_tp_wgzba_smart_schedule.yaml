@@ -450,7 +450,9 @@ triggers:
       {{ e != '' and has_value(e) }}
   # The lead is the learned warm-up time once two mornings have been measured,
   # otherwise Lead time. Keep this in step with the lead_minutes variable and
-  # the Late start hold due trigger.
+  # the Late start hold due trigger. A learned lead shrinks as the room warms,
+  # so once today's morning has started this stays true until the alarm,
+  # rather than turning false and firing again.
   - alias: Early start window opened
     trigger: template
     id: early-alarm
@@ -460,13 +462,18 @@ triggers:
       {% set c = ents | select('match', '^climate\\.') | first | default('') %}
       {% set t2 = ents | select('match', '^number\\..*_schedule_period_2_temp$') | first | default('') %}
       {% set raw = states(state_helper) %}
-      {% set l = (raw | from_json(default={})).learn | default({}) if raw is match('^\\{') else {} %}
+      {% set st = raw | from_json(default={}) if raw is match('^\\{') else {} %}
+      {% set l = st.learn | default({}) %}
+      {% set r = st.routine | default({}) %}
+      {% set rs = r.start | default(0) | int %}
+      {% set started = r.kind | default('') == 'morning' and 0 < rs <= now().timestamp()
+           and rs | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d') %}
       {% set room = state_attr(c, 'current_temperature') | float(none) if c != '' else none %}
       {% set p2t = states(t2) | float(none) if t2 != '' else none %}
       {% set lead = ([[l.mpd | default(0) | float(0) * (p2t - room), 10] | max, 180] | min) | int
            if learn_warm_up and l.n | default(0) | int >= 2 and room is not none and p2t is not none
            else lead_time | int %}
-      {{ a is not none and a - timedelta(minutes=lead) <= now() < a }}
+      {{ a is not none and now() < a and (started or a - timedelta(minutes=lead) <= now()) }}
   # Reads the period 2 time from the last fetch, so it can fire just before
   # period 2 starts when the alarm is later than usual. It is only true in the
   # minute before period 2, so it fires again if a fetch moves period 2 later.
@@ -493,6 +500,18 @@ triggers:
       {{ start.date() == now().date() and p2 < start
          and p2 - timedelta(minutes=1) <= now() < p2 }}
       {% endif %}
+  # Period 2 starts on the thermostat's own schedule, so a morning the
+  # routine did not start can be measured too. Reads the period 2 time from
+  # the last fetch, like Late start hold due. Only while learning is on.
+  - alias: Period 2 started
+    trigger: template
+    id: period-2
+    value_template: >-
+      {% set p = device_entities(thermostat_device)
+           | select('match', '^select\\..*_schedule_period_2_time$') | first | default('') %}
+      {% set s = states(p) if p != '' else '' %}
+      {{ learn_warm_up and s is match('^[0-9]{2}:[0-9]{2}')
+         and today_at(s[:5]) <= now() < today_at(s[:5]) + timedelta(minutes=2) }}
   # Any awake sensor on, held for the getting up delay.
   - alias: Someone is up
     trigger: template
@@ -985,7 +1004,7 @@ actions:
     if:
       - condition: template
         value_template: >-
-          {{ catch_up or run in ['early-alarm', 'late-alarm', 'new-day']
+          {{ catch_up or run in ['early-alarm', 'late-alarm', 'new-day', 'period-2']
              or (run == 'getting-up' and (getting_up_enabled or (plan_active and plan.kind == 'bedtime')))
              or (run == 'bedtime' and bedtime_enabled)
              or (plan_active and run == 'override-ended' and is_state(override_state, 'Idle')) }}
@@ -1373,4 +1392,26 @@ actions:
                       - wait_template: "{{ is_state(override_state, 'Timer') }}"
                         timeout: "00:00:30"
                         continue_on_timeout: true
+          # The thermostat's own period 2 starts a morning the routine is not
+          # running, so measure that warm-up too. It starts from the same
+          # overnight cool-down as the routine's. Only within 2 minutes of
+          # period 2, on the schedule with no override and at least 1 degree to
+          # rise, and not over a measurement already running. Saved at the end.
+          - alias: Measure the schedule's own morning warm-up
+            if:
+              - condition: template
+                value_template: >-
+                  {% set p2 = today_at(periods[1].time).timestamp() if periods | count >= 2 else 0 %}
+                  {{ learn_warm_up and run == 'period-2' and p2 > 0
+                     and not (plan_active and plan.kind == 'morning')
+                     and on_schedule and not override_running
+                     and (state.learn | default({})).m is not defined
+                     and 0 <= now().timestamp() - p2 <= 120
+                     and room_temp is not none and periods[1].temp is not none
+                     and periods[1].temp - room_temp >= 1 }}
+            then:
+              - variables:
+                  state: >-
+                    {{ dict(state, learn=dict(state.learn | default({}),
+                            m=[now().timestamp() | int, room_temp | round(1), periods[1].temp])) }}
   - *save_state
