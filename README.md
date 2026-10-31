@@ -20,7 +20,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 - **Geofencing:**
   - **Away schedule:** Schedule 3 when nobody is home (the home zone is empty and no area is occupied). Any running override is ended as it switches, and one started while away (a Boost on the way home) is left alone. When off, the group follows Occupancy while nobody is home, and only the routine's own Timer is ended.
   - **Pre-heat**, part of the away schedule: while nobody is home, once someone heading home is within the geofencing distance, it switches to the pre-heat group (Schedule 2 by default) so the house warms before they arrive. See [Geofencing](#geofencing) below.
-- **Routine:** moves the start of the morning heating to match the next waking alarm. The wake-up start is the alarm minus the lead: the learned warm-up time once two mornings have been measured (see **Learning the warm-up time** below), otherwise **Default lead time**. Period 2's usual length counts from the alarm, so the room is warm when you get up and stays warm as long as usual. Early, late, wake and catch-up runs read today's schedule for the active group from the thermostat's schedule entities and count the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period). They only fetch it from the thermostat when those entities may be out of date: just after midnight, after a schedule group change, after a schedule entity changed (an edit, a restart or the thermostat rejoining), or when one cannot be read. Otherwise they use what is already shown, which saves Zigbee traffic on reloads. The schedule group is likewise only written when it changes.
+- **Routine:** moves the start of the morning heating to match the next waking alarm. The wake-up start is the alarm minus the lead. With **Early start** on, that is the learned warm-up time once two mornings have been measured (see [Early start](#early-start) below). Otherwise, and until then, the morning starts at the alarm. Period 2's usual length counts from the alarm, so the room is warm when you get up and stays warm as long as usual. Early, late, wake and catch-up runs read today's schedule for the active group from the thermostat's schedule entities and count the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period). They only fetch it from the thermostat when those entities may be out of date: just after midnight, after a schedule group change, after a schedule entity changed (an edit, a restart or the thermostat rejoining), or when one cannot be read. Otherwise they use what is already shown, which saves Zigbee traffic on reloads. The schedule group is likewise only written when it changes.
   - **Early alarm** (wake-up start at or before period 2): today's morning starts early, at the schedule's own temperatures.
 
     | Configured periods | Typical schedule | What happens |
@@ -34,6 +34,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
   - **Someone up early:** when the awake sensor turns on (and stays on for the **Getting up delay**, if set), the wake-up starts now, as if the alarm were early. With no alarm set, this still starts the morning early. During a late hold, it ends the hold and, with 4 or more periods and a period 2 of up to 3 hours, runs period 2 for its usual length from now. Leave the awake sensors empty to only follow the alarm.
   - **Bedtime:** when the awake sensor has been off for the **Bedtime delay** during the period just before the evening setback (the last period with 3 or more periods, or period 1 again at midnight with 2), the setback starts early as a Timer at its temperature until its usual start. If someone gets up again before then, the Timer ends. Like the morning, bedtime needs someone home (the home zone or any area) rather than someone in an area, since people asleep may not show on occupancy sensors.
   - Each of these (early alarm, late alarm, wake-up and bedtime) has its own toggle.
+  - **Early start** (on by default): each period warmer than the one before, and the alarm morning, starts early by the learned warm-up time, so the room is warm when it begins. See [Early start](#early-start) below.
 
   Each stage is a Timer override on the thermostat, so it keeps running if Home Assistant restarts.
 - **Skips:** alarm-based changes only happen when the alarm is today; a wake-up works with no alarm or a later one. The wake-up is skipped when period 2 is not warmer than period 1, when a schedule temperature cannot be read, when an override is already running, or when nobody is home.
@@ -42,7 +43,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 
 #### Example (4 periods)
 
-Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes.
+Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, with a learned lead of 30 minutes.
 
 | Time | Usual schedule | Alarm 05:30 (early) | Alarm 09:00 (late) |
 | --- | --- | --- | --- |
@@ -53,15 +54,33 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, lead 30 minutes
 | 08:30 to 10:30 | 18 °C | 18 °C | 21 °C (until 90 minutes after the alarm) |
 | From 10:30 | 18 °C | 18 °C | 18 °C |
 
+#### Early start
+
+**Early start** starts the heating early by the learned warm-up time, so the room is warm when it is wanted rather than warming from then. With it off, alarm mornings start at the alarm and every period at its usual time. With it on, an alarm morning or late hold starts that long before the alarm, and each period warmer than the one before starts that long before its usual time, when there is no alarm involved.
+
+A period's early start is a Timer at that period's temperature until its usual start, then the thermostat's schedule carries on. It only starts when:
+
+- the room is cool enough for the thermostat to heat for the period (below its temperature plus the **Heating low threshold**), so a room that is already warm is left alone;
+- no other routine plan is running, no override is running, and someone is home;
+- for period 2, no alarm still ahead today will move the morning (its **Early alarm** or **Late alarm** toggle is on) and there is no morning plan today, so alarm mornings and late holds are unchanged. If someone gets up during it, it becomes a getting-up morning, so period 2 counts its usual length from then.
+
+If the schedule group changes and the new group has no warmer period starting then, the early start ends. Pressing Exit cancels it for that period. If your own override is running when the window opens, the early start begins once it ends, if there is still time.
+
+| Example (downstairs, learned 8 minutes plus 15 minutes per °C) | Without early start | With early start |
+| --- | --- | --- |
+| Weekend, no alarm, room 19.0 °C, period 2 at 07:00 (21 °C) | 21 °C from 07:00 | 21 °C from 06:19 |
+| Evening period at 17:00 (20 °C after 19 °C), room 19.2 °C | 20 °C from 17:00 | 20 °C from 16:37 |
+| Evening, room already 19.5 °C | Heats from 17:00 as usual | The same, as no early start is needed |
+
 #### Learning the warm-up time
 
-With **Learn warm-up time** on (the default), the routine measures each morning it starts, and each morning the thermostat's own schedule starts period 2 with someone home and no routine morning that day (for example with no alarm set, but not after a routine morning you cancelled, which has already warmed the room), since both warm up from the same overnight cool-down. Other times of day are not measured, because the house warms differently once it is already partly warm.
+The routine always learns the warm-up time. It measures each morning it starts (including an early start for period 2), and each morning the thermostat's own schedule starts period 2 with someone home and no routine morning that day (for example with no alarm set, but not after a routine morning you cancelled, which has already warmed the room), since both warm up from the same overnight cool-down. Other times of day are not measured, because the house warms differently once it is already partly warm.
 
 A warm-up takes a fixed **dead time** before the room starts to warm (the boiler starting, the radiators heating up and the heat reaching the thermostat), then a number of **minutes per degree**. Each measurement notes the room temperature when period 2's temperature is applied, and the minutes until the thermostat next goes idle. The rise is to where the thermostat stopped: its target plus its **Heating high threshold** (read from the thermostat, 0.2 °C if it cannot be), or the room temperature if the target changed first. A line through recent mornings' minutes against their rises gives both: where it meets no rise is the dead time, and its slope the minutes per degree. Each new morning counts fully and earlier ones a little less (80% as much each morning), so about the last five mornings matter most and it follows the seasons. Until the mornings' rises differ by a degree or two, the slope is drawn towards a typical 15 minutes per degree, and the dead time takes up the difference, so mornings that all need about the same rise (as in a well insulated house) are still predicted well.
 
-Warm-ups of less than 0.5 °C, ones interrupted by a group change or your own override (or a cancelled routine), and ones over 4 hours are not counted. The thermostat's **HVAC action** sensor shows when it goes idle, so it must be enabled while learning is on.
+Warm-ups of less than 0.5 °C, ones interrupted by a group change, your own override, a cancelled routine or a raised target (yours, or a later period's early start), and ones over 4 hours are not counted. The thermostat's **HVAC action** sensor shows when it goes idle, so it must be enabled.
 
-Once two mornings have been measured, the lead is the dead time plus the minutes per degree times the rise from the room temperature now to where the thermostat will stop, kept between 10 and 180 minutes, so a colder room starts earlier. Until then, and with learning off, **Default lead time** is used. What has been learned is kept in the State helper (`l.s`: the mornings' weight, mean rise, mean minutes, rise variance and their covariance; `l.f`: the dead time and minutes per degree worked out from them, once two mornings have been measured; `l.m`: a measurement in progress).
+Once two mornings have been measured, the lead is the dead time plus the minutes per degree times the rise from the room temperature now to where the thermostat will stop, kept between 10 and 180 minutes, so a colder room starts earlier. This is only used with **Early start** on. Until then, and with it off, an alarm morning starts at the alarm (5 minutes before it, while the alarm sensor still shows it) and nothing else starts early, so the first morning or two are measured from a plain start. What has been learned is kept in the State helper (`l.s`: the mornings' weight, mean rise, mean minutes, rise variance and their covariance; `l.f`: the dead time and minutes per degree worked out from them, once two mornings have been measured; `l.m`: a measurement in progress).
 
 ### Inputs
 
@@ -70,14 +89,14 @@ Once two mornings have been measured, the lead is the dead time plus the minutes
 | Thermostat | the TP-WGZBA device, state helper (required) |
 | Occupancy | follow occupancy (on), heated areas (none), occupied delay (1 min), empty delay (5 min) |
 | Geofencing | away schedule (on), home zone (default `zone.home`), geofencing distance (10 km, 0 for arriving sensors only), pre-heat schedule group (Schedule 2), geofencing timeout (45 min), Proximity devices (found from the home zone), arriving sensors (none) |
-| Routine | next waking alarm sensor (optional, none), learn warm-up time (on), default lead time (30 min, until learned), early alarm (on), late alarm (on), awake sensors (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
+| Routine | next waking alarm sensor (optional, none), early alarm (on), late alarm (on), awake sensors (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
+| Early start | early start (on) |
 
 ### Example configurations
 
 | Setting | Bedroom | Living room |
 | --- | --- | --- |
 | Heated areas | Bedroom | Living room |
-| Default lead time | 30 min | 10 min |
 | Awake sensors | Someone up helper | Someone up helper |
 | Bedtime | Off | On |
 | Pre-heat schedule group | Schedule 2 | Schedule 1 |
@@ -134,7 +153,7 @@ While nobody is home, someone heading home switches the thermostat to the pre-he
 - The option strings (`Schedule 1/2/3`, `Boost`, `Timer`, `Idle` and the day names) and entity types come from that ZHA support.
 - If the wake-up start falls before midnight (an alarm less than the lead after 00:00, up to 3 hours with a learned lead), the wake-up is skipped, because the fetched schedule would be for the wrong day.
 - The State helper keeps the blueprint's working state as JSON with one-letter keys, so it fits in 255 characters: `f`, when it last fetched the schedule; `a`, when geofencing pre-heating started; `r`, the routine's plan; and `l`, the learned warm-up time. Times are Unix epoch seconds.
-- The routine's plan (`r`) records intent rather than temperatures: its kind (`k`: `m` for morning or `b` for bedtime), its start (`s`, when the heating starts) and wake (`w`, the alarm, or the start if someone got up first), and the Timer it last applied (`u`, when it should end, `t`, its temperature, and `p`, when it pressed the override Apply button). `x` is when it last ended its own Timer, and `c` is 1 once you cancel it that day. Unset fields are left out. A Timer or Boost only starts from Apply, so the running override is the routine's only while Apply was last pressed by the routine. Changing the target or period without applying does not change that. A plan only counts on its own day. Each run that plans the routine works out the current stage from that and today's periods for the active group, so follow-on stages (period 3 after an early start, period 2 after a late hold), restarts and group changes all use the same rule. A stage needs at least a minute. The routine steps aside whenever you take control, and carries on from its plan afterwards:
+- The routine's plan (`r`) records intent rather than temperatures: its kind (`k`: `m` for morning, `b` for bedtime or `e` for an early start), its start (`s`, when the heating starts) and wake (`w`, the alarm, or the start if someone got up first; for an early start, the period's usual start), and the Timer it last applied (`u`, when it should end, `t`, its temperature, and `p`, when it pressed the override Apply button). `x` is when it last ended its own Timer, and `c` is 1 once you cancel it that day. Unset fields are left out. A Timer or Boost only starts from Apply, so the running override is the routine's only while Apply was last pressed by the routine. Changing the target or period without applying does not change that. A plan only counts on its own day. Each run that plans the routine works out the current stage from that and today's periods for the active group, so follow-on stages (period 3 after an early start, period 2 after a late hold), restarts and group changes all use the same rule. A stage needs at least a minute. The routine steps aside whenever you take control, and carries on from its plan afterwards:
   - **Your own Timer or Boost** (you press Apply): left alone, and the routine carries on once it ends, whether it runs out or you press Exit.
   - **A temperature change from the climate control or on the thermostat:** its **Device work mode state** shows `Temporary_Manual` until the next period, and the routine applies nothing until it is back on `Schedule`.
   - **Device work mode set to Manual or Off:** the state shows `Manual` or `Off`, and the routine applies nothing until **Device work mode** is set back to Schedule.
@@ -143,7 +162,7 @@ While nobody is home, someone heading home switches the thermostat to the pre-he
 - Without an awake sensor, anyone up during a late hold stays at period 1's temperature until the wake-up start. With one, the morning starts when it reports someone up.
 - Someone counts as home when the home zone is occupied or any area's occupancy sensor is on, even one in the garden. While the home zone is not yet known, at startup, someone counts as home. The wake-up needs someone home, so a downstairs thermostat heats while people are still in bed upstairs. It cannot be limited to one room, so a spare bedroom thermostat sharing the same alarm sensor would also heat whenever someone is home.
 - Occupancy for areas uses occupancy sensors (device class `occupancy`) only. For an area with only a motion sensor, create an occupancy sensor from it, for example a template binary sensor with a delay off.
-- The trigger ids `early-alarm`, `late-alarm`, `getting-up`, `bedtime`, `override-ended`, `warmed`, `period-2`, `catch-up`, `new-day`, `heading-home` and `geofencing-timeout` are fixed because the actions depend on them.
+- The trigger ids `early-alarm`, `late-alarm`, `getting-up`, `bedtime`, `override-ended`, `warmed`, `period-2`, `early-start`, `catch-up`, `new-day`, `heading-home` and `geofencing-timeout` are fixed because the actions depend on them.
 
 - Fetching the schedule selects today in the thermostat's **Schedule operating day** select, which replaces whatever day is shown for editing. So while the schedule is being edited (operating day or period entities changed in the last 5 minutes and after the blueprint's last fetch, and not as a burst), every run is deferred, with a note in its trace: no fetch, no routine stage and no schedule group change. A catch-up runs 5 minutes after the last change and picks the routine up from its plan. In the meantime a running Timer carries on, and if one ends the thermostat follows its own schedule. A restart or the thermostat rejoining changes half or more of them within 30 seconds, so it does not count as editing. Choosing a day and pressing **Schedule fetch** yourself can count as a burst too, so editing is detected from your first change after it. Unapplied edits left untouched for more than 5 minutes can be replaced by the next fetch.
 
