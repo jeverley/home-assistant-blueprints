@@ -483,11 +483,9 @@ triggers:
       {% set p2t = states(t2) | float(none) if t2 != '' else none %}
       {% set th = ents | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
       {% set hi = states(th) | float(0.2) if th != '' else 0.2 %}
-      {% set f = l.s | default([0, 0, 0, 0, 0]) %}
-      {% set rate = [[(f[0] * f[4] + 60) / (f[0] * f[3] + 4), 3] | max, 60] | min %}
-      {% set dead = [[f[2] - rate * f[1], 0] | max, 120] | min %}
-      {% set lead = ([[dead + rate * (p2t + hi - room), 10] | max, 180] | min) | int
-           if learn_warm_up and f[0] >= 1.5 and room is not none and p2t is not none
+      {% set f = l.f | default([]) %}
+      {% set lead = ([[f[0] + f[1] * (p2t + hi - room), 10] | max, 180] | min) | int
+           if learn_warm_up and f | count == 2 and room is not none and p2t is not none
            else lead_time | int %}
       {{ a is not none and now() < a and (started or a - timedelta(minutes=lead) <= now()) }}
   # Reads the period 2 time from the last fetch, so it can fire just before
@@ -508,11 +506,9 @@ triggers:
       {% set p2t = states(t2) | float(none) if t2 != '' else none %}
       {% set th = ents | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
       {% set hi = states(th) | float(0.2) if th != '' else 0.2 %}
-      {% set f = l.s | default([0, 0, 0, 0, 0]) %}
-      {% set rate = [[(f[0] * f[4] + 60) / (f[0] * f[3] + 4), 3] | max, 60] | min %}
-      {% set dead = [[f[2] - rate * f[1], 0] | max, 120] | min %}
-      {% set lead = ([[dead + rate * (p2t + hi - room), 10] | max, 180] | min) | int
-           if learn_warm_up and f[0] >= 1.5 and room is not none and p2t is not none
+      {% set f = l.f | default([]) %}
+      {% set lead = ([[f[0] + f[1] * (p2t + hi - room), 10] | max, 180] | min) | int
+           if learn_warm_up and f | count == 2 and room is not none and p2t is not none
            else lead_time | int %}
       {% set p = ents | select('match', '^select\\..*_schedule_period_2_time$') | first | default('') %}
       {% set s = states(p) if p != '' else '' %}
@@ -915,6 +911,26 @@ actions:
               {% set out = l %}
             {% endif %}
             {{ dict(state, learn=out) }}
+  # The warm-up time learned so far, as learn.f: [dead time, minutes per
+  # degree], once two mornings have been measured (a weight of 1.5), and
+  # removed before then. The rate is the line through the measured mornings
+  # (learn.s holds their weight, mean rise, mean minutes, rise variance and
+  # covariance), drawn towards 15 minutes per degree (60 is that times 4, the
+  # pull's strength) until their rises spread out by a degree or two, and kept
+  # within 3 and 60. The dead time is what is left at no rise, kept within 0
+  # and 120, since until the rate is known it also takes up any error in the
+  # assumed one. Worked out on every run, so the lead_minutes variable and the
+  # alarm triggers only read it.
+  - alias: Fit the warm-up time
+    variables:
+      state: >-
+        {% set l = state.learn | default({}) %}
+        {% set s = l.s | default([0, 0, 0, 0, 0]) %}
+        {% set rate = [[(s[0] * s[4] + 60) / (s[0] * s[3] + 4), 3] | max, 60] | min %}
+        {% set dead = [[s[2] - rate * s[1], 0] | max, 120] | min %}
+        {% set ns = namespace(l={}) %}
+        {% for k, v in l.items() if k != 'f' %}{% set ns.l = dict(ns.l, **{k: v}) %}{% endfor %}
+        {{ dict(state, learn=dict(ns.l, f=[dead | round(2), rate | round(2)]) if s[0] >= 1.5 else ns.l) }}
   # While the schedule is being edited its selects cannot be trusted, and a
   # fetch would replace the day being edited. The run saves its state and
   # defers, and the Schedule editing finished trigger catches up.
@@ -945,7 +961,7 @@ actions:
             {% set out = {'f': state.fetch | default(0), 'a': state.arrival | default(0), 'r': ns.r} %}
             {% set full = dict(out, l=l) if l else out %}
             {{ (full if full | to_json | length <= state_attr(state_helper, 'max') | int(255)
-                else dict(out, l={'s': l.s}) if l.s is defined else out) | to_json }}
+                else dict(out, l={'s': l.s, 'f': l.f} if l.f is defined else {'s': l.s}) if l.s is defined else out) | to_json }}
       - stop: >-
           Deferred: the schedule is being edited in the UI. A catch-up runs 5 minutes
           after the last change.
@@ -1185,26 +1201,17 @@ actions:
             {% set ns = namespace(t=none) %}
             {% for p in periods %}{% if today_at(p.time) <= now() %}{% set ns.t = p.temp %}{% endif %}{% endfor %}
             {{ ns.t }}
-          # Minutes before the alarm to start, once two mornings have been
-          # measured (a weight of 1.5): the learned dead time plus the learned
-          # minutes per degree times the rise from the room temperature now to
-          # where the thermostat stops (period 2's temperature plus its high
-          # threshold), kept within 10 and 180. Otherwise Lead time. The rate is
-          # the line through the measured mornings (learn.s holds their weight,
-          # mean rise, mean minutes, rise variance and covariance), drawn
-          # towards 15 minutes per degree (60 is that times 4, the pull's
-          # strength) until their rises spread out by a degree or two, and kept
-          # within 3 and 60. The dead time is what is left at no rise, kept
-          # within 0 and 120, since until the rate is known it also takes up
-          # any error in the assumed one.
-          # Keep this in step with the alarm triggers.
+          # Minutes before the alarm to start, once the warm-up has been learned
+          # (learn.f, see Fit the warm-up time): the dead time plus the minutes
+          # per degree times the rise from the room temperature now to where the
+          # thermostat stops (period 2's temperature plus its high threshold),
+          # kept within 10 and 180. Otherwise Lead time. Keep this in step with
+          # the alarm triggers.
           lead_minutes: >-
-            {% set f = (state.learn | default({})).s | default([0, 0, 0, 0, 0]) %}
+            {% set f = (state.learn | default({})).f | default([]) %}
             {% set p2t = periods[1].temp if periods | count >= 2 else none %}
-            {% set rate = [[(f[0] * f[4] + 60) / (f[0] * f[3] + 4), 3] | max, 60] | min %}
-            {% set dead = [[f[2] - rate * f[1], 0] | max, 120] | min %}
-            {{ ([[dead + rate * (p2t + high_threshold - room_temp), 10] | max, 180] | min) | int
-               if learn_warm_up and f[0] >= 1.5 and room_temp is not none and p2t is not none
+            {{ ([[f[0] + f[1] * (p2t + high_threshold - room_temp), 10] | max, 180] | min) | int
+               if learn_warm_up and f | count == 2 and room_temp is not none and p2t is not none
                else lead_time | int }}
           # The alarm when it is today and still ahead, and the alarm minus the
           # lead, when that is today too. Otherwise blank.
