@@ -514,8 +514,10 @@ triggers:
            and rs | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d') %}
       {% set room = state_attr(c, 'current_temperature') | float(none) if c != '' else none %}
       {% set p2t = states(t2) | float(none) if t2 != '' else none %}
+      {% set th = ents | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
+      {% set hi = states(th) | float(0.2) if th != '' else 0.2 %}
       {% set f = l.f | default([]) %}
-      {% set lead = ([[f[0] + f[1] * (p2t - room), 10] | max, 180] | min) | int
+      {% set lead = ([[f[0] + f[1] * (p2t + hi - room), 10] | max, 180] | min) | int
            if learn_warm_up and f | count == 2 and room is not none and p2t is not none
            else lead_time | int %}
       {{ a is not none and now() < a and (started or a - timedelta(minutes=lead) <= now()) }}
@@ -535,8 +537,10 @@ triggers:
       {% set l = (raw | from_json(default={})).l | default({}) if raw is match('^\\{') else {} %}
       {% set room = state_attr(c, 'current_temperature') | float(none) if c != '' else none %}
       {% set p2t = states(t2) | float(none) if t2 != '' else none %}
+      {% set th = ents | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
+      {% set hi = states(th) | float(0.2) if th != '' else 0.2 %}
       {% set f = l.f | default([]) %}
-      {% set lead = ([[f[0] + f[1] * (p2t - room), 10] | max, 180] | min) | int
+      {% set lead = ([[f[0] + f[1] * (p2t + hi - room), 10] | max, 180] | min) | int
            if learn_warm_up and f | count == 2 and room is not none and p2t is not none
            else lead_time | int %}
       {% set p = ents | select('match', '^select\\..*_schedule_period_2_time$') | first | default('') %}
@@ -1231,15 +1235,14 @@ actions:
             {{ ns.t }}
           # Minutes before the alarm to start, once the warm-up has been learned
           # (learn.f, see Fit the warm-up time): the dead time plus the minutes
-          # per degree times the rise from the room temperature now to period 2's
-          # temperature, kept within 10 and 180, so the room reaches it at the
-          # alarm. The thermostat carries on to its high threshold above it
-          # after that. Otherwise Lead time. Keep this in step with the alarm
-          # triggers.
+          # per degree times the rise from the room temperature now to where the
+          # thermostat stops (period 2's temperature plus its high threshold),
+          # kept within 10 and 180. Otherwise Lead time. Keep this in step with
+          # the alarm triggers.
           lead_minutes: >-
             {% set f = (state.learn | default({})).f | default([]) %}
             {% set p2t = periods[1].temp if periods | count >= 2 else none %}
-            {{ ([[f[0] + f[1] * (p2t - room_temp), 10] | max, 180] | min) | int
+            {{ ([[f[0] + f[1] * (p2t + high_threshold - room_temp), 10] | max, 180] | min) | int
                if learn_warm_up and f | count == 2 and room_temp is not none and p2t is not none
                else lead_time | int }}
           # The alarm minus the lead, when that is today too. Otherwise blank.

@@ -61,7 +61,7 @@ A warm-up takes a fixed **dead time** before the room starts to warm (the boiler
 
 Warm-ups of less than 0.5 °C, ones interrupted by a group change or your own override (or a cancelled routine), and ones over 4 hours are not counted. The thermostat's **HVAC action** sensor shows when it goes idle, so it must be enabled while learning is on.
 
-Once two mornings have been measured, the lead is the dead time plus the minutes per degree times the rise from the room temperature now to period 2's temperature, kept between 10 and 180 minutes, so the room reaches it at the alarm and a colder room starts earlier. The thermostat then carries on to its high threshold above it. Until then, and with learning off, **Lead time** is used. What has been learned is kept in the State helper (`l.s`: the mornings' weight, mean rise, mean minutes, rise variance and their covariance; `l.f`: the dead time and minutes per degree worked out from them, once two mornings have been measured; `l.m`: a measurement in progress).
+Once two mornings have been measured, the lead is the dead time plus the minutes per degree times the rise from the room temperature now to where the thermostat will stop, kept between 10 and 180 minutes, so a colder room starts earlier. Until then, and with learning off, **Lead time** is used. What has been learned is kept in the State helper (`l.s`: the mornings' weight, mean rise, mean minutes, rise variance and their covariance; `l.f`: the dead time and minutes per degree worked out from them, once two mornings have been measured; `l.m`: a measurement in progress).
 
 ### Inputs
 
