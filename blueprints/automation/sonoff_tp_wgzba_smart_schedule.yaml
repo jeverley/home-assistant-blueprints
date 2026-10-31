@@ -271,14 +271,15 @@ blueprint:
             seconds: 0
           selector:
             duration: {}
-    early_start:
-      name: Early start
-      icon: mdi:clock-fast
-      description: Reaches the scheduled temperature by the scheduled time.
+    learning:
+      name: Learning
+      icon: mdi:brain
+      description: Learns how long the heating takes to warm up.
       collapsed: true
       input:
         early_start_enabled:
           name: Early start
+          description: Starts heating early so the scheduled temperature is reached by the scheduled time.
           default: true
           selector:
             boolean: {}
