@@ -274,7 +274,7 @@ blueprint:
     learning:
       name: Learning
       icon: mdi:brain
-      description: Learns how long the heating takes to warm up.
+      description: Learns how long the heated areas take to warm up.
       collapsed: true
       input:
         early_start_enabled:
