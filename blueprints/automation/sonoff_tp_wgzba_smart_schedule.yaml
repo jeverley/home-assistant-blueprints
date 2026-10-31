@@ -279,10 +279,7 @@ blueprint:
       input:
         early_start_enabled:
           name: Early start
-          description: |
-            Starts heating early.
-
-            When off, heating starts at the scheduled time.
+          description: Starts heating early rather than at the scheduled time.
           default: true
           selector:
             boolean: {}
