@@ -280,7 +280,7 @@ blueprint:
         early_start_enabled:
           name: Early start
           description: |
-            Starts heating early, learning how long it takes from the first mornings.
+            Starts heating early.
 
             When off, heating starts at the scheduled time.
           default: true
