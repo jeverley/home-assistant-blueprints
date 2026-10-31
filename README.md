@@ -20,7 +20,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 - **Geofencing:**
   - **Away schedule:** Schedule 3 when nobody is home (the home zone is empty and no area is occupied). Any running override is ended as it switches, and one started while away (a Boost on the way home) is left alone. When off, the group follows Occupancy while nobody is home, and only the routine's own Timer is ended.
   - **Pre-heat**, part of the away schedule: while nobody is home, once someone heading home is within the geofencing distance, it switches to the pre-heat group (Schedule 2 by default) so the house warms before they arrive. See [Geofencing](#geofencing) below.
-- **Routine:** moves the start of the morning heating to match the next waking alarm. The wake-up start is the alarm minus the lead: the learned warm-up time once two mornings have been measured (see **Learning the warm-up time** below), otherwise **Lead time**. Period 2's usual length counts from the alarm, so the room is warm when you get up and stays warm as long as usual. Early, late, wake and catch-up runs read today's schedule for the active group from the thermostat's schedule entities and count the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period). They only fetch it from the thermostat when those entities may be out of date: just after midnight, after a schedule group change, after a schedule entity changed (an edit, a restart or the thermostat rejoining), or when one cannot be read. Otherwise they use what is already shown, which saves Zigbee traffic on reloads. The schedule group is likewise only written when it changes.
+- **Routine:** moves the start of the morning heating to match the next waking alarm. The wake-up start is the alarm minus the lead: the learned warm-up time once two mornings have been measured (see **Learning the warm-up time** below), otherwise **Default lead time**. Period 2's usual length counts from the alarm, so the room is warm when you get up and stays warm as long as usual. Early, late, wake and catch-up runs read today's schedule for the active group from the thermostat's schedule entities and count the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period). They only fetch it from the thermostat when those entities may be out of date: just after midnight, after a schedule group change, after a schedule entity changed (an edit, a restart or the thermostat rejoining), or when one cannot be read. Otherwise they use what is already shown, which saves Zigbee traffic on reloads. The schedule group is likewise only written when it changes.
   - **Early alarm** (wake-up start at or before period 2): today's morning starts early, at the schedule's own temperatures.
 
     | Configured periods | Typical schedule | What happens |
@@ -61,7 +61,7 @@ A warm-up takes a fixed **dead time** before the room starts to warm (the boiler
 
 Warm-ups of less than 0.5 °C, ones interrupted by a group change or your own override (or a cancelled routine), and ones over 4 hours are not counted. The thermostat's **HVAC action** sensor shows when it goes idle, so it must be enabled while learning is on.
 
-Once two mornings have been measured, the lead is the dead time plus the minutes per degree times the rise from the room temperature now to where the thermostat will stop, kept between 10 and 180 minutes, so a colder room starts earlier. Until then, and with learning off, **Lead time** is used. What has been learned is kept in the State helper (`l.s`: the mornings' weight, mean rise, mean minutes, rise variance and their covariance; `l.f`: the dead time and minutes per degree worked out from them, once two mornings have been measured; `l.m`: a measurement in progress).
+Once two mornings have been measured, the lead is the dead time plus the minutes per degree times the rise from the room temperature now to where the thermostat will stop, kept between 10 and 180 minutes, so a colder room starts earlier. Until then, and with learning off, **Default lead time** is used. What has been learned is kept in the State helper (`l.s`: the mornings' weight, mean rise, mean minutes, rise variance and their covariance; `l.f`: the dead time and minutes per degree worked out from them, once two mornings have been measured; `l.m`: a measurement in progress).
 
 ### Inputs
 
@@ -70,14 +70,14 @@ Once two mornings have been measured, the lead is the dead time plus the minutes
 | Thermostat | the TP-WGZBA device, state helper (required) |
 | Occupancy | follow occupancy (on), heated areas (none), occupied delay (1 min), empty delay (5 min) |
 | Geofencing | away schedule (on), home zone (default `zone.home`), geofencing distance (10 km, 0 for arriving sensors only), pre-heat schedule group (Schedule 2), geofencing timeout (45 min), Proximity devices (found from the home zone), arriving sensors (none) |
-| Routine | next waking alarm sensor (optional, none), learn warm-up time (on), lead time (30 min, until learned), early alarm (on), late alarm (on), awake sensors (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
+| Routine | next waking alarm sensor (optional, none), learn warm-up time (on), default lead time (30 min, until learned), early alarm (on), late alarm (on), awake sensors (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
 
 ### Example configurations
 
 | Setting | Bedroom | Living room |
 | --- | --- | --- |
 | Heated areas | Bedroom | Living room |
-| Lead time | 30 min | 10 min |
+| Default lead time | 30 min | 10 min |
 | Awake sensors | Someone up helper | Someone up helper |
 | Bedtime | Off | On |
 | Pre-heat schedule group | Schedule 2 | Schedule 1 |
