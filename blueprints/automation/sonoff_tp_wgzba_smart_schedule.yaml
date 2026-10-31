@@ -391,6 +391,39 @@ variables:
   min_stage: 60
   exit_window: 60
   morning_max: 10800
+  # Learning the warm-up time (see Learn the warm-up time and Fit the warm-up
+  # time). Times in minutes unless given in seconds.
+  #   memory: each earlier morning counts this much less with each new one.
+  #   min_rise: the smallest rise measured, in degrees.
+  #   max_minutes: a longer warm-up is not counted.
+  #   read_within: seconds after the idle a measurement must be read in, as
+  #     the room keeps rising after the heating stops.
+  #   restart: seconds after the start that heating starting again means the
+  #     idle was missed.
+  #   near_stop: degrees below the stop point that still count as reaching it,
+  #     as the reported room temperature lags the thermostat's own.
+  #   regroup_margin: seconds after the idle that a group change still counts.
+  #   start_window: seconds after the start or period 2 a measurement may
+  #     start, so a queued run still counts.
+  #   rate: the minutes per degree assumed until the rises spread out.
+  #   pull: how strongly the fit is drawn towards that rate.
+  #   min_rate, max_rate, max_dead: the fit's limits.
+  #   min_weight: the weight two measured mornings reach.
+  learning:
+    memory: 0.8
+    min_rise: 0.5
+    max_minutes: 240
+    read_within: 600
+    restart: 300
+    near_stop: 0.3
+    regroup_margin: 60
+    start_window: 300
+    rate: 15
+    pull: 4
+    min_rate: 3
+    max_rate: 60
+    max_dead: 120
+    min_weight: 1.5
   # Nobody is home: the home zone is empty, and no area is occupied or has
   # been for the empty delay. The zone is checked first, so the areas are only
   # looked at when it is empty. Area sensors are occupancy sensors in any
@@ -461,9 +494,9 @@ triggers:
       {{ e != '' and has_value(e) }}
   # The lead is the learned warm-up time once two mornings have been measured,
   # otherwise Lead time. Keep this in step with the lead_minutes variable,
-  # which explains it, and the Late start hold due trigger. A learned lead shrinks as the room warms,
-  # so once today's morning has started this stays true until the alarm,
-  # rather than turning false and firing again.
+  # which explains it, and the Late start hold due trigger. A learned lead
+  # shrinks as the room warms, so once today's morning has started this stays
+  # true until the alarm, rather than turning false and firing again.
   - alias: Early start window opened
     trigger: template
     id: early-alarm
@@ -702,22 +735,17 @@ actions:
       # written lets a later run pick up from there. The helper stores each key
       # as one letter (f, r, a, l, and in the plan k, s, w, u, t, p, x and c,
       # with kind m or b and cancelled 1) to fit its 255 characters, and stored
-      # reads them back as these names, along with the longer names saved by
-      # earlier versions.
+      # reads them back as these names.
       stored: >-
         {% set raw = states(state_helper) %}
         {% set j = raw | from_json(default={}) if raw is match('^\\{') else {} %}
         {% set names = {'k': 'kind', 's': 'start', 'w': 'wake', 'u': 'until', 't': 'temp', 'p': 'applied',
-                        'x': 'exited', 'c': 'cancelled', 'timer_until': 'until', 'timer_temp': 'temp',
-                        'timer_applied': 'applied', 'timer_exited': 'exited'} %}
+                        'x': 'exited', 'c': 'cancelled'} %}
         {% set ns = namespace(r={}) %}
-        {% for k, v in (j.r | default(j.routine | default({}))).items() %}
-          {% set ns.r = dict(ns.r, **{names.get(k, k): v}) %}
+        {% for k, v in (j.r | default({})).items() if k in names %}
+          {% set ns.r = dict(ns.r, **{names[k]: {'m': 'morning', 'b': 'bedtime'}.get(v, v) if k == 'k' else v}) %}
         {% endfor %}
-        {% set kinds = {'m': 'morning', 'b': 'bedtime'} %}
-        {% set r = dict(ns.r, kind=kinds.get(ns.r.kind, ns.r.kind)) if ns.r.kind is defined else ns.r %}
-        {{ {'fetch': j.f | default(j.fetch | default(0)), 'arrival': j.a | default(j.arrival | default(0)),
-            'routine': r, 'learn': j.l | default(j.learn | default({}))} }}
+        {{ {'fetch': j.f | default(0), 'arrival': j.a | default(0), 'routine': ns.r, 'learn': j.l | default({})} }}
       state: >-
         {% set ns = namespace(out={}) %}
         {% for k, v in stored.items() if k != 'routine' %}{% set ns.out = dict(ns.out, **{k: v}) %}{% endfor %}
@@ -790,6 +818,10 @@ actions:
       # Temporary_Manual until the next period; Manual and Off are yours too.
       # The routine applies nothing until it is back on its schedule.
       on_schedule: "{{ is_state(work_mode_state, 'Schedule') }}"
+      # The alarm when it is today and still ahead, otherwise blank.
+      alarm_time: >-
+        {% set a = states(alarm_sensor) | as_datetime(none) %}
+        {{ (a | as_local).isoformat() if a is not none and (a | as_local).date() == now().date() and now() < a else '' }}
   # Someone got home, or pre-heating timed out and nobody is heading home any
   # more, so the arrival is over. After the timeout, a new Someone heading home
   # trigger means they stopped heading home and set off again: a new trip.
@@ -859,13 +891,12 @@ actions:
   # plus its high threshold, exact since it stops by its own reading) when the
   # room is within 0.3 degrees of it (its reading lags, and the room keeps
   # rising after the heating stops), or else to the room temperature (the
-  # target dropped first). The rise and the minutes
-  # taken are added to learn.s, the weighted mean and spread of recent
-  # mornings, each earlier morning counting 80% as much as before. It is
-  # dropped if the room rose less than 0.5 degrees, took over 4 hours, or was
-  # not read within 10 minutes of the idle (the room keeps rising after the
-  # heating stops). Before the idle, it is dropped if
-  # the group changed (also when the thermostat dropped off or Home Assistant
+  # target dropped first). The rise and the minutes taken are added to
+  # learn.s, the weighted mean and spread of recent mornings, each earlier
+  # morning counting less (learning.memory). It is dropped if the room rose
+  # less than learning.min_rise, took over learning.max_minutes, or was not
+  # read within learning.read_within of the idle. Before the idle, it is
+  # dropped if the group changed (also when the thermostat dropped off or Home Assistant
   # restarted), someone else takes over or cancels the routine (an Exit after
   # the idle leaves it), the thermostat leaves its schedule or
   # the heating stopped and started again unseen. Times are in whole seconds,
@@ -879,58 +910,60 @@ actions:
           state: >-
             {% set l = state.learn %}
             {% set m = l.m %}
-            {% set f = l.s | default([0, 0, 0, 0, 0]) %}
-            {% set kept = {'s': f} if f[0] > 0 else {} %}
+            {% set s = l.s | default([0, 0, 0, 0, 0]) %}
+            {% set kept = {'s': s} if s[0] > 0 else {} %}
             {% set h = states[hvac_action_sensor] %}
             {% set since = h.last_changed.timestamp() if h is not none else 0 %}
             {% set warmed = h is not none and h.state == 'idle' and since > m[0] %}
             {% set end = since if warmed else now().timestamp() %}
             {% set elapsed = (end - m[0]) / 60 %}
             {% set stop = m[2] + high_threshold %}
-            {% set top = stop if room_temp is not none and room_temp >= stop - 0.3 else room_temp %}
+            {% set top = stop if room_temp is not none and room_temp >= stop - learning.near_stop else room_temp %}
             {% set rose = top - m[1] if top is not none else 0 %}
             {% set g = states[schedule_group].last_changed.timestamp() | int %}
-            {% set regrouped = m[0] < g <= end + 60 %}
+            {% set regrouped = m[0] < g <= end + learning.regroup_margin %}
             {% set cancelled = plan_today and plan.cancelled and (not warmed or exit_pressed_at <= since) %}
             {% if warmed and not regrouped and not cancelled %}
-              {% if rose >= 0.5 and elapsed <= 240 and now().timestamp() - since <= 600 %}
-                {% set w = f[0] * 0.8 %}
+              {% if rose >= learning.min_rise and elapsed <= learning.max_minutes
+                    and now().timestamp() - since <= learning.read_within %}
+                {% set w = s[0] * learning.memory %}
                 {% set w1 = w + 1 %}
-                {% set dx = rose - f[1] %}
-                {% set dy = elapsed - f[2] %}
-                {% set out = {'s': [w1 | round(2), (f[1] + dx / w1) | round(2), (f[2] + dy / w1) | round(1),
-                                    ((w * f[3] + w / w1 * dx * dx) / w1) | round(2),
-                                    ((w * f[4] + w / w1 * dx * dy) / w1) | round(1)]} %}
+                {% set dx = rose - s[1] %}
+                {% set dy = elapsed - s[2] %}
+                {% set out = {'s': [w1 | round(2), (s[1] + dx / w1) | round(2), (s[2] + dy / w1) | round(1),
+                                    ((w * s[3] + w / w1 * dx * dx) / w1) | round(2),
+                                    ((w * s[4] + w / w1 * dx * dy) / w1) | round(1)]} %}
               {% else %}
                 {% set out = kept %}
               {% endif %}
             {% elif regrouped or cancelled or ((override_running or not on_schedule) and not routine_timer_running)
-                  or elapsed > 240 or (h is not none and h.state == 'heating' and since > m[0] + 300) %}
+                  or elapsed > learning.max_minutes
+                  or (h is not none and h.state == 'heating' and since > m[0] + learning.restart) %}
               {% set out = kept %}
             {% else %}
               {% set out = l %}
             {% endif %}
             {{ dict(state, learn=out) }}
   # The warm-up time learned so far, as learn.f: [dead time, minutes per
-  # degree], once two mornings have been measured (a weight of 1.5), and
-  # removed before then. The rate is the line through the measured mornings
-  # (learn.s holds their weight, mean rise, mean minutes, rise variance and
-  # covariance), drawn towards 15 minutes per degree (60 is that times 4, the
-  # pull's strength) until their rises spread out by a degree or two, and kept
-  # within 3 and 60. The dead time is what is left at no rise, kept within 0
-  # and 120, since until the rate is known it also takes up any error in the
-  # assumed one. Worked out on every run, so the lead_minutes variable and the
-  # alarm triggers only read it.
+  # degree], once two mornings have been measured, and removed before then.
+  # The rate is the line through the measured mornings (learn.s holds their
+  # weight, mean rise, mean minutes, rise variance and covariance), drawn
+  # towards the assumed rate until their rises spread out by a degree or two,
+  # and kept within its limits. The dead time is what is left at no rise, and
+  # until the rate is known it also takes up any error in the assumed one.
+  # Worked out on every run, so the lead_minutes variable and the alarm
+  # triggers only read it.
   - alias: Fit the warm-up time
     variables:
       state: >-
         {% set l = state.learn | default({}) %}
         {% set s = l.s | default([0, 0, 0, 0, 0]) %}
-        {% set rate = [[(s[0] * s[4] + 60) / (s[0] * s[3] + 4), 3] | max, 60] | min %}
-        {% set dead = [[s[2] - rate * s[1], 0] | max, 120] | min %}
+        {% set c = learning %}
+        {% set rate = [[(s[0] * s[4] + c.rate * c.pull) / (s[0] * s[3] + c.pull), c.min_rate] | max, c.max_rate] | min %}
+        {% set dead = [[s[2] - rate * s[1], 0] | max, c.max_dead] | min %}
         {% set ns = namespace(l={}) %}
         {% for k, v in l.items() if k != 'f' %}{% set ns.l = dict(ns.l, **{k: v}) %}{% endfor %}
-        {{ dict(state, learn=dict(ns.l, f=[dead | round(2), rate | round(2)]) if s[0] >= 1.5 else ns.l) }}
+        {{ dict(state, learn=dict(ns.l, f=[dead | round(2), rate | round(2)]) if s[0] >= c.min_weight else ns.l) }}
   # While the schedule is being edited its selects cannot be trusted, and a
   # fetch would replace the day being edited. The run saves its state and
   # defers, and the Schedule editing finished trigger catches up.
@@ -953,15 +986,17 @@ actions:
           value: >-
             {% set short = {'kind': 'k', 'start': 's', 'wake': 'w', 'until': 'u', 'temp': 't',
                             'applied': 'p', 'exited': 'x', 'cancelled': 'c'} %}
-            {% set ns = namespace(r={}) %}
+            {% set ns = namespace(r={}, l={}) %}
             {% for k, v in plan.items() if plan.kind != '' and (v or k in ['kind', 'start']) %}
               {% set ns.r = dict(ns.r, **{short[k]: v[:1] if k == 'kind' else 1 if v is sameas true else v}) %}
             {% endfor %}
             {% set l = state.learn | default({}) %}
             {% set out = {'f': state.fetch | default(0), 'a': state.arrival | default(0), 'r': ns.r} %}
             {% set full = dict(out, l=l) if l else out %}
-            {{ (full if full | to_json | length <= state_attr(state_helper, 'max') | int(255)
-                else dict(out, l={'s': l.s, 'f': l.f} if l.f is defined else {'s': l.s}) if l.s is defined else out) | to_json }}
+            {% set ns.l = {} %}
+            {% for k, v in l.items() if k != 'm' %}{% set ns.l = dict(ns.l, **{k: v}) %}{% endfor %}
+            {% set trimmed = dict(out, l=ns.l) if ns.l else out %}
+            {{ (full if full | to_json | length <= state_attr(state_helper, 'max') | int(255) else trimmed) | to_json }}
       - stop: >-
           Deferred: the schedule is being edited in the UI. A catch-up runs 5 minutes
           after the last change.
@@ -1080,10 +1115,7 @@ actions:
       # the routine again when it matters: a plan is running, or a morning
       # start may be due (today's alarm still ahead, or someone up).
       group_changed: "{{ states(schedule_group) != group_before }}"
-      morning_ahead: >-
-        {% set a = states(alarm_sensor) | as_datetime(none) %}
-        {{ (a is not none and (a | as_local).date() == now().date() and now() < a)
-           or awake_sensors | select('is_state', 'on') | first is defined }}
+      morning_ahead: "{{ alarm_time != '' or awake_sensors | select('is_state', 'on') | first is defined }}"
       catch_up: "{{ run == 'catch-up' or (group_changed and (plan_active or morning_ahead)) }}"
   # Runs that can start, continue or end a routine plan it. An override-ended
   # run carries on only while still Idle: replacing our own Timer passes
@@ -1213,11 +1245,7 @@ actions:
             {{ ([[f[0] + f[1] * (p2t + high_threshold - room_temp), 10] | max, 180] | min) | int
                if learn_warm_up and f | count == 2 and room_temp is not none and p2t is not none
                else lead_time | int }}
-          # The alarm when it is today and still ahead, and the alarm minus the
-          # lead, when that is today too. Otherwise blank.
-          alarm_time: >-
-            {% set a = states(alarm_sensor) | as_datetime(none) %}
-            {{ (a | as_local).isoformat() if a is not none and (a | as_local).date() == now().date() and now() < a else '' }}
+          # The alarm minus the lead, when that is today too. Otherwise blank.
           alarm_start: >-
             {% if alarm_time == '' %}{{ '' }}{% else %}
             {% set start = (alarm_time | as_datetime) - timedelta(minutes=lead_minutes) %}
@@ -1473,21 +1501,21 @@ actions:
                             {{ dict(plan, until=timer_until, temp=stage.temp,
                                     applied=as_timestamp(states(override_apply), 0) | int) }}
                       # The morning's warm-up starts now: period 2's temperature,
-                      # within 5 minutes of the start.
+                      # within learning.start_window of the start.
                       - if:
                           - condition: template
                             value_template: >-
                               {{ plan.kind == 'morning' and stage.temp == periods[1].temp
-                                 and (now().timestamp() - plan.start) | abs <= 300 }}
+                                 and (now().timestamp() - plan.start) | abs <= learning.start_window }}
                         then:
                           - variables:
                               warm_up_target: "{{ stage.temp }}"
                       - wait_template: "{{ is_state(override_state, 'Timer') }}"
                         timeout: "00:00:30"
                         continue_on_timeout: true
-          # Or the thermostat's own period 2 starts a morning, within 5 minutes,
-          # from the same overnight cool-down as the routine's. Only with
-          # someone home, on the schedule with no override, and no morning plan
+          # Or the thermostat's own period 2 starts a morning, within
+          # learning.start_window, from the same overnight cool-down as the
+          # routine's. Only with someone home, on the schedule with no override, and no morning plan
           # today, even one saved before this run that has since ended or was
           # cancelled, since the routine has then already warmed the room.
           - variables:
@@ -1498,12 +1526,12 @@ actions:
                 {% set routine_morning = plan.kind == 'morning' or (r.kind | default('') == 'morning'
                      and rs > 0 and rs | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d')) %}
                 {{ warm_up_target if warm_up_target is not none
-                   else periods[1].temp if run == 'period-2' and p2 > 0 and 0 <= now().timestamp() - p2 <= 300
+                   else periods[1].temp if run == 'period-2' and p2 > 0 and 0 <= now().timestamp() - p2 <= learning.start_window
                      and not routine_morning and not nobody_home and on_schedule and not override_running
                    else none }}
           # Measure the morning's warm-up if the room is cool enough for the
           # thermostat to start heating (below the target plus its low
-          # threshold), has at least 0.5 degrees to rise to where it stops, and
+          # threshold), has at least learning.min_rise to rise to where it stops, and
           # no measurement is running. Saved at the end.
           - alias: Start measuring the warm-up
             if:
@@ -1511,7 +1539,7 @@ actions:
                 value_template: >-
                   {{ learn_warm_up and warm_up_target is not none and room_temp is not none
                      and room_temp < warm_up_target + low_threshold
-                     and warm_up_target + high_threshold - room_temp >= 0.5
+                     and warm_up_target + high_threshold - room_temp >= learning.min_rise
                      and (state.learn | default({})).m is not defined }}
             then:
               - variables:
