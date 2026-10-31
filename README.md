@@ -60,14 +60,14 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, with a learned 
 
 - the room is cool enough for the thermostat to heat for the period (below its temperature plus the **Heating low threshold**), so a room that is already warm is left alone;
 - no other routine plan is running, no override is running, and someone is home;
-- for period 2, there is no alarm still ahead today and no morning plan today, so alarm mornings, late holds and getting up are unchanged.
+- for period 2, there is no alarm still ahead today and no morning plan today, so alarm mornings and late holds are unchanged. If someone gets up during it, it becomes a getting-up morning, so period 2 counts its usual length from then.
 
 If the schedule group changes and the new group has no period starting then, the early start ends. Pressing Exit cancels it for that period.
 
 | Example (downstairs, learned 8 minutes plus 15 minutes per °C) | Without early start | With early start |
 | --- | --- | --- |
-| Weekend, no alarm, room 19.0 °C, period 2 at 07:00 (21 °C) | 21 °C from 07:00 | 21 °C from 06:21 |
-| Evening period at 17:00 (20 °C after 19 °C), room 19.2 °C | 20 °C from 17:00 | 20 °C from 16:40 |
+| Weekend, no alarm, room 19.0 °C, period 2 at 07:00 (21 °C) | 21 °C from 07:00 | 21 °C from 06:19 |
+| Evening period at 17:00 (20 °C after 19 °C), room 19.2 °C | 20 °C from 17:00 | 20 °C from 16:37 |
 | Evening, room already 19.5 °C | Heats from 17:00 as usual | The same, as no early start is needed |
 
 #### Learning the warm-up time
@@ -78,7 +78,7 @@ A warm-up takes a fixed **dead time** before the room starts to warm (the boiler
 
 Warm-ups of less than 0.5 °C, ones interrupted by a group change or your own override (or a cancelled routine), and ones over 4 hours are not counted. The thermostat's **HVAC action** sensor shows when it goes idle, so it must be enabled.
 
-Once two mornings have been measured, the lead is the dead time plus the minutes per degree times the rise from the room temperature now to where the thermostat will stop, kept between 10 and 180 minutes, so a colder room starts earlier. Until then an alarm morning starts at the alarm (a minute before it, while the alarm sensor still shows it) and nothing else starts early, so the first morning or two are measured from a plain start. What has been learned is kept in the State helper (`l.s`: the mornings' weight, mean rise, mean minutes, rise variance and their covariance; `l.f`: the dead time and minutes per degree worked out from them, once two mornings have been measured; `l.m`: a measurement in progress).
+Once two mornings have been measured, the lead is the dead time plus the minutes per degree times the rise from the room temperature now to where the thermostat will stop, kept between 10 and 180 minutes, so a colder room starts earlier. Until then an alarm morning starts at the alarm (5 minutes before it, while the alarm sensor still shows it) and nothing else starts early, so the first morning or two are measured from a plain start. What has been learned is kept in the State helper (`l.s`: the mornings' weight, mean rise, mean minutes, rise variance and their covariance; `l.f`: the dead time and minutes per degree worked out from them, once two mornings have been measured; `l.m`: a measurement in progress).
 
 ### Inputs
 
