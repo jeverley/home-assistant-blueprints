@@ -62,9 +62,9 @@ A period's early start is a Timer at that period's temperature until its usual s
 
 - the room is cool enough for the thermostat to heat for the period (below its temperature plus the **Heating low threshold**), so a room that is already warm is left alone;
 - no other routine plan is running, no override is running, and someone is home;
-- for period 2, there is no alarm still ahead today and no morning plan today, so alarm mornings and late holds are unchanged. If someone gets up during it, it becomes a getting-up morning, so period 2 counts its usual length from then.
+- for period 2, no alarm still ahead today will move the morning (its **Early alarm** or **Late alarm** toggle is on) and there is no morning plan today, so alarm mornings and late holds are unchanged. If someone gets up during it, it becomes a getting-up morning, so period 2 counts its usual length from then.
 
-If the schedule group changes and the new group has no period starting then, the early start ends. Pressing Exit cancels it for that period.
+If the schedule group changes and the new group has no warmer period starting then, the early start ends. Pressing Exit cancels it for that period. If your own override is running when the window opens, the early start begins once it ends, if there is still time.
 
 | Example (downstairs, learned 8 minutes plus 15 minutes per °C) | Without early start | With early start |
 | --- | --- | --- |
@@ -78,7 +78,7 @@ The routine always learns the warm-up time. It measures each morning it starts (
 
 A warm-up takes a fixed **dead time** before the room starts to warm (the boiler starting, the radiators heating up and the heat reaching the thermostat), then a number of **minutes per degree**. Each measurement notes the room temperature when period 2's temperature is applied, and the minutes until the thermostat next goes idle. The rise is to where the thermostat stopped: its target plus its **Heating high threshold** (read from the thermostat, 0.2 °C if it cannot be), or the room temperature if the target changed first. A line through recent mornings' minutes against their rises gives both: where it meets no rise is the dead time, and its slope the minutes per degree. Each new morning counts fully and earlier ones a little less (80% as much each morning), so about the last five mornings matter most and it follows the seasons. Until the mornings' rises differ by a degree or two, the slope is drawn towards a typical 15 minutes per degree, and the dead time takes up the difference, so mornings that all need about the same rise (as in a well insulated house) are still predicted well.
 
-Warm-ups of less than 0.5 °C, ones interrupted by a group change or your own override (or a cancelled routine), and ones over 4 hours are not counted. The thermostat's **HVAC action** sensor shows when it goes idle, so it must be enabled.
+Warm-ups of less than 0.5 °C, ones interrupted by a group change, your own override, a cancelled routine or a raised target (yours, or a later period's early start), and ones over 4 hours are not counted. The thermostat's **HVAC action** sensor shows when it goes idle, so it must be enabled.
 
 Once two mornings have been measured, the lead is the dead time plus the minutes per degree times the rise from the room temperature now to where the thermostat will stop, kept between 10 and 180 minutes, so a colder room starts earlier. This is only used with **Early start** on. Until then, and with it off, an alarm morning starts at the alarm (5 minutes before it, while the alarm sensor still shows it) and nothing else starts early, so the first morning or two are measured from a plain start. What has been learned is kept in the State helper (`l.s`: the mornings' weight, mean rise, mean minutes, rise variance and their covariance; `l.f`: the dead time and minutes per degree worked out from them, once two mornings have been measured; `l.m`: a measurement in progress).
 

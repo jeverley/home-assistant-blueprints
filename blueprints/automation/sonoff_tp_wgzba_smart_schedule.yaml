@@ -581,7 +581,7 @@ triggers:
       {% set f = (st.l | default({})).f | default([]) %}
       {% set r = st.r | default({}) %}
       {% set t = now().timestamp() %}
-      {% set ns = namespace(on=r.k | default('') == 'e' and 0 < r.s | default(0) | int <= t < r.w | default(0) | int,
+      {% set ns = namespace(on=r.k | default('') == 'e' and not r.c | default(0) and 0 < r.s | default(0) | int <= t < r.w | default(0) | int,
                             prev=none, open=true) %}
       {% if f | count == 2 and room is not none %}
         {% for i in range(1, 13) %}
@@ -592,7 +592,7 @@ triggers:
           {% if ns.open and tm is match('^[0-9]{2}:[0-9]{2}') %}
             {% if ns.prev is not none and temp is not none and temp > ns.prev and room < temp + low %}
               {% set at = today_at(tm[:5]).timestamp() %}
-              {% set lead = [[f[0] + f[1] * (temp + hi - room), 10] | max, 180] | min %}
+              {% set lead = ([[f[0] + f[1] * (temp + hi - room), 10] | max, 180] | min) | int %}
               {% set ns.on = ns.on or at - lead * 60 <= t <= at - 60 %}
             {% endif %}
             {% set ns.prev = temp %}
@@ -936,7 +936,7 @@ actions:
   # read within learning.read_within of the idle. Before the idle, it is
   # dropped if the group changed (also when the thermostat dropped off or Home Assistant
   # restarted), someone else takes over or cancels the routine (an Exit after
-  # the idle leaves it), the thermostat leaves its schedule or
+  # the idle leaves it), the target is raised (a later early start or you), the thermostat leaves its schedule or
   # the heating stopped and started again unseen. Times are in whole seconds,
   # like m's start.
   - alias: Learn the warm-up time
@@ -961,6 +961,7 @@ actions:
             {% set g = states[schedule_group].last_changed.timestamp() | int %}
             {% set regrouped = m[0] < g <= end + learning.regroup_margin %}
             {% set cancelled = plan_today and plan.cancelled and (not warmed or exit_pressed_at <= since) %}
+            {% set raised = (state_attr(climate_entity, 'temperature') | float(0)) > m[2] + 0.05 %}
             {% if warmed and not regrouped and not cancelled %}
               {% if rose >= learning.min_rise and elapsed <= learning.max_minutes
                     and now().timestamp() - since <= learning.read_within %}
@@ -974,7 +975,7 @@ actions:
               {% else %}
                 {% set out = kept %}
               {% endif %}
-            {% elif regrouped or cancelled or ((override_running or not on_schedule) and not routine_timer_running)
+            {% elif regrouped or cancelled or raised or ((override_running or not on_schedule) and not routine_timer_running)
                   or elapsed > learning.max_minutes
                   or (h is not none and h.state == 'heating' and since > m[0] + learning.restart) %}
               {% set out = kept %}
@@ -1152,14 +1153,17 @@ actions:
       # Each group has its own periods. A group change made by this run plans
       # the routine again when it matters: a plan is running, a morning start
       # may be due (today's alarm still ahead, or someone up), or early start
-      # is on, as the new group may have a warmer period coming up.
+      # is on and learned, as the new group may have a warmer period coming up.
       group_changed: "{{ states(schedule_group) != group_before }}"
       morning_ahead: "{{ alarm_time != '' or awake_sensors | select('is_state', 'on') | first is defined }}"
-      catch_up: "{{ run == 'catch-up' or (group_changed and (plan_active or morning_ahead or early_start_enabled)) }}"
+      catch_up: >-
+        {{ run == 'catch-up' or (group_changed and (plan_active or morning_ahead
+           or (early_start_enabled and (state.learn | default({})).f is defined))) }}
   # Runs that can start, continue or end a routine plan it. An override-ended
   # run carries on only while still Idle: replacing our own Timer passes
-  # through Idle, and the run that queues needs nothing. Getting up and
-  # bedtime runs only matter while their feature is on.
+  # through Idle, and the run that queues needs nothing. With early start on,
+  # it can also start an early start whose window opened during the override.
+  # Getting up and bedtime runs only matter while their feature is on.
   - alias: Plan the routine
     if:
       - condition: template
@@ -1167,7 +1171,8 @@ actions:
           {{ catch_up or run in ['early-alarm', 'late-alarm', 'new-day', 'period-2', 'early-start']
              or (run == 'getting-up' and (getting_up_enabled or (plan_active and plan.kind == 'bedtime')))
              or (run == 'bedtime' and bedtime_enabled)
-             or (plan_active and run == 'override-ended' and is_state(override_state, 'Idle')) }}
+             or (plan_active and run == 'override-ended' and is_state(override_state, 'Idle'))
+             or (early_start_enabled and run == 'override-ended' and is_state(override_state, 'Idle')) }}
     then:
       # The selects show the last fetched schedule. It is out of date when no
       # fetch is recorded, they show another day, the group changed after the
@@ -1323,6 +1328,15 @@ actions:
               {% set p2 = today_at(periods[1].time) %}
               {{ p2 < start and now() >= p2 - timedelta(minutes=1) and (start - now()).total_seconds() >= min_stage }}
             {% else %}{{ false }}{% endif %}
+          # Today's alarm will move the morning: it is still ahead, its start is
+          # today, and the toggle for its side of period 2 (Early alarm before,
+          # Late alarm after) is on. With that toggle off nothing moves the
+          # morning, so period 2 can start early instead.
+          alarm_moves_morning: >-
+            {% if alarm_time == '' or alarm_start == '' or periods | count < 2 %}{{ false }}{% else %}
+            {% set early = (alarm_start | as_datetime) <= today_at(periods[1].time) %}
+            {{ (early and early_alarm_enabled) or (not early and late_alarm_enabled) }}
+            {% endif %}
           # The routine has warmed the room for a morning today: a morning plan,
           # or an early start for period 2, now or saved before this run (one
           # that was cancelled too). A plan is cleared once it ends, so an ended
@@ -1354,7 +1368,7 @@ actions:
                 {% set at = today_at(p.time).timestamp() | int %}
                 {% if ns.out is none and p.temp is not none and q.temp is not none and p.temp > q.temp
                       and room_temp < p.temp + low_threshold %}
-                  {% set lead = [[f[0] + f[1] * (p.temp + high_threshold - room_temp), 10] | max, 180] | min %}
+                  {% set lead = ([[f[0] + f[1] * (p.temp + high_threshold - room_temp), 10] | max, 180] | min) | int %}
                   {% if at - lead * 60 <= now().timestamp() <= at - min_stage %}
                     {% set ns.out = {'n': i + 1, 'at': at, 'temp': p.temp} %}
                   {% endif %}
@@ -1457,16 +1471,18 @@ actions:
                       plan_active: true
               # Early start: a period warmer than the one before starts now, so
               # the room is warm when it begins. Period 2 is left to the alarm
-              # and getting up when either is involved today. wake is the
-              # period's usual start.
+              # and getting up when either is involved today. A cancelled
+              # morning is kept, not replaced, until its wake has passed, so it
+              # cannot start again. wake is the period's usual start.
               - alias: Early start for a warmer period
                 conditions:
                   - alias: An early start is due
                     condition: template
                     value_template: >-
-                      {{ not plan_active and early_period is not none and (catch_up or run == 'early-start')
-                         and not (early_period.n == 2 and (alarm_time != '' or routine_morning_today))
-                         and not (plan.kind == 'early' and plan.cancelled and plan.wake == early_period.at) }}
+                      {{ not plan_active and early_period is not none and (catch_up or run in ['early-start', 'override-ended'])
+                         and not (early_period.n == 2 and (alarm_moves_morning or routine_morning_today))
+                         and not (plan.kind == 'early' and plan.cancelled and plan.wake == early_period.at)
+                         and not (plan_today and plan.cancelled and plan.kind == 'morning' and now().timestamp() < plan.wake) }}
                   - alias: No override running
                     condition: template
                     value_template: "{{ not override_running }}"
@@ -1498,8 +1514,8 @@ actions:
               #   period 4.
               #   Bedtime: the setback until its usual start.
               #   Early start: the period starting at wake, at its temperature,
-              #   until its usual start. None if no period starts then (the
-              #   group changed).
+              #   until its usual start. None if no period warmer than the one
+              #   before starts then (the group changed).
               # The stage is the first phase with at least a minute left, the
               # shortest override period. A Timer rounded to whole minutes can end a
               # little early, and this moves on to the next phase rather than ending.
@@ -1525,8 +1541,10 @@ actions:
                 {% elif plan_active and plan.kind == 'bedtime' and setback.until != '' %}
                   {% set ns.ph = [{'temp': setback.temp, 'until': (setback.until | as_datetime).timestamp()}] %}
                 {% elif plan_active and plan.kind == 'early' %}
-                  {% for p in periods if today_at(p.time).timestamp() | int == plan.wake %}
-                    {% set ns.ph = [{'temp': p.temp, 'until': plan.wake}] %}
+                  {% for i in range(1, periods | count) if today_at(periods[i].time).timestamp() | int == plan.wake
+                       and periods[i].temp is not none and periods[i - 1].temp is not none
+                       and periods[i].temp > periods[i - 1].temp %}
+                    {% set ns.ph = [{'temp': periods[i].temp, 'until': plan.wake}] %}
                   {% endfor %}
                 {% endif %}
                 {% set o = ns.ph | selectattr('until', 'ge', t + min_stage) | first | default(none) %}
