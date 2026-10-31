@@ -349,10 +349,14 @@ variables:
   room_temp: >-
     {{ state_attr(climate_entity, 'current_temperature') | float(none) if climate_entity != '' else none }}
   # The thermostat stops heating this far above its target (its heating high
-  # threshold), 0.2 if it cannot be read.
+  # threshold), 0.2 if it cannot be read, and starts again this far from it
+  # (its heating low threshold, negative), -0.6 if it cannot be read.
   high_threshold: >-
     {% set e = thermostat_entities | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
     {{ states(e) | float(0.2) if e != '' else 0.2 }}
+  low_threshold: >-
+    {% set e = thermostat_entities | select('match', '^number\\..*_heating_low_threshold$') | first | default('') %}
+    {{ states(e) | float(-0.6) if e != '' else -0.6 }}
   heated_areas: !input heated_areas
   follow_occupancy: !input follow_occupancy
   early_alarm_enabled: !input early_alarm_enabled
@@ -664,6 +668,15 @@ actions:
           HVAC action sensor, while learning the warm-up time). Check they are enabled
           and their entity IDs still end with their default names.
         error: true
+  - alias: Stop if the State helper is too short
+    if:
+      - condition: template
+        value_template: "{{ state_attr(state_helper, 'max') | int(255) < 255 }}"
+    then:
+      - stop: >-
+          The State helper's maximum length must be 255. Change it under Settings >
+          Devices & services > Helpers.
+        error: true
   # The thermostat is not ready yet (at startup or after dropping off), so
   # nothing is written, fetched or decided. Checked when the run starts, so
   # queued runs and Run actions are covered too.
@@ -834,15 +847,18 @@ actions:
   # and the target) ends when the thermostat goes idle (Warmed up), on the
   # first run after that. It runs before a run defers, so a deferred Warmed up
   # run still counts. The room rose to where the thermostat stops (the target
-  # plus its high threshold, exact since it stops by its own reading), or to
-  # the room temperature when the target changed. The rise and the minutes
+  # plus its high threshold, exact since it stops by its own reading) when the
+  # room is within 0.3 degrees of it (its reading lags, and the room keeps
+  # rising after the heating stops), or else to the room temperature (the
+  # target dropped first). The rise and the minutes
   # taken are added to learn.s, the weighted mean and spread of recent
   # mornings, each earlier morning counting 80% as much as before. It is
   # dropped if the room rose less than 0.5 degrees, took over 4 hours, or was
   # not read within 10 minutes of the idle (the room keeps rising after the
   # heating stops). Before the idle, it is dropped if
   # the group changed (also when the thermostat dropped off or Home Assistant
-  # restarted), someone else takes over or cancels the routine, the thermostat leaves its schedule or
+  # restarted), someone else takes over or cancels the routine (an Exit after
+  # the idle leaves it), the thermostat leaves its schedule or
   # the heating stopped and started again unseen. Times are in whole seconds,
   # like m's start.
   - alias: Learn the warm-up time
@@ -861,12 +877,12 @@ actions:
             {% set warmed = h is not none and h.state == 'idle' and since > m[0] %}
             {% set end = since if warmed else now().timestamp() %}
             {% set elapsed = (end - m[0]) / 60 %}
-            {% set target = state_attr(climate_entity, 'temperature') | float(none) %}
-            {% set top = m[2] + high_threshold if target is not none and (target - m[2]) | abs < 0.05 else room_temp %}
+            {% set stop = m[2] + high_threshold %}
+            {% set top = stop if room_temp is not none and room_temp >= stop - 0.3 else room_temp %}
             {% set rose = top - m[1] if top is not none else 0 %}
             {% set g = states[schedule_group].last_changed.timestamp() | int %}
             {% set regrouped = m[0] < g <= end + 60 %}
-            {% set cancelled = plan_today and plan.cancelled %}
+            {% set cancelled = plan_today and plan.cancelled and (not warmed or exit_pressed_at <= since) %}
             {% if warmed and not regrouped and not cancelled %}
               {% if rose >= 0.5 and elapsed <= 240 and now().timestamp() - since <= 600 %}
                 {% set w = f[0] * 0.8 %}
@@ -1112,7 +1128,7 @@ actions:
           # held late, and later periods keep their usual times.
           morning_shifts: >-
             {{ periods | count >= 4
-               and (today_at(periods[2].time) - today_at(periods[1].time)).total_seconds() <= morning_max }}
+               and 0 < (today_at(periods[2].time) - today_at(periods[1].time)).total_seconds() <= morning_max }}
           # Period 2 is set and warmer than period 1 (and period 3 is set, if the
           # morning shifts), so starting it early or late changes something.
           p2_warmer: >-
@@ -1461,14 +1477,16 @@ actions:
                    else periods[1].temp if run == 'period-2' and p2 > 0 and 0 <= now().timestamp() - p2 <= 300
                      and not routine_morning and not nobody_home and on_schedule and not override_running
                    else none }}
-          # Measure the morning's warm-up if the room has at least 0.5 degrees
-          # to rise to where the thermostat stops and no measurement is
-          # running. Saved at the end.
+          # Measure the morning's warm-up if the room is cool enough for the
+          # thermostat to start heating (below the target plus its low
+          # threshold), has at least 0.5 degrees to rise to where it stops, and
+          # no measurement is running. Saved at the end.
           - alias: Start measuring the warm-up
             if:
               - condition: template
                 value_template: >-
                   {{ learn_warm_up and warm_up_target is not none and room_temp is not none
+                     and room_temp < warm_up_target + low_threshold
                      and warm_up_target + high_threshold - room_temp >= 0.5
                      and (state.learn | default({})).m is not defined }}
             then:
