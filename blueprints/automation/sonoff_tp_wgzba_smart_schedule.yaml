@@ -474,10 +474,10 @@ triggers:
       {% set t2 = ents | select('match', '^number\\..*_schedule_period_2_temp$') | first | default('') %}
       {% set raw = states(state_helper) %}
       {% set st = raw | from_json(default={}) if raw is match('^\\{') else {} %}
-      {% set l = st.learn | default({}) %}
-      {% set r = st.routine | default({}) %}
-      {% set rs = r.start | default(0) | int %}
-      {% set started = r.kind | default('') == 'morning' and 0 < rs <= now().timestamp()
+      {% set l = st.l | default({}) %}
+      {% set r = st.r | default({}) %}
+      {% set rs = r.s | default(0) | int %}
+      {% set started = r.k | default('') == 'm' and 0 < rs <= now().timestamp()
            and rs | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d') %}
       {% set room = state_attr(c, 'current_temperature') | float(none) if c != '' else none %}
       {% set p2t = states(t2) | float(none) if t2 != '' else none %}
@@ -503,7 +503,7 @@ triggers:
       {% set c = ents | select('match', '^climate\\.') | first | default('') %}
       {% set t2 = ents | select('match', '^number\\..*_schedule_period_2_temp$') | first | default('') %}
       {% set raw = states(state_helper) %}
-      {% set l = (raw | from_json(default={})).learn | default({}) if raw is match('^\\{') else {} %}
+      {% set l = (raw | from_json(default={})).l | default({}) if raw is match('^\\{') else {} %}
       {% set room = state_attr(c, 'current_temperature') | float(none) if c != '' else none %}
       {% set p2t = states(t2) | float(none) if t2 != '' else none %}
       {% set th = ents | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
@@ -568,7 +568,7 @@ triggers:
       {% set h = device_entities(thermostat_device)
            | select('match', '^sensor\\..*_hvac_action$') | first | default('') %}
       {% set raw = states(state_helper) %}
-      {% set m = ((raw | from_json(default={})).learn | default({})).m | default([]) if raw is match('^\\{') else [] %}
+      {% set m = ((raw | from_json(default={})).l | default({})).m | default([]) if raw is match('^\\{') else [] %}
       {{ m | count == 3 and h != '' and is_state(h, 'idle') and states[h].last_changed.timestamp() > m[0] }}
   # The thermostat is back on its schedule after a hand adjustment (at the
   # next period) or manual mode, so the routine picks up where it left off.
@@ -601,7 +601,7 @@ triggers:
       {% set watched = expand((ents | select('match', '^select\\..*_schedule_operating_day$') | list)
            + (ents | select('match', '^(select|number)\\..*_schedule_period_[0-9]+_(time|temp)$') | list)) %}
       {% set raw = states(state_helper) %}
-      {% set f = (raw | from_json(default={})).fetch | default(0) | int if raw is match('^\\{') else 0 %}
+      {% set f = (raw | from_json(default={})).f | default(0) | int if raw is match('^\\{') else 0 %}
       {% set f = f if f <= now().timestamp() else 0 %}
       {% set cut = [now().timestamp() - 300, f + 60] | max %}
       {% set ts = watched | map(attribute='last_changed') | map('as_timestamp') | select('gt', cut) | list %}
@@ -642,7 +642,7 @@ triggers:
     id: geofencing-timeout
     value_template: >-
       {% set raw = states(state_helper) %}
-      {% set a = (raw | from_json(default={})).arrival | default(0) | int if raw is match('^\\{') else 0 %}
+      {% set a = (raw | from_json(default={})).a | default(0) | int if raw is match('^\\{') else 0 %}
       {{ a > 0 and now().timestamp() >= a + geofencing_timeout | int * 60 }}
   # Refreshes the fetched schedule for the new day, for the late start trigger.
   - alias: New day
@@ -697,15 +697,31 @@ actions:
       #   fetch: when our last fetch started.
       #   routine: the plan, see below.
       #   arrival: when geofencing pre-heating started.
+      #   learn: the learned warm-up time, see Learn the warm-up time.
       # Times are Unix epoch seconds, 0 when unset. The helper is the only
       # copy: state holds its keys other than routine, plan holds the routine,
       # and the save step writes both back before any thermostat call that
       # depends on them and at the end. Writing an unchanged value changes
       # nothing. A thermostat call that fails stops the run, and what was
-      # written lets a later run pick up from there.
+      # written lets a later run pick up from there. The helper stores each key
+      # as one letter (f, r, a, l, and in the plan k, s, w, u, t, p, x and c,
+      # with kind m or b and cancelled 1) to fit its 255 characters, and stored
+      # reads them back as these names, along with the longer names saved by
+      # earlier versions.
       stored: >-
         {% set raw = states(state_helper) %}
-        {{ raw | from_json(default={}) if raw is match('^\\{') else {} }}
+        {% set j = raw | from_json(default={}) if raw is match('^\\{') else {} %}
+        {% set names = {'k': 'kind', 's': 'start', 'w': 'wake', 'u': 'until', 't': 'temp', 'p': 'applied',
+                        'x': 'exited', 'c': 'cancelled', 'timer_until': 'until', 'timer_temp': 'temp',
+                        'timer_applied': 'applied', 'timer_exited': 'exited'} %}
+        {% set ns = namespace(r={}) %}
+        {% for k, v in (j.r | default(j.routine | default({}))).items() %}
+          {% set ns.r = dict(ns.r, **{names.get(k, k): v}) %}
+        {% endfor %}
+        {% set kinds = {'m': 'morning', 'b': 'bedtime'} %}
+        {% set r = dict(ns.r, kind=kinds.get(ns.r.kind, ns.r.kind)) if ns.r.kind is defined else ns.r %}
+        {{ {'fetch': j.f | default(j.fetch | default(0)), 'arrival': j.a | default(j.arrival | default(0)),
+            'routine': r, 'learn': j.l | default(j.learn | default({}))} }}
       state: >-
         {% set ns = namespace(out={}) %}
         {% for k, v in stored.items() if k != 'routine' %}{% set ns.out = dict(ns.out, **{k: v}) %}{% endfor %}
@@ -719,17 +735,14 @@ actions:
       # whether the stage has changed), and when we pressed Apply (to tell ours
       # from someone else's). exited is when we last ended our own Timer, so
       # that Exit press is not taken for someone cancelling. A cancelled plan is
-      # kept, marked, so it does not start again that day. Plans saved before
-      # the keys were shortened are read too.
+      # kept, marked, so it does not start again that day.
       plan: >-
-        {% set r = stored.routine | default({}) %}
+        {% set r = stored.routine %}
         {% set start = r.start | default(0) | int %}
         {{ {'kind': r.kind | default(''), 'start': start, 'wake': r.wake | default(start) | int,
-            'until': r.until | default(r.timer_until | default(0)) | int,
-            'temp': r.temp | default(r.timer_temp | default(none)),
-            'applied': r.applied | default(r.timer_applied | default(0)) | int,
-            'exited': r.exited | default(r.timer_exited | default(0)) | int,
-            'cancelled': r.cancelled | default(false)} }}
+            'until': r.until | default(0) | int, 'temp': r.temp | default(none),
+            'applied': r.applied | default(0) | int, 'exited': r.exited | default(0) | int,
+            'cancelled': r.cancelled | default(false) | bool} }}
       # The schedule is being edited: operating day or period entities changed
       # in the last 5 minutes and after our last fetch (allowing 60 s for its
       # own changes), and not as a burst. A fetch replaces the selects, so
@@ -910,10 +923,11 @@ actions:
       - condition: template
         value_template: "{{ schedule_editing }}"
     then:
-      # The plan is saved without its unset fields (the plan variable reads
-      # them back as their defaults), so it fits the helper's maximum length.
-      # In the rare case it still does not, the warm-up measurement in progress
-      # is dropped rather than the save failing.
+      # Saved with one-letter keys (see stored), and the plan without its unset
+      # fields (the plan variable reads them back as their defaults), so it
+      # fits the helper's maximum length. In the rare case it still does not,
+      # the warm-up measurement in progress is dropped rather than the save
+      # failing.
       - &save_state
         alias: Save the state
         action: input_text.set_value
@@ -921,14 +935,17 @@ actions:
           entity_id: "{{ state_helper }}"
         data:
           value: >-
+            {% set short = {'kind': 'k', 'start': 's', 'wake': 'w', 'until': 'u', 'temp': 't',
+                            'applied': 'p', 'exited': 'x', 'cancelled': 'c'} %}
             {% set ns = namespace(r={}) %}
             {% for k, v in plan.items() if plan.kind != '' and (v or k in ['kind', 'start']) %}
-              {% set ns.r = dict(ns.r, **{k: v}) %}
+              {% set ns.r = dict(ns.r, **{short[k]: v[:1] if k == 'kind' else 1 if v is sameas true else v}) %}
             {% endfor %}
-            {% set out = dict(state, routine=ns.r) %}
-            {% set l = out.learn | default({}) %}
-            {{ (out if out | to_json | length <= state_attr(state_helper, 'max') | int(255)
-                else dict(out, learn={'s': l.s} if l.s is defined else {})) | to_json }}
+            {% set l = state.learn | default({}) %}
+            {% set out = {'f': state.fetch | default(0), 'a': state.arrival | default(0), 'r': ns.r} %}
+            {% set full = dict(out, l=l) if l else out %}
+            {{ (full if full | to_json | length <= state_attr(state_helper, 'max') | int(255)
+                else dict(out, l={'s': l.s}) if l.s is defined else out) | to_json }}
       - stop: >-
           Deferred: the schedule is being edited in the UI. A catch-up runs 5 minutes
           after the last change.
