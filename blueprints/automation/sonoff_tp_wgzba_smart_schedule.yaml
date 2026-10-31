@@ -286,7 +286,7 @@ blueprint:
             Starts the heating early by the learned warm-up time: for each period warmer than the one before, and for **Early alarm** mornings and late holds, before the alarm.
 
             Needs a learned warm-up time (two mornings), so until then everything starts at its usual time or at the alarm.
-          default: false
+          default: true
           selector:
             boolean: {}
 

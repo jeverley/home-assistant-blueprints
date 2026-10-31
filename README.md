@@ -34,7 +34,7 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
   - **Someone up early:** when the awake sensor turns on (and stays on for the **Getting up delay**, if set), the wake-up starts now, as if the alarm were early. With no alarm set, this still starts the morning early. During a late hold, it ends the hold and, with 4 or more periods and a period 2 of up to 3 hours, runs period 2 for its usual length from now. Leave the awake sensors empty to only follow the alarm.
   - **Bedtime:** when the awake sensor has been off for the **Bedtime delay** during the period just before the evening setback (the last period with 3 or more periods, or period 1 again at midnight with 2), the setback starts early as a Timer at its temperature until its usual start. If someone gets up again before then, the Timer ends. Like the morning, bedtime needs someone home (the home zone or any area) rather than someone in an area, since people asleep may not show on occupancy sensors.
   - Each of these (early alarm, late alarm, wake-up and bedtime) has its own toggle.
-  - **Early start** (off by default): each period warmer than the one before, and the alarm morning, starts early by the learned warm-up time, so the room is warm when it begins. See [Early start](#early-start) below.
+  - **Early start** (on by default): each period warmer than the one before, and the alarm morning, starts early by the learned warm-up time, so the room is warm when it begins. See [Early start](#early-start) below.
 
   Each stage is a Timer override on the thermostat, so it keeps running if Home Assistant restarts.
 - **Skips:** alarm-based changes only happen when the alarm is today; a wake-up works with no alarm or a later one. The wake-up is skipped when period 2 is not warmer than period 1, when a schedule temperature cannot be read, when an override is already running, or when nobody is home.
@@ -90,14 +90,13 @@ Once two mornings have been measured, the lead is the dead time plus the minutes
 | Occupancy | follow occupancy (on), heated areas (none), occupied delay (1 min), empty delay (5 min) |
 | Geofencing | away schedule (on), home zone (default `zone.home`), geofencing distance (10 km, 0 for arriving sensors only), pre-heat schedule group (Schedule 2), geofencing timeout (45 min), Proximity devices (found from the home zone), arriving sensors (none) |
 | Routine | next waking alarm sensor (optional, none), early alarm (on), late alarm (on), awake sensors (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
-| Early start | early start (off) |
+| Early start | early start (on) |
 
 ### Example configurations
 
 | Setting | Bedroom | Living room |
 | --- | --- | --- |
 | Heated areas | Bedroom | Living room |
-| Early start | Off | On |
 | Awake sensors | Someone up helper | Someone up helper |
 | Bedtime | Off | On |
 | Pre-heat schedule group | Schedule 2 | Schedule 1 |
