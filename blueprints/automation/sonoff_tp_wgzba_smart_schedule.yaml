@@ -274,12 +274,15 @@ blueprint:
     early_start:
       name: Early start
       icon: mdi:clock-fast
-      description: Starts the heating early, so it's warm when it's wanted. It learns how long the heating takes to warm up from the first mornings.
+      description: Starts the heating early, so it's warm when it's wanted.
       collapsed: true
       input:
         early_start_enabled:
           name: Early start
-          description: Starts the heating early by the learned warm-up time, so it's warm when it's wanted rather than warming up from then.
+          description: |
+            Starts each warmer period, and the morning, early by how long the heating takes to warm up, learned from the first mornings.
+
+            When off, the heating starts at the usual time.
           default: true
           selector:
             boolean: {}
