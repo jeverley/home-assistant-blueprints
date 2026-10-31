@@ -375,11 +375,13 @@ variables:
   #   burst_span: changes this close together are a restart or rejoin.
   #   min_stage: the shortest override period, so the shortest stage.
   #   exit_window: our own Exit press lands within this after we record it.
+  #   morning_max: the longest period 2 that counts as a morning.
   fetch_grace: 60
   editing_window: 300
   burst_span: 30
   min_stage: 60
   exit_window: 60
+  morning_max: 10800
   # Nobody is home: the home zone is empty, and no area is occupied or has
   # been for the empty delay. The zone is checked first, so the areas are only
   # looked at when it is empty. Area sensors are occupancy sensors in any
@@ -1067,10 +1069,14 @@ actions:
               {% endif %}
             {% endfor %}
             {{ ns.out }}
-          # With 4 or more periods, period 3 is daytime heating, so an early start
-          # shifts the morning earlier. With 2 or 3, period 3 (if any) is the
-          # evening setback, so period 2 is only started early.
-          morning_shifts: "{{ periods | count >= 4 }}"
+          # With 4 or more periods and a period 2 of at most 3 hours, period 2 is
+          # the morning and period 3 daytime heating, so the morning shifts with
+          # the alarm. Otherwise period 3 (if any) is another part of the day,
+          # such as the evening, so period 2 is only started early or period 1
+          # held late, and later periods keep their usual times.
+          morning_shifts: >-
+            {{ periods | count >= 4
+               and (today_at(periods[2].time) - today_at(periods[1].time)).total_seconds() <= morning_max }}
           # Period 2 is set and warmer than period 1 (and period 3 is set, if the
           # morning shifts), so starting it early or late changes something.
           p2_warmer: >-
@@ -1248,17 +1254,17 @@ actions:
               # end.
               warm_up_target: "{{ none }}"
               # What our Timer should be now, as {temp, until}, or none when the
-              # schedule should carry on. The routine's phases, in order (with 4 or
-              # more periods, D2 is period 2's usual length). The start decides
+              # schedule should carry on. The routine's phases, in order (when the
+              # morning shifts, D2 is period 2's usual length). The start decides
               # whether the morning is early or late. Period 2's length counts
               # from the wake, so the room is warm when people get up and stays
               # warm as long as usual:
-              #   Starting at or before period 2: with 4 or more periods, period
+              #   Starting at or before period 2: when the morning shifts, period
               #   2 until the wake plus D2 (never past period 4), then period 3
-              #   until its usual start. With 2 or 3, period 2 until its usual
+              #   until its usual start. Otherwise period 2 until its usual
               #   start.
-              #   Starting after period 2: period 1 until the start. Then, with 4
-              #   or more periods, period 2 until the wake plus D2, never past
+              #   Starting after period 2: period 1 until the start. Then, when
+              #   the morning shifts, period 2 until the wake plus D2, never past
               #   period 4.
               #   Bedtime: the setback until its usual start.
               # The stage is the first phase with at least a minute left, the
