@@ -209,20 +209,6 @@ blueprint:
             entity:
               filter:
                 - domain: sensor
-        lead_time:
-          name: Lead time
-          description: |
-            The time before the alarm when the morning heating starts.
-
-            With **Learn warm-up time** on, used until two mornings have been measured.
-          default: 30
-          selector:
-            number:
-              min: 5
-              max: 120
-              step: 5
-              unit_of_measurement: min
-              mode: box
         learn_warm_up:
           name: Learn warm-up time
           description: |
@@ -232,6 +218,18 @@ blueprint:
           default: true
           selector:
             boolean: {}
+        lead_time:
+          name: Default lead time
+          description: |
+            Starts the morning heating this long before the alarm until the warm-up time has been learned (two mornings), or always with **Learn warm-up time** off.
+          default: 30
+          selector:
+            number:
+              min: 5
+              max: 120
+              step: 5
+              unit_of_measurement: min
+              mode: box
         early_alarm_enabled:
           name: Early alarm
           description: Starts the morning heating early when the alarm is earlier than the schedule.
@@ -493,10 +491,10 @@ triggers:
            | select('match', '^select\\..*_schedule_group$') | first | default('') %}
       {{ e != '' and has_value(e) }}
   # The lead is the learned warm-up time once two mornings have been measured,
-  # otherwise Lead time. Keep this in step with the lead_minutes variable,
-  # which explains it, and the Late start hold due trigger. A learned lead
-  # shrinks as the room warms, so once today's morning has started this stays
-  # true until the alarm, rather than turning false and firing again.
+  # otherwise Default lead time. Keep this in step with the lead_minutes
+  # variable, which explains it, and the Late start hold due trigger. A learned
+  # lead shrinks as the room warms, so once today's morning has started this
+  # stays true until the alarm, rather than turning false and firing again.
   - alias: Early start window opened
     trigger: template
     id: early-alarm
@@ -1237,8 +1235,8 @@ actions:
           # (learn.f, see Fit the warm-up time): the dead time plus the minutes
           # per degree times the rise from the room temperature now to where the
           # thermostat stops (period 2's temperature plus its high threshold),
-          # kept within 10 and 180. Otherwise Lead time. Keep this in step with
-          # the alarm triggers.
+          # kept within 10 and 180. Otherwise Default lead time. Keep this in
+          # step with the alarm triggers.
           lead_minutes: >-
             {% set f = (state.learn | default({})).f | default([]) %}
             {% set p2t = periods[1].temp if periods | count >= 2 else none %}
