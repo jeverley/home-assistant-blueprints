@@ -90,7 +90,7 @@ Once two mornings have been measured, the lead is the dead time plus the minutes
 | Occupancy | follow occupancy (on), heated areas (none), occupied delay (1 min), empty delay (5 min) |
 | Geofencing | away schedule (on), home zone (default `zone.home`), geofencing distance (10 km, 0 for arriving sensors only), pre-heat schedule group (Schedule 2), geofencing timeout (45 min), Proximity devices (found from the home zone), arriving sensors (none) |
 | Routine | next waking alarm sensor (optional, none), early alarm (on), late alarm (on), awake sensors (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
-| Early start | early start (on) |
+| Learning | early start (on) |
 
 ### Example configurations
 
