@@ -274,18 +274,12 @@ blueprint:
     early_start:
       name: Early start
       icon: mdi:clock-fast
-      description: |
-        Always learns how long each room takes to warm up, from the mornings the routine or the thermostat's own schedule starts, allowing for how cold the room is.
-
-        With **Early start** off, periods start at their usual time and alarm mornings at the alarm. With it on, both start that long earlier, so the room is warm when they begin.
+      description: Starts the heating early, so the room is warm when it's wanted. It learns how long each room takes to warm up from the first mornings.
       collapsed: true
       input:
         early_start_enabled:
           name: Early start
-          description: |
-            Starts the heating early by the learned warm-up time: for each period warmer than the one before, and for **Early alarm** mornings and late holds, before the alarm.
-
-            Needs a learned warm-up time (two mornings), so until then everything starts at its usual time or at the alarm.
+          description: Starts the heating early by the learned warm-up time, so the room is warm when it's wanted rather than warming from then.
           default: true
           selector:
             boolean: {}
