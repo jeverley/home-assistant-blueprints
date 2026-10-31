@@ -348,6 +348,15 @@ variables:
     {{ thermostat_entities | select('match', '^sensor\\..*_hvac_action$') | first | default('') }}
   room_temp: >-
     {{ state_attr(climate_entity, 'current_temperature') | float(none) if climate_entity != '' else none }}
+  # The thermostat stops heating this far above its target (its heating high
+  # threshold), 0.2 if it cannot be read, and starts again this far from it
+  # (its heating low threshold, negative), -0.6 if it cannot be read.
+  high_threshold: >-
+    {% set e = thermostat_entities | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
+    {{ states(e) | float(0.2) if e != '' else 0.2 }}
+  low_threshold: >-
+    {% set e = thermostat_entities | select('match', '^number\\..*_heating_low_threshold$') | first | default('') %}
+    {{ states(e) | float(-0.6) if e != '' else -0.6 }}
   heated_areas: !input heated_areas
   follow_occupancy: !input follow_occupancy
   early_alarm_enabled: !input early_alarm_enabled
@@ -375,11 +384,13 @@ variables:
   #   burst_span: changes this close together are a restart or rejoin.
   #   min_stage: the shortest override period, so the shortest stage.
   #   exit_window: our own Exit press lands within this after we record it.
+  #   morning_max: the longest period 2 that counts as a morning.
   fetch_grace: 60
   editing_window: 300
   burst_span: 30
   min_stage: 60
   exit_window: 60
+  morning_max: 10800
   # Nobody is home: the home zone is empty, and no area is occupied or has
   # been for the empty delay. The zone is checked first, so the areas are only
   # looked at when it is empty. Area sensors are occupancy sensors in any
@@ -449,8 +460,8 @@ triggers:
            | select('match', '^select\\..*_schedule_group$') | first | default('') %}
       {{ e != '' and has_value(e) }}
   # The lead is the learned warm-up time once two mornings have been measured,
-  # otherwise Lead time. Keep this in step with the lead_minutes variable and
-  # the Late start hold due trigger. A learned lead shrinks as the room warms,
+  # otherwise Lead time. Keep this in step with the lead_minutes variable,
+  # which explains it, and the Late start hold due trigger. A learned lead shrinks as the room warms,
   # so once today's morning has started this stays true until the alarm,
   # rather than turning false and firing again.
   - alias: Early start window opened
@@ -470,8 +481,13 @@ triggers:
            and rs | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d') %}
       {% set room = state_attr(c, 'current_temperature') | float(none) if c != '' else none %}
       {% set p2t = states(t2) | float(none) if t2 != '' else none %}
-      {% set lead = ([[l.mpd | default(0) | float(0) * (p2t - room), 10] | max, 180] | min) | int
-           if learn_warm_up and l.n | default(0) | int >= 2 and room is not none and p2t is not none
+      {% set th = ents | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
+      {% set hi = states(th) | float(0.2) if th != '' else 0.2 %}
+      {% set f = l.s | default([0, 0, 0, 0, 0]) %}
+      {% set rate = [[(f[0] * f[4] + 60) / (f[0] * f[3] + 4), 3] | max, 60] | min %}
+      {% set dead = [[f[2] - rate * f[1], 0] | max, 120] | min %}
+      {% set lead = ([[dead + rate * (p2t + hi - room), 10] | max, 180] | min) | int
+           if learn_warm_up and f[0] >= 1.5 and room is not none and p2t is not none
            else lead_time | int %}
       {{ a is not none and now() < a and (started or a - timedelta(minutes=lead) <= now()) }}
   # Reads the period 2 time from the last fetch, so it can fire just before
@@ -490,8 +506,13 @@ triggers:
       {% set l = (raw | from_json(default={})).learn | default({}) if raw is match('^\\{') else {} %}
       {% set room = state_attr(c, 'current_temperature') | float(none) if c != '' else none %}
       {% set p2t = states(t2) | float(none) if t2 != '' else none %}
-      {% set lead = ([[l.mpd | default(0) | float(0) * (p2t - room), 10] | max, 180] | min) | int
-           if learn_warm_up and l.n | default(0) | int >= 2 and room is not none and p2t is not none
+      {% set th = ents | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
+      {% set hi = states(th) | float(0.2) if th != '' else 0.2 %}
+      {% set f = l.s | default([0, 0, 0, 0, 0]) %}
+      {% set rate = [[(f[0] * f[4] + 60) / (f[0] * f[3] + 4), 3] | max, 60] | min %}
+      {% set dead = [[f[2] - rate * f[1], 0] | max, 120] | min %}
+      {% set lead = ([[dead + rate * (p2t + hi - room), 10] | max, 180] | min) | int
+           if learn_warm_up and f[0] >= 1.5 and room is not none and p2t is not none
            else lead_time | int %}
       {% set p = ents | select('match', '^select\\..*_schedule_period_2_time$') | first | default('') %}
       {% set s = states(p) if p != '' else '' %}
@@ -646,6 +667,15 @@ actions:
           Could not find every schedule and override entity on the thermostat (and its
           HVAC action sensor, while learning the warm-up time). Check they are enabled
           and their entity IDs still end with their default names.
+        error: true
+  - alias: Stop if the State helper is too short
+    if:
+      - condition: template
+        value_template: "{{ state_attr(state_helper, 'max') | int(255) < 255 }}"
+    then:
+      - stop: >-
+          The State helper's maximum length must be 255. Change it under Settings >
+          Devices & services > Helpers.
         error: true
   # The thermostat is not ready yet (at startup or after dropping off), so
   # nothing is written, fetched or decided. Checked when the run starts, so
@@ -816,13 +846,19 @@ actions:
   # A warm-up measurement (learn.m: when it started, the room temperature then
   # and the target) ends when the thermostat goes idle (Warmed up), on the
   # first run after that. It runs before a run defers, so a deferred Warmed up
-  # run still counts. The minutes taken per degree the room actually rose
-  # (whichever target stopped it) move the learned value 30% of the way, or
-  # set it the first time. It is dropped if the room rose less than 1 degree,
-  # took over 4 hours, or was not read within 10 minutes of the idle (the room
-  # keeps rising after the heating stops). Before the idle, it is dropped if
+  # run still counts. The room rose to where the thermostat stops (the target
+  # plus its high threshold, exact since it stops by its own reading) when the
+  # room is within 0.3 degrees of it (its reading lags, and the room keeps
+  # rising after the heating stops), or else to the room temperature (the
+  # target dropped first). The rise and the minutes
+  # taken are added to learn.s, the weighted mean and spread of recent
+  # mornings, each earlier morning counting 80% as much as before. It is
+  # dropped if the room rose less than 0.5 degrees, took over 4 hours, or was
+  # not read within 10 minutes of the idle (the room keeps rising after the
+  # heating stops). Before the idle, it is dropped if
   # the group changed (also when the thermostat dropped off or Home Assistant
-  # restarted), someone else takes over, the thermostat leaves its schedule or
+  # restarted), someone else takes over or cancels the routine (an Exit after
+  # the idle leaves it), the thermostat leaves its schedule or
   # the heating stopped and started again unseen. Times are in whole seconds,
   # like m's start.
   - alias: Learn the warm-up time
@@ -834,26 +870,32 @@ actions:
           state: >-
             {% set l = state.learn %}
             {% set m = l.m %}
-            {% set n = l.n | default(0) | int %}
-            {% set mpd = l.mpd | default(0) | float(0) %}
-            {% set kept = {'mpd': mpd, 'n': n} if n > 0 else {} %}
+            {% set f = l.s | default([0, 0, 0, 0, 0]) %}
+            {% set kept = {'s': f} if f[0] > 0 else {} %}
             {% set h = states[hvac_action_sensor] %}
             {% set since = h.last_changed.timestamp() if h is not none else 0 %}
             {% set warmed = h is not none and h.state == 'idle' and since > m[0] %}
             {% set end = since if warmed else now().timestamp() %}
             {% set elapsed = (end - m[0]) / 60 %}
-            {% set rose = room_temp - m[1] if room_temp is not none else 0 %}
+            {% set stop = m[2] + high_threshold %}
+            {% set top = stop if room_temp is not none and room_temp >= stop - 0.3 else room_temp %}
+            {% set rose = top - m[1] if top is not none else 0 %}
             {% set g = states[schedule_group].last_changed.timestamp() | int %}
             {% set regrouped = m[0] < g <= end + 60 %}
-            {% if warmed and not regrouped %}
-              {% if rose >= 1 and elapsed <= 240 and now().timestamp() - since <= 600 %}
-                {% set obs = elapsed / rose %}
-                {% set new = obs if n == 0 else mpd + 0.3 * (obs - mpd) %}
-                {% set out = {'mpd': ([[new, 1] | max, 90] | min) | round(1), 'n': [n + 1, 9] | min} %}
+            {% set cancelled = plan_today and plan.cancelled and (not warmed or exit_pressed_at <= since) %}
+            {% if warmed and not regrouped and not cancelled %}
+              {% if rose >= 0.5 and elapsed <= 240 and now().timestamp() - since <= 600 %}
+                {% set w = f[0] * 0.8 %}
+                {% set w1 = w + 1 %}
+                {% set dx = rose - f[1] %}
+                {% set dy = elapsed - f[2] %}
+                {% set out = {'s': [w1 | round(2), (f[1] + dx / w1) | round(2), (f[2] + dy / w1) | round(1),
+                                    ((w * f[3] + w / w1 * dx * dx) / w1) | round(2),
+                                    ((w * f[4] + w / w1 * dx * dy) / w1) | round(1)]} %}
               {% else %}
                 {% set out = kept %}
               {% endif %}
-            {% elif regrouped or ((override_running or not on_schedule) and not routine_timer_running)
+            {% elif regrouped or cancelled or ((override_running or not on_schedule) and not routine_timer_running)
                   or elapsed > 240 or (h is not none and h.state == 'heating' and since > m[0] + 300) %}
               {% set out = kept %}
             {% else %}
@@ -868,13 +910,25 @@ actions:
       - condition: template
         value_template: "{{ schedule_editing }}"
     then:
+      # The plan is saved without its unset fields (the plan variable reads
+      # them back as their defaults), so it fits the helper's maximum length.
+      # In the rare case it still does not, the warm-up measurement in progress
+      # is dropped rather than the save failing.
       - &save_state
         alias: Save the state
         action: input_text.set_value
         target:
           entity_id: "{{ state_helper }}"
         data:
-          value: "{{ dict(state, routine={} if plan.kind == '' else plan) | to_json }}"
+          value: >-
+            {% set ns = namespace(r={}) %}
+            {% for k, v in plan.items() if plan.kind != '' and (v or k in ['kind', 'start']) %}
+              {% set ns.r = dict(ns.r, **{k: v}) %}
+            {% endfor %}
+            {% set out = dict(state, routine=ns.r) %}
+            {% set l = out.learn | default({}) %}
+            {{ (out if out | to_json | length <= state_attr(state_helper, 'max') | int(255)
+                else dict(out, learn={'s': l.s} if l.s is defined else {})) | to_json }}
       - stop: >-
           Deferred: the schedule is being edited in the UI. A catch-up runs 5 minutes
           after the last change.
@@ -1067,10 +1121,14 @@ actions:
               {% endif %}
             {% endfor %}
             {{ ns.out }}
-          # With 4 or more periods, period 3 is daytime heating, so an early start
-          # shifts the morning earlier. With 2 or 3, period 3 (if any) is the
-          # evening setback, so period 2 is only started early.
-          morning_shifts: "{{ periods | count >= 4 }}"
+          # With 4 or more periods and a period 2 of at most 3 hours, period 2 is
+          # the morning and period 3 daytime heating, so the morning shifts with
+          # the alarm. Otherwise period 3 (if any) is another part of the day,
+          # such as the evening, so period 2 is only started early or period 1
+          # held late, and later periods keep their usual times.
+          morning_shifts: >-
+            {{ periods | count >= 4
+               and 0 < (today_at(periods[2].time) - today_at(periods[1].time)).total_seconds() <= morning_max }}
           # Period 2 is set and warmer than period 1 (and period 3 is set, if the
           # morning shifts), so starting it early or late changes something.
           p2_warmer: >-
@@ -1110,15 +1168,26 @@ actions:
             {% set ns = namespace(t=none) %}
             {% for p in periods %}{% if today_at(p.time) <= now() %}{% set ns.t = p.temp %}{% endif %}{% endfor %}
             {{ ns.t }}
-          # Minutes before the alarm to start: the learned minutes per degree
-          # times the rise from the room temperature now to period 2's, kept
-          # within 10 and 180, once two mornings have been measured. Otherwise
-          # Lead time. Keep this in step with the alarm triggers.
+          # Minutes before the alarm to start, once two mornings have been
+          # measured (a weight of 1.5): the learned dead time plus the learned
+          # minutes per degree times the rise from the room temperature now to
+          # where the thermostat stops (period 2's temperature plus its high
+          # threshold), kept within 10 and 180. Otherwise Lead time. The rate is
+          # the line through the measured mornings (learn.s holds their weight,
+          # mean rise, mean minutes, rise variance and covariance), drawn
+          # towards 15 minutes per degree (60 is that times 4, the pull's
+          # strength) until their rises spread out by a degree or two, and kept
+          # within 3 and 60. The dead time is what is left at no rise, kept
+          # within 0 and 120, since until the rate is known it also takes up
+          # any error in the assumed one.
+          # Keep this in step with the alarm triggers.
           lead_minutes: >-
-            {% set l = state.learn | default({}) %}
+            {% set f = (state.learn | default({})).s | default([0, 0, 0, 0, 0]) %}
             {% set p2t = periods[1].temp if periods | count >= 2 else none %}
-            {{ ([[l.mpd | default(0) | float(0) * (p2t - room_temp), 10] | max, 180] | min) | int
-               if learn_warm_up and l.n | default(0) | int >= 2 and room_temp is not none and p2t is not none
+            {% set rate = [[(f[0] * f[4] + 60) / (f[0] * f[3] + 4), 3] | max, 60] | min %}
+            {% set dead = [[f[2] - rate * f[1], 0] | max, 120] | min %}
+            {{ ([[dead + rate * (p2t + high_threshold - room_temp), 10] | max, 180] | min) | int
+               if learn_warm_up and f[0] >= 1.5 and room_temp is not none and p2t is not none
                else lead_time | int }}
           # The alarm when it is today and still ahead, and the alarm minus the
           # lead, when that is today too. Otherwise blank.
@@ -1248,17 +1317,17 @@ actions:
               # end.
               warm_up_target: "{{ none }}"
               # What our Timer should be now, as {temp, until}, or none when the
-              # schedule should carry on. The routine's phases, in order (with 4 or
-              # more periods, D2 is period 2's usual length). The start decides
+              # schedule should carry on. The routine's phases, in order (when the
+              # morning shifts, D2 is period 2's usual length). The start decides
               # whether the morning is early or late. Period 2's length counts
               # from the wake, so the room is warm when people get up and stays
               # warm as long as usual:
-              #   Starting at or before period 2: with 4 or more periods, period
+              #   Starting at or before period 2: when the morning shifts, period
               #   2 until the wake plus D2 (never past period 4), then period 3
-              #   until its usual start. With 2 or 3, period 2 until its usual
+              #   until its usual start. Otherwise period 2 until its usual
               #   start.
-              #   Starting after period 2: period 1 until the start. Then, with 4
-              #   or more periods, period 2 until the wake plus D2, never past
+              #   Starting after period 2: period 1 until the start. Then, when
+              #   the morning shifts, period 2 until the wake plus D2, never past
               #   period 4.
               #   Bedtime: the setback until its usual start.
               # The stage is the first phase with at least a minute left, the
@@ -1408,14 +1477,18 @@ actions:
                    else periods[1].temp if run == 'period-2' and p2 > 0 and 0 <= now().timestamp() - p2 <= 300
                      and not routine_morning and not nobody_home and on_schedule and not override_running
                    else none }}
-          # Measure the morning's warm-up if the room has at least 1 degree to
-          # rise and no measurement is running. Saved at the end.
+          # Measure the morning's warm-up if the room is cool enough for the
+          # thermostat to start heating (below the target plus its low
+          # threshold), has at least 0.5 degrees to rise to where it stops, and
+          # no measurement is running. Saved at the end.
           - alias: Start measuring the warm-up
             if:
               - condition: template
                 value_template: >-
                   {{ learn_warm_up and warm_up_target is not none and room_temp is not none
-                     and warm_up_target - room_temp >= 1 and (state.learn | default({})).m is not defined }}
+                     and room_temp < warm_up_target + low_threshold
+                     and warm_up_target + high_threshold - room_temp >= 0.5
+                     and (state.learn | default({})).m is not defined }}
             then:
               - variables:
                   state: >-
