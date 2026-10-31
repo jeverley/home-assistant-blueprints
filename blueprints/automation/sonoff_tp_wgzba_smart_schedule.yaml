@@ -209,20 +209,6 @@ blueprint:
             entity:
               filter:
                 - domain: sensor
-        lead_time:
-          name: Lead time
-          description: |
-            The time before the alarm when the morning heating starts.
-
-            With **Learn warm-up time** on, used until two mornings have been measured.
-          default: 30
-          selector:
-            number:
-              min: 5
-              max: 120
-              step: 5
-              unit_of_measurement: min
-              mode: box
         learn_warm_up:
           name: Learn warm-up time
           description: |
@@ -232,6 +218,18 @@ blueprint:
           default: true
           selector:
             boolean: {}
+        lead_time:
+          name: Lead time
+          description: |
+            Starts the morning heating this long before the alarm until the warm-up time has been learned (two mornings), or always with **Learn warm-up time** off.
+          default: 30
+          selector:
+            number:
+              min: 5
+              max: 120
+              step: 5
+              unit_of_measurement: min
+              mode: box
         early_alarm_enabled:
           name: Early alarm
           description: Starts the morning heating early when the alarm is earlier than the schedule.
