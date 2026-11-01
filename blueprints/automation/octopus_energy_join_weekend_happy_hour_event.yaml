@@ -2,8 +2,8 @@ blueprint:
   name: Octopus Energy - Join Weekend Happy Hour Event
   description: >
     Automatically joins Octoplus Weekend Happy Hour events when they become available.
-    Octopus Energy only allows one Weekend Happy Hour booking per day, so events on a day that already
-    has a booked weekend event are skipped instead of being retried on every update.
+    Octopus Energy allows two Weekend Happy Hour bookings per day, so events on a day that already
+    has two booked weekend events are skipped instead of being retried on every update.
     A booking the API still refuses is caught, so the automation does not log an error and the actions
     only run once an event has been joined.
     Based on the Octopus Energy integration's own blueprint by BottlecapDave.
@@ -60,7 +60,7 @@ variables:
   event_selection: !input event_selection
   # Weekend Happy Hours only run on Saturdays and Sundays (weekday 5 and 6).
   weekend_days: [5, 6]
-  # Days from today on that already have a booked weekend event. Octopus Energy allows one booking per day.
+  # The day of each booked weekend event from today on, once per booking. Octopus Energy allows two bookings per day.
   booked_days: >-
     {% set today = now().date() | string %}
     {% set ns = namespace(days=[]) %}
@@ -70,7 +70,7 @@ variables:
         {% set ns.days = ns.days + [start.date() | string] %}
       {% endif %}
     {% endfor %}
-    {{ ns.days | unique | list }}
+    {{ ns.days }}
   # The event to join: the earliest or latest bookable one, or none when there is nothing to book.
   selected_event: >-
     {% set ns = namespace(events=[]) %}
@@ -80,7 +80,7 @@ variables:
         and event.code not in [none, '']
         and (event.availability | default('', true) | lower) != 'full'
         and start.weekday() in weekend_days
-        and (start.date() | string) not in booked_days %}
+        and booked_days | select('eq', start.date() | string) | list | count < 2 %}
         {% set ns.events = ns.events + [{'code': event.code | string, 'start': start.isoformat(), 'duration_in_minutes': event.duration_in_minutes}] %}
       {% endif %}
     {% endfor %}

@@ -176,12 +176,12 @@ On firmware 0x00001004 the thermostat setpoint can drop to 5 °C at 00:00 each n
 
 File: [`blueprints/automation/octopus_energy_join_weekend_happy_hour_event.yaml`](blueprints/automation/octopus_energy_join_weekend_happy_hour_event.yaml). Requires the [Octopus Energy integration](https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy) with its **Octoplus Power Up Events** entity enabled.
 
-A fixed version of the integration's own Join Weekend Happy Hour blueprint. Octopus Energy allows one Weekend Happy Hour booking per day, but once one event is booked the integration still lists that day's other events as available and the happy hours sensor stays above 0. The original blueprint then tried to book another event on every update, failing each time with `Maximum Weekend Happy Hour bookings for the day reached` (`OE-1311`).
+A fixed version of the integration's own Join Weekend Happy Hour blueprint. Octopus Energy allows two Weekend Happy Hour bookings per day, but once a day has two the integration still lists its other events as available, and while you have happy hours left the happy hours sensor stays above 0. The original blueprint then tried to book a third event on that day on every update, failing each time with `Maximum Weekend Happy Hour bookings for the day reached` (`OE-1311`).
 
 This version:
 
-- skips events on a Saturday or Sunday that already has a booked event;
+- skips events on a Saturday or Sunday that already has two booked events;
 - only considers events on Saturdays and Sundays, and not ones shown as full;
 - catches a booking the API still refuses (`continue_on_error`), so it no longer logs an error, and only runs your actions once an event has actually been joined.
 
-The integration does not say which booked events are Weekend Happy Hours and which are weekend Power-ups, so a booked weekend Power-up also stops that day's Happy Hour from being booked.
+The integration does not say which booked events are Weekend Happy Hours and which are weekend Power-ups, so a booked weekend Power-up also counts towards that day's two bookings.
