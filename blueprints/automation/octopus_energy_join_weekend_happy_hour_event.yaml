@@ -94,6 +94,10 @@ conditions:
     value_template: "{{ (states(weekend_happy_hours_entity) | int(0)) > 0 and candidate_events | length > 0 }}"
 
 actions:
+  # Checked again here because Run actions skips the conditions above.
+  - alias: Stop if there is no weekend happy hour left to book
+    condition: template
+    value_template: "{{ (states(weekend_happy_hours_entity) | int(0)) > 0 and candidate_events | length > 0 }}"
   - variables:
       selected_event: "{{ candidate_events[0] }}"
       message: >-
