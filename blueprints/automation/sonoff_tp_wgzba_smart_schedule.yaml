@@ -137,6 +137,20 @@ blueprint:
               step: 0.5
               unit_of_measurement: km
               mode: box
+        geofencing_progress:
+          name: Progress distance
+          description: |
+            Pre-heats only once someone has come this much closer than the furthest they have been since leaving, so moving around somewhere nearby does not start it.
+
+            Set to 0 to pre-heat as soon as someone heads home.
+          default: 500
+          selector:
+            number:
+              min: 0
+              max: 2000
+              step: 100
+              unit_of_measurement: m
+              mode: box
         geofencing_group:
           name: Pre-heat schedule group
           description: The schedule group to use while someone is on their way home.
@@ -297,6 +311,7 @@ trigger_variables:
   home_zone: !input home_zone
   away_enabled: !input away_enabled
   geofencing_distance: !input geofencing_distance
+  geofencing_progress: !input geofencing_progress
   geofencing_timeout: !input geofencing_timeout
   proximity_devices: !input proximity_devices
   arriving_sensors: !input arriving_sensors
@@ -701,15 +716,56 @@ triggers:
             {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
           {% endfor %}
         {% endif %}
-        {% for d in ns.ents | select('match', '^sensor\\..*_distance$') | reject('search', '_nearest_distance$') %}
-          {% set km = states(d) | float(none) %}
-          {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
-          {% if km is not none and is_state(d[:-9] ~ '_direction_of_travel', 'towards')
-                and geofencing_distance | float(0) > 0
-                and km * to_km.get(state_attr(d, 'unit_of_measurement'), 1) <= geofencing_distance | float(0) %}
+        {% set ds = ns.ents | select('match', '^sensor\\..*_distance$') | reject('search', '_nearest_distance$') | sort | list %}
+        {% set raw = states(state_helper) %}
+        {% set g = (raw | from_json(default={})).g | default([]) if raw is match('^\\{') else [] %}
+        {% set g = g if g | count == ds | count else [0] * (ds | count) %}
+        {% set prog = geofencing_progress | float(0) / 100 %}
+        {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
+        {% for d in ds %}
+          {% set v = states(d) | float(none) %}
+          {% set h = v * to_km.get(state_attr(d, 'unit_of_measurement'), 1) * 10 if v is not none else none %}
+          {% if h is not none and is_state(d[:-9] ~ '_direction_of_travel', 'towards')
+                and geofencing_distance | float(0) > 0 and h <= geofencing_distance | float(0) * 10
+                and (prog <= 0 or g[loop.index0] | float(0) - h >= prog) %}
             {% set ns.on = true %}
           {% endif %}
         {% endfor %}
+      {% endif %}
+      {{ ns.on }}
+  # Someone has gone further from home than their recorded furthest point by
+  # a quarter of the progress distance (within the geofencing distance plus
+  # the progress distance, beyond which any way home is progress), so the run
+  # records it. Also true when someone with a recorded point is within 100 m
+  # of home, or the recorded points don't match the people Proximity tracks,
+  # so the run resets them. Keep this in step with the furthest variable.
+  - alias: Further from home
+    trigger: template
+    id: further
+    value_template: >-
+      {% set ns = namespace(on=false, ents=[]) %}
+      {% set prog = geofencing_progress | float(0) / 100 %}
+      {% if away_enabled and prog > 0 and geofencing_distance | float(0) > 0 %}
+        {% if proximity_devices %}
+          {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
+        {% else %}
+          {% set zone_name = state_attr(home_zone, 'friendly_name') %}
+          {% for e in integration_entities('proximity') %}
+            {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
+          {% endfor %}
+        {% endif %}
+        {% set ds = ns.ents | select('match', '^sensor\\..*_distance$') | reject('search', '_nearest_distance$') | sort | list %}
+        {% set raw = states(state_helper) %}
+        {% set g = (raw | from_json(default={})).g | default([]) if raw is match('^\\{') else [] %}
+        {% set cap = geofencing_distance | float(0) * 10 + prog %}
+        {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
+        {% for d in ds %}
+          {% set v = states(d) | float(none) %}
+          {% set h = v * to_km.get(state_attr(d, 'unit_of_measurement'), 1) * 10 if v is not none else none %}
+          {% set f = g[loop.index0] | float(0) if g | count == ds | count else 0 %}
+          {% if h is not none and (f < cap and h >= f + prog / 4 or f > 0 and h <= 1) %}{% set ns.on = true %}{% endif %}
+        {% endfor %}
+        {% set ns.on = ns.on or (g | count > 0 and g | count != ds | count) %}
       {% endif %}
       {{ ns.on }}
   # The geofencing timeout has passed since pre-heating started.
@@ -752,6 +808,80 @@ actions:
           The State helper's maximum length must be 255. Change it under Settings >
           Devices & services > Helpers.
         error: true
+  - variables:
+      # The trigger id. A run without one (Run actions in the UI) is a catch-up.
+      run: >-
+        {{ trigger.id if trigger is defined and trigger.id is defined and trigger.id else 'catch-up' }}
+      # Each person's Proximity distance sensor for the home zone, sorted by
+      # entity id, and their distance in hundreds of metres (none if unknown).
+      proximity_distances: >-
+        {% set ns = namespace(ents=[]) %}
+        {% if proximity_devices %}
+          {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
+        {% else %}
+          {% set zone_name = state_attr(home_zone, 'friendly_name') %}
+          {% for e in integration_entities('proximity') %}
+            {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
+          {% endfor %}
+        {% endif %}
+        {{ ns.ents | select('match', '^sensor\\..*_distance$') | reject('search', '_nearest_distance$') | sort | list }}
+      distances: >-
+        {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
+        {% set ns = namespace(out=[]) %}
+        {% for d in proximity_distances %}
+          {% set v = states(d) | float(none) %}
+          {% set ns.out = ns.out + [v * to_km.get(state_attr(d, 'unit_of_measurement'), 1) * 10 if v is not none else none] %}
+        {% endfor %}
+        {{ ns.out }}
+      # The furthest each person has been from home since leaving, in hundreds
+      # of metres, in the same order, as kept in the State helper (g). All 0 if
+      # the people Proximity tracks change.
+      stored_furthest: >-
+        {% set raw = states(state_helper) %}
+        {% set g = (raw | from_json(default={})).g | default([]) if raw is match('^\\{') else [] %}
+        {% set ns = namespace(out=[]) %}
+        {% for d in distances %}
+          {% set ns.out = ns.out + [g[loop.index0] | int(0) if g | count == distances | count else 0] %}
+        {% endfor %}
+        {{ ns.out }}
+      # The same updated with where they are now: reset to 0 once they are
+      # within 100 m of home, and capped at the geofencing distance plus the
+      # progress distance, beyond which any way home is progress. Empty, and
+      # not stored, with the progress distance or away schedule off.
+      furthest: >-
+        {% set g = stored_furthest %}
+        {% set cap = (geofencing_distance | float(0) * 10 + geofencing_progress | float(0) / 100) | round | int %}
+        {% set ns = namespace(out=[]) %}
+        {% for d in distances if away_enabled and geofencing_progress | float(0) > 0 %}
+          {% set f = g[loop.index0] %}
+          {% set ns.out = ns.out + [f if d is none else 0 if d <= 1 else [f, [d | round | int, cap] | min] | max] %}
+        {% endfor %}
+        {{ ns.out }}
+  # A Further from home run only records someone's furthest point, which
+  # doesn't need the thermostat, so it stops here, before the thermostat is
+  # checked.
+  - alias: Stop after recording a furthest point
+    if:
+      - condition: template
+        value_template: "{{ run == 'further' }}"
+    then:
+      # Only g changes. If that makes the helper too long, the warm-up
+      # measurement in progress is dropped, as when saving the state.
+      - alias: Save the furthest points
+        action: input_text.set_value
+        target:
+          entity_id: "{{ state_helper }}"
+        data:
+          value: >-
+            {% set raw = states(state_helper) %}
+            {% set j = raw | from_json(default={}) if raw is match('^\\{') else {} %}
+            {% set ns = namespace(out={}, l={}) %}
+            {% for k, v in j.items() if k != 'g' %}{% set ns.out = dict(ns.out, **{k: v}) %}{% endfor %}
+            {% set full = dict(ns.out, g=furthest) if furthest | select('gt', 0) | first is defined else ns.out %}
+            {% for k, v in (full.l | default({})).items() if k != 'm' %}{% set ns.l = dict(ns.l, **{k: v}) %}{% endfor %}
+            {% set trimmed = dict(full, l=ns.l) %}
+            {{ (full if full | to_json | length <= state_attr(state_helper, 'max') | int(255) or 'l' not in full else trimmed) | to_json }}
+      - stop: Recorded a furthest point.
   # The thermostat is not ready yet (at startup or after dropping off), so
   # nothing is written, fetched or decided. Checked when the run starts, so
   # queued runs and Run actions are covered too.
@@ -764,22 +894,20 @@ actions:
   - variables:
       # Follow occupancy is on and has at least one heated area to follow.
       following_occupancy: "{{ follow_occupancy and heated_areas | first is defined }}"
-      # The trigger id. A run without one (Run actions in the UI) is a catch-up.
-      run: >-
-        {{ trigger.id if trigger is defined and trigger.id is defined and trigger.id else 'catch-up' }}
       # The blueprint's working state, kept as JSON in the State helper, one key
       # per feature:
       #   fetch: when our last fetch started.
       #   routine: the plan, see below.
       #   arrival: when geofencing pre-heating started.
       #   learn: the learned warm-up time, see Learn the warm-up time.
+      #   furthest: each person's furthest distance from home, see furthest.
       # Times are Unix epoch seconds, 0 when unset. The helper is the only
       # copy: state holds its keys other than routine, plan holds the routine,
       # and the save step writes both back before any thermostat call that
       # depends on them and at the end. Writing an unchanged value changes
       # nothing. A thermostat call that fails stops the run, and what was
       # written lets a later run pick up from there. The helper stores each key
-      # as one letter (f, r, a, l, and in the plan k, s, w, u, t, p, x and c,
+      # as one letter (f, r, a, l, g, and in the plan k, s, w, u, t, p, x and c,
       # with kind m, b or e and cancelled 1) to fit its 255 characters, and stored
       # reads them back as these names.
       stored: >-
@@ -792,7 +920,8 @@ actions:
           {% set ns.r = dict(ns.r, **{names[k]: {'m': 'morning', 'b': 'bedtime', 'e': 'early'}.get(v, v) if k == 'k' else v}) %}
         {% endfor %}
         {% for k, v in (j.l | default({})).items() if k in ['a', 'm'] %}{% set ns.l = dict(ns.l, **{k: v}) %}{% endfor %}
-        {{ {'fetch': j.f | default(0), 'arrival': j.a | default(0), 'routine': ns.r, 'learn': ns.l} }}
+        {{ {'fetch': j.f | default(0), 'arrival': j.a | default(0), 'routine': ns.r, 'learn': ns.l,
+            'furthest': j.g | default([])} }}
       state: >-
         {% set ns = namespace(out={}) %}
         {% for k, v in stored.items() if k != 'routine' %}{% set ns.out = dict(ns.out, **{k: v}) %}{% endfor %}
@@ -829,27 +958,21 @@ actions:
         {% set ts = watched | map(attribute='last_changed') | map('as_timestamp') | select('gt', cut) | list %}
         {{ ts | first is defined
            and not (ts | count >= (watched | count) / 2 and ts | max - ts | min <= burst_span) }}
-      # Someone is heading home and close. Keep this in step with the Someone
-      # heading home trigger. Only used while the home zone is empty, so it is
-      # skipped otherwise.
+      # Someone is heading home and close: an arriving sensor is on, or someone
+      # within the geofencing distance is heading towards home and has come
+      # the progress distance closer than their furthest point. Keep this in
+      # step with the Someone heading home trigger. Only used while the home
+      # zone is empty, so it is skipped otherwise.
       heading_home: >-
-        {% set ns = namespace(on=false, ents=[]) %}
+        {% set ns = namespace(on=false) %}
+        {% set prog = geofencing_progress | float(0) / 100 %}
         {% if away_enabled and states(home_zone) | int(0) == 0 %}
           {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
-          {% if proximity_devices %}
-            {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
-          {% else %}
-            {% set zone_name = state_attr(home_zone, 'friendly_name') %}
-            {% for e in integration_entities('proximity') %}
-              {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
-            {% endfor %}
-          {% endif %}
-          {% for d in ns.ents | select('match', '^sensor\\..*_distance$') | reject('search', '_nearest_distance$') %}
-            {% set km = states(d) | float(none) %}
-            {% set to_km = {'m': 0.001, 'km': 1, 'mi': 1.609344, 'yd': 0.0009144, 'ft': 0.0003048} %}
-            {% if km is not none and is_state(d[:-9] ~ '_direction_of_travel', 'towards')
-                  and geofencing_distance | float(0) > 0
-                  and km * to_km.get(state_attr(d, 'unit_of_measurement'), 1) <= geofencing_distance | float(0) %}
+          {% for d in distances %}
+            {% set e = proximity_distances[loop.index0] %}
+            {% if d is not none and is_state(e[:-9] ~ '_direction_of_travel', 'towards')
+                  and geofencing_distance | float(0) > 0 and d <= geofencing_distance | float(0) * 10
+                  and (prog <= 0 or stored_furthest[loop.index0] - d >= prog) %}
               {% set ns.on = true %}
             {% endif %}
           {% endfor %}
@@ -869,6 +992,8 @@ actions:
       alarm_time: >-
         {% set a = states(alarm_sensor) | as_datetime(none) %}
         {{ (a | as_local).isoformat() if a is not none and (a | as_local).date() == now().date() and now() < a else '' }}
+  - variables:
+      state: "{{ dict(state, furthest=furthest) }}"
   # Someone got home, or pre-heating timed out and nobody is heading home any
   # more, so the arrival is over. After the timeout, a new Someone heading home
   # trigger means they stopped heading home and set off again: a new trip.
@@ -1063,6 +1188,8 @@ actions:
             {% endfor %}
             {% set l = state.learn | default({}) %}
             {% set out = {'f': state.fetch | default(0), 'a': state.arrival | default(0), 'r': ns.r} %}
+            {% set g = state.furthest | default([]) %}
+            {% set out = dict(out, g=g) if g | select('gt', 0) | first is defined else out %}
             {% set full = dict(out, l=l) if l else out %}
             {% set ns.l = {} %}
             {% for k, v in l.items() if k != 'm' %}{% set ns.l = dict(ns.l, **{k: v}) %}{% endfor %}
@@ -1078,7 +1205,7 @@ actions:
         value_template: "{{ run == 'warming' }}"
     then:
       - *save_state
-      - stop: Recorded a temperature report for the warm-up being measured.
+      - stop: Recorded a temperature report.
   # The routine plan does not apply while nobody is home, so drop it and end
   # its Timer.
   - alias: Nobody home, end the routine
