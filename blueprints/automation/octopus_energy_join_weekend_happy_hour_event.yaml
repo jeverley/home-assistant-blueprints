@@ -97,10 +97,6 @@ conditions:
     value_template: "{{ (states(weekend_happy_hours_entity) | int(0)) > 0 and selected_event is mapping }}"
 
 actions:
-  # Checked again here because Run actions skips the conditions above.
-  - alias: Stop if there is no weekend happy hour left to book
-    condition: template
-    value_template: "{{ (states(weekend_happy_hours_entity) | int(0)) > 0 and selected_event is mapping }}"
   - variables:
       message: >-
         {% set start = selected_event.start | as_datetime %}
