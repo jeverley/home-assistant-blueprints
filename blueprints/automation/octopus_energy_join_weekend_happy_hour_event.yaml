@@ -60,28 +60,31 @@ variables:
   event_selection: !input event_selection
   # Weekend Happy Hours only run on Saturdays and Sundays (weekday 5 and 6).
   weekend_days: [5, 6]
-  # Days that already have a booked weekend event. Octopus Energy allows one Weekend Happy Hour booking per day.
+  # Days from today on that already have a booked weekend event. Octopus Energy allows one booking per day.
   booked_days: >-
+    {% set today = now().date() | string %}
     {% set ns = namespace(days=[]) %}
     {% for event in state_attr(power_up_events_entity, 'events') | default([], true) %}
       {% set start = event.start | as_datetime | as_local if event.start is not none else none %}
-      {% if start is not none and start.weekday() in weekend_days %}
+      {% if start is not none and start.weekday() in weekend_days and (start.date() | string) >= today %}
         {% set ns.days = ns.days + [start.date() | string] %}
       {% endif %}
     {% endfor %}
     {{ ns.days | unique | list }}
-  candidate_events: >-
+  # The event to join: the earliest or latest bookable one, or none when there is nothing to book.
+  selected_event: >-
     {% set ns = namespace(events=[]) %}
     {% for event in state_attr(power_up_events_entity, 'available_events') | default([], true) %}
       {% set start = event.start | as_datetime | as_local if event.start is not none else none %}
       {% if start is not none
+        and event.code not in [none, '']
         and (event.availability | default('', true) | lower) != 'full'
         and start.weekday() in weekend_days
         and (start.date() | string) not in booked_days %}
-        {% set ns.events = ns.events + [{'code': event.code, 'start': start.isoformat(), 'duration_in_minutes': event.duration_in_minutes}] %}
+        {% set ns.events = ns.events + [{'code': event.code | string, 'start': start.isoformat(), 'duration_in_minutes': event.duration_in_minutes}] %}
       {% endif %}
     {% endfor %}
-    {{ ns.events | sort(attribute='start', reverse=(event_selection == 'latest')) }}
+    {{ (ns.events | sort(attribute='start', reverse=(event_selection == 'latest')) | first) if ns.events else none }}
 
 triggers:
   - trigger: state
@@ -91,15 +94,14 @@ triggers:
 
 conditions:
   - condition: template
-    value_template: "{{ (states(weekend_happy_hours_entity) | int(0)) > 0 and candidate_events | length > 0 }}"
+    value_template: "{{ (states(weekend_happy_hours_entity) | int(0)) > 0 and selected_event is mapping }}"
 
 actions:
   # Checked again here because Run actions skips the conditions above.
   - alias: Stop if there is no weekend happy hour left to book
     condition: template
-    value_template: "{{ (states(weekend_happy_hours_entity) | int(0)) > 0 and candidate_events | length > 0 }}"
+    value_template: "{{ (states(weekend_happy_hours_entity) | int(0)) > 0 and selected_event is mapping }}"
   - variables:
-      selected_event: "{{ candidate_events[0] }}"
       message: >-
         {% set start = selected_event.start | as_datetime %}
         Joined a new Octopus Energy Weekend Happy Hour event. It starts at {{ start.strftime('%H:%M') }} on {{ start.day }}/{{ start.month }} for {{ selected_event.duration_in_minutes | int(0) }} minutes.
