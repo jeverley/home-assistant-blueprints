@@ -300,6 +300,12 @@ trigger_variables:
   geofencing_timeout: !input geofencing_timeout
   proximity_devices: !input proximity_devices
   arriving_sensors: !input arriving_sensors
+  # Shared with the actions, so the triggers and actions agree: the weight two
+  # measured mornings reach, after which the learned warm-up time is used, and
+  # the limits on a learned lead in minutes.
+  min_weight: 1.5
+  lead_min: 10
+  lead_max: 180
 
 variables:
   # The thermostat's ZHA entities, matched on the device by domain and
@@ -332,10 +338,6 @@ variables:
   # measurement, so it is required.
   climate_entity: >-
     {{ thermostat_entities | select('match', '^climate\\.') | first | default('') }}
-  # The thermostat's own temperature reading. Each report changes it, so its
-  # last changed time is when that reading was taken.
-  temp_sensor: >-
-    {{ thermostat_entities | select('match', '^sensor\\..*_current_temperature$') | first | default('') }}
   hvac_action_sensor: >-
     {{ thermostat_entities | select('match', '^sensor\\..*_hvac_action$') | first | default('') }}
   room_temp: >-
@@ -399,8 +401,6 @@ variables:
   #     degrees, for a morning's rate.
   #   min_rate, max_rate, max_dead: limits on a morning's rate (minutes per
   #     degree) and dead time (minutes).
-  #   min_weight: the weight two measured mornings reach. The alarm and early
-  #     start triggers repeat it, as they cannot read variables.
   learning:
     memory: 0.8
     min_rise: 0.5
@@ -413,7 +413,6 @@ variables:
     min_rate: 3
     max_rate: 60
     max_dead: 120
-    min_weight: 1.5
   # Nobody is home: the home zone is empty, and no area is occupied or has
   # been for the empty delay. The zone is checked first, so the areas are only
   # looked at when it is empty. Area sensors are occupancy sensors in any
@@ -509,8 +508,8 @@ triggers:
       {% set th = ents | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
       {% set hi = states(th) | float(0.2) if th != '' else 0.2 %}
       {% set la = l.a | default([0, 0, 0]) %}
-      {% set lead = ([[la[1] + la[2] * (p2t + hi - room), 10] | max, 180] | min) | int
-           if early_start_enabled and la[0] >= 1.5 and room is not none and p2t is not none else 5 %}
+      {% set lead = ([[la[1] + la[2] * (p2t + hi - room), lead_min] | max, lead_max] | min) | int
+           if early_start_enabled and la[0] >= min_weight and room is not none and p2t is not none else 5 %}
       {{ a is not none and now() < a and (started or a - timedelta(minutes=lead) <= now()) }}
   # Reads the period 2 time from the last fetch, so it can fire just before
   # period 2 starts when the alarm is later than usual. It is only true in the
@@ -531,8 +530,8 @@ triggers:
       {% set th = ents | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
       {% set hi = states(th) | float(0.2) if th != '' else 0.2 %}
       {% set la = l.a | default([0, 0, 0]) %}
-      {% set lead = ([[la[1] + la[2] * (p2t + hi - room), 10] | max, 180] | min) | int
-           if early_start_enabled and la[0] >= 1.5 and room is not none and p2t is not none else 5 %}
+      {% set lead = ([[la[1] + la[2] * (p2t + hi - room), lead_min] | max, lead_max] | min) | int
+           if early_start_enabled and la[0] >= min_weight and room is not none and p2t is not none else 5 %}
       {% set p = ents | select('match', '^select\\..*_schedule_period_2_time$') | first | default('') %}
       {% set s = states(p) if p != '' else '' %}
       {% if a is none or s is not match('^[0-9]{2}:[0-9]{2}') %}{{ false }}{% else %}
@@ -579,7 +578,7 @@ triggers:
       {% set t = now().timestamp() %}
       {% set ns = namespace(on=r.k | default('') == 'e' and not r.c | default(0) and 0 < r.s | default(0) | int <= t < r.w | default(0) | int,
                             prev=none, open=true) %}
-      {% if a[0] >= 1.5 and room is not none %}
+      {% if a[0] >= min_weight and room is not none %}
         {% for i in range(1, 13) %}
           {% set te = pents | select('match', '^select\\..*_schedule_period_' ~ i ~ '_time$') | first | default('') %}
           {% set pe = pents | select('match', '^number\\..*_schedule_period_' ~ i ~ '_temp$') | first | default('') %}
@@ -588,7 +587,7 @@ triggers:
           {% if ns.open and tm is match('^[0-9]{2}:[0-9]{2}') %}
             {% if ns.prev is not none and temp is not none and temp > ns.prev and room < temp + low %}
               {% set at = today_at(tm[:5]).timestamp() %}
-              {% set lead = ([[a[1] + a[2] * (temp + hi - room), 10] | max, 180] | min) | int %}
+              {% set lead = ([[a[1] + a[2] * (temp + hi - room), lead_min] | max, lead_max] | min) | int %}
               {% set ns.on = ns.on or at - lead * 60 <= t <= at - 60 %}
             {% endif %}
             {% set ns.prev = temp %}
@@ -634,22 +633,19 @@ triggers:
       {% set raw = states(state_helper) %}
       {% set m = ((raw | from_json(default={})).l | default({})).m | default([]) if raw is match('^\\{') else [] %}
       {{ m | count in [3, 7] and h != '' and is_state(h, 'idle') and states[h].last_changed.timestamp() > m[0] }}
-  # The thermostat reported its temperature during a warm-up being measured,
-  # newer than the last report recorded and above the start reading, so the
-  # run records it (see Learn the warm-up time). It turns false once
-  # recorded, so each report fires it.
+  # The thermostat reported a new temperature (its climate entity's current
+  # temperature) during a warm-up being measured, above the start reading and
+  # different from the last report recorded, so the run records it (see Learn
+  # the warm-up time). It turns false once recorded, so each report fires it.
   - alias: Room warming
     trigger: template
     id: warming
     value_template: >-
-      {% set ents = device_entities(thermostat_device) %}
-      {% set e = ents | select('match', '^sensor\\..*_current_temperature$') | first | default('') %}
+      {% set c = device_entities(thermostat_device) | select('match', '^climate\\.') | first | default('') %}
       {% set raw = states(state_helper) %}
       {% set m = ((raw | from_json(default={})).l | default({})).m | default([]) if raw is match('^\\{') else [] %}
-      {% set o = states[e] if e != '' else none %}
-      {{ m | count in [3, 7] and o is not none and o.state | float(none) is not none
-         and o.last_changed.timestamp() | int > (m[5] if m | count == 7 else m[0])
-         and o.state | float > m[1] }}
+      {% set v = state_attr(c, 'current_temperature') | float(none) if c != '' else none %}
+      {{ m | count in [3, 7] and v is not none and v > m[1] and (m | count == 3 or v != m[6]) }}
   # The thermostat is back on its schedule after a hand adjustment (at the
   # next period) or manual mode, so the routine picks up where it left off.
   - alias: Back on schedule
@@ -739,13 +735,12 @@ actions:
         value_template: >-
           {% set ents = [schedule_group, operating_day, fetch_button, override_mode,
                          override_target, override_period, override_apply,
-                         override_exit, override_state, work_mode_state, hvac_action_sensor,
-                         temp_sensor] %}
+                         override_exit, override_state, work_mode_state, hvac_action_sensor] %}
           {{ '' in ents or expand(ents) | count < ents | count }}
     then:
       - stop: >-
-          Could not find every schedule, override, HVAC action and current
-          temperature entity on the thermostat. Check they are enabled and their entity IDs still end with their
+          Could not find every schedule, override and HVAC action entity on the
+          thermostat. Check they are enabled and their entity IDs still end with their
           default names.
         error: true
   - alias: Stop if the State helper is too short
@@ -792,11 +787,12 @@ actions:
         {% set j = raw | from_json(default={}) if raw is match('^\\{') else {} %}
         {% set names = {'k': 'kind', 's': 'start', 'w': 'wake', 'u': 'until', 't': 'temp', 'p': 'applied',
                         'x': 'exited', 'c': 'cancelled'} %}
-        {% set ns = namespace(r={}) %}
+        {% set ns = namespace(r={}, l={}) %}
         {% for k, v in (j.r | default({})).items() if k in names %}
           {% set ns.r = dict(ns.r, **{names[k]: {'m': 'morning', 'b': 'bedtime', 'e': 'early'}.get(v, v) if k == 'k' else v}) %}
         {% endfor %}
-        {{ {'fetch': j.f | default(0), 'arrival': j.a | default(0), 'routine': ns.r, 'learn': j.l | default({})} }}
+        {% for k, v in (j.l | default({})).items() if k in ['a', 'm'] %}{% set ns.l = dict(ns.l, **{k: v}) %}{% endfor %}
+        {{ {'fetch': j.f | default(0), 'arrival': j.a | default(0), 'routine': ns.r, 'learn': ns.l} }}
       state: >-
         {% set ns = namespace(out={}) %}
         {% for k, v in stored.items() if k != 'routine' %}{% set ns.out = dict(ns.out, **{k: v}) %}{% endfor %}
@@ -936,19 +932,25 @@ actions:
       - variables:
           plan: "{{ empty_plan }}"
   # A warm-up measurement (learn.m) records when it started, the room
-  # temperature then and the target. While the thermostat heats, each report
-  # of its temperature above that start reading (Room warming) is recorded
-  # too: the first one, and the latest one, each as [time, value]. Each report
-  # is an exact pair, the reading when it was sent.
+  # temperature then and the target. Each report of its temperature above
+  # that start reading (Room warming) is recorded too: the first one, and the
+  # latest one, each as [time, value], the time being when the climate entity
+  # was last updated. Each report is an exact pair, the reading when it was
+  # sent.
   # The measurement ends when the thermostat goes idle (Warmed up), on the
   # first run after that. It runs before a run defers, so a deferred Warmed up
-  # run still counts. If the idle came within a minute of the routine's Timer
-  # ending or a period starting, or the latest report was already above the
-  # stop point, the target dropped below the room and cut the warm-up short,
-  # so it ends at the latest report. Otherwise the room reached the stop point
-  # (the target then, which a later stage may have lowered, plus the high
-  # threshold), exactly when it went idle, as the thermostat stops by its own
-  # reading. Between the first report and the end,
+  # run still counts. Where it ends is worked out from the reports: the stop
+  # point is the target plus the high threshold, and the thermostat stops
+  # exactly there by its own reading.
+  #   The target dropped as the routine's Timer ended or a period started,
+  #   within a minute of the idle: cut short, so the latest report. The drop
+  #   is checked against the schedule's period then, as the thermostat can
+  #   report the idle before its new target.
+  #   The latest report is within a reporting step (0.35) of the stop point:
+  #   the room reached it, at the idle, even if the target dropped later.
+  #   The target dropped, and the latest report is above the lower stop
+  #   point: cut short as the target fell below the room, so the latest report.
+  #   Otherwise the room reached the lower stop point at the idle. Between the first report and the end,
   # the minutes per degree give the rate. The time to the first report, less
   # the rate times the rise to it, gives the dead time. Both are added to
   # learn.a ([weight, dead time, rate]), running averages with each earlier
@@ -979,14 +981,18 @@ actions:
             {% set warmed = h is not none and h.state == 'idle' and since > m[0] %}
             {% set end = since if warmed else now().timestamp() %}
             {% set elapsed = (end - m[0]) / 60 %}
-            {% set o = states[temp_sensor] %}
-            {% set rt = o.last_changed.timestamp() | int if o is not none else 0 %}
-            {% set rv = o.state | float(none) if o is not none else none %}
-            {% set ns = namespace(cut=plan.until > 0 and (since - plan.until) | abs <= 60) %}
-            {% for e in period_entities if e is search('_time$') %}
-              {% set v = states(e) %}
-              {% if v is match('^[0-9]{2}:[0-9]{2}') and (since - today_at(v[:5]).timestamp()) | abs <= 60 %}
-                {% set ns.cut = true %}
+            {% set o = states[climate_entity] %}
+            {% set rt = o.last_updated.timestamp() | int if o is not none else 0 %}
+            {% set rv = room_temp %}
+            {% set ns = namespace(cut=plan.until > 0 and (since - plan.until) | abs <= 60, after=none) %}
+            {% for i in range(1, 13) %}
+              {% set te = period_entities | select('search', '_schedule_period_' ~ i ~ '_time$') | first | default('') %}
+              {% set pe = period_entities | select('search', '_schedule_period_' ~ i ~ '_temp$') | first | default('') %}
+              {% set v = states(te) if te != '' else '' %}
+              {% if v is match('^[0-9]{2}:[0-9]{2}') %}
+                {% set at = today_at(v[:5]).timestamp() %}
+                {% if (since - at) | abs <= 60 %}{% set ns.cut = true %}{% endif %}
+                {% if at <= since + 60 %}{% set ns.after = states(pe) | float(none) %}{% endif %}
               {% endif %}
             {% endfor %}
             {% set g = states[schedule_group].last_changed.timestamp() | int %}
@@ -994,11 +1000,21 @@ actions:
             {% set cancelled = plan_today and plan.cancelled and (not warmed or exit_pressed_at <= since) %}
             {% set target = state_attr(climate_entity, 'temperature') | float(m[2]) %}
             {% set raised = target > m[2] + 0.05 %}
+            {% set dropped = target < m[2] - 0.05 or (ns.after is not none and ns.after < m[2] - 0.05) %}
             {% if warmed and not regrouped and not cancelled %}
-              {% set stop = [target, m[2]] | min + high_threshold %}
-              {% set cut = m | count == 7 and (ns.cut or m[6] > stop + 0.05) %}
-              {% set te = m[5] if cut else since %}
-              {% set ve = m[6] if cut else stop %}
+              {% set orig = m[2] + high_threshold %}
+              {% set low = [target, m[2]] | min + high_threshold %}
+              {% if m | count < 7 %}
+                {% set te, ve = since, orig %}
+              {% elif ns.cut and dropped %}
+                {% set te, ve = m[5], m[6] %}
+              {% elif m[6] >= orig - 0.35 %}
+                {% set te, ve = since, orig %}
+              {% elif dropped and m[6] > low + 0.05 %}
+                {% set te, ve = m[5], m[6] %}
+              {% else %}
+                {% set te, ve = since, low %}
+              {% endif %}
               {% if m | count == 7 and ve - m[1] >= c.min_rise and ve - m[4] >= c.min_span and te > m[3]
                     and elapsed <= c.max_minutes and now().timestamp() - since <= c.read_within %}
                 {% set rate = [[(te - m[3]) / 60 / (ve - m[4]), c.min_rate] | max, c.max_rate] | min %}
@@ -1013,8 +1029,7 @@ actions:
                   or elapsed > c.max_minutes
                   or (h is not none and h.state == 'heating' and since > m[0] + c.restart) %}
               {% set out = kept %}
-            {% elif h is not none and h.state == 'heating' and rv is not none and rv > m[1]
-                    and rt > (m[5] if m | count == 7 else m[0]) %}
+            {% elif rv is not none and rv > m[1] and rt >= m[0] and (m | count == 3 or rv != m[6]) %}
               {% set out = dict(l, m=(m + [rt, rv, rt, rv]) if m | count == 3 else m[:5] + [rt, rv]) %}
             {% else %}
               {% set out = l %}
@@ -1056,6 +1071,14 @@ actions:
       - stop: >-
           Deferred: the schedule is being edited in the UI. A catch-up runs 5 minutes
           after the last change.
+  # A Room warming run only records a temperature report, so it stops here.
+  - alias: Stop after recording a temperature report
+    if:
+      - condition: template
+        value_template: "{{ run == 'warming' }}"
+    then:
+      - *save_state
+      - stop: Recorded a temperature report for the warm-up being measured.
   # The routine plan does not apply while nobody is home, so drop it and end
   # its Timer.
   - alias: Nobody home, end the routine
@@ -1175,7 +1198,7 @@ actions:
       morning_ahead: "{{ alarm_time != '' or awake_sensors | select('is_state', 'on') | first is defined }}"
       catch_up: >-
         {{ run == 'catch-up' or (group_changed and (plan_active or morning_ahead
-           or (early_start_enabled and ((state.learn | default({})).a | default([0]))[0] >= learning.min_weight))) }}
+           or (early_start_enabled and ((state.learn | default({})).a | default([0]))[0] >= min_weight))) }}
   # Runs that can start, continue or end a routine plan it. An override-ended
   # run carries on only while still Idle: replacing our own Timer passes
   # through Idle, and the run that queues needs nothing. With early start on,
@@ -1305,8 +1328,8 @@ actions:
           lead_minutes: >-
             {% set a = (state.learn | default({})).a | default([0, 0, 0]) %}
             {% set p2t = periods[1].temp if periods | count >= 2 else none %}
-            {{ ([[a[1] + a[2] * (p2t + high_threshold - room_temp), 10] | max, 180] | min) | int
-               if early_start_enabled and a[0] >= learning.min_weight and room_temp is not none and p2t is not none else 5 }}
+            {{ ([[a[1] + a[2] * (p2t + high_threshold - room_temp), lead_min] | max, lead_max] | min) | int
+               if early_start_enabled and a[0] >= min_weight and room_temp is not none and p2t is not none else 5 }}
           # The alarm minus the lead, when that is today too. Otherwise blank.
           alarm_start: >-
             {% if alarm_time == '' %}{{ '' }}{% else %}
@@ -1378,14 +1401,14 @@ actions:
           early_period: >-
             {% set a = (state.learn | default({})).a | default([0, 0, 0]) %}
             {% set ns = namespace(out=none) %}
-            {% if early_start_enabled and a[0] >= learning.min_weight and room_temp is not none %}
+            {% if early_start_enabled and a[0] >= min_weight and room_temp is not none %}
               {% for i in range(1, periods | count) %}
                 {% set p = periods[i] %}
                 {% set q = periods[i - 1] %}
                 {% set at = today_at(p.time).timestamp() | int %}
                 {% if ns.out is none and p.temp is not none and q.temp is not none and p.temp > q.temp
                       and room_temp < p.temp + low_threshold %}
-                  {% set lead = ([[a[1] + a[2] * (p.temp + high_threshold - room_temp), 10] | max, 180] | min) | int %}
+                  {% set lead = ([[a[1] + a[2] * (p.temp + high_threshold - room_temp), lead_min] | max, lead_max] | min) | int %}
                   {% if at - lead * 60 <= now().timestamp() <= at - min_stage %}
                     {% set ns.out = {'n': i + 1, 'at': at, 'temp': p.temp} %}
                   {% endif %}
