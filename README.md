@@ -169,3 +169,19 @@ While nobody is home, someone heading home switches the thermostat to the pre-he
 ### Known issue
 
 On firmware 0x00001004 the thermostat setpoint can drop to 5 °C at 00:00 each night under the on-device schedule, even with a 16 °C period at 00:00. This is a firmware issue, also reported in [Koenkk/zigbee2mqtt#33317](https://github.com/Koenkk/zigbee2mqtt/issues/33317). Raising the Frost proof temperature might mitigate it, but this is unconfirmed and still to be tested.
+
+## Octopus Energy - Join Weekend Happy Hour Event
+
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fjeverley%2Fhome-assistant-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Foctopus_energy_join_weekend_happy_hour_event.yaml)
+
+File: [`blueprints/automation/octopus_energy_join_weekend_happy_hour_event.yaml`](blueprints/automation/octopus_energy_join_weekend_happy_hour_event.yaml). Requires the [Octopus Energy integration](https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy) with its **Octoplus Power Up Events** entity enabled.
+
+A fixed version of the integration's own Join Weekend Happy Hour blueprint. Octopus Energy allows one Weekend Happy Hour booking per day, but once one event is booked the integration still lists that day's other events as available and the happy hours sensor stays above 0. The original blueprint then tried to book another event on every update, failing each time with `Maximum Weekend Happy Hour bookings for the day reached` (`OE-1311`).
+
+This version:
+
+- skips events on a Saturday or Sunday that already has a booked event;
+- only considers events on Saturdays and Sundays, and not ones shown as full;
+- catches a booking the API still refuses (`continue_on_error`), so it no longer logs an error, and only runs your actions once an event has actually been joined.
+
+The integration does not say which booked events are Weekend Happy Hours and which are weekend Power-ups, so a booked weekend Power-up also stops that day's Happy Hour from being booked.
