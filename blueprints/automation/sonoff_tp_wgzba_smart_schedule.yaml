@@ -315,10 +315,10 @@ trigger_variables:
   geofencing_timeout: !input geofencing_timeout
   proximity_devices: !input proximity_devices
   arriving_sensors: !input arriving_sensors
-  # Shared with the actions, so the triggers and actions agree: the weight two
-  # measured mornings reach, after which the learned warm-up time is used, and
+  # Shared with the actions, so the triggers and actions agree: the weight one
+  # measured morning gives, after which the learned warm-up time is used, and
   # the limits on a learned lead in minutes.
-  min_weight: 1.5
+  min_weight: 1
   lead_min: 10
   lead_max: 180
 
@@ -496,13 +496,12 @@ triggers:
       {% set e = device_entities(thermostat_device)
            | select('match', '^select\\..*_schedule_group$') | first | default('') %}
       {{ e != '' and has_value(e) }}
-  # The lead is the learned warm-up time with early start on, once two
-  # mornings have been measured, otherwise 5 minutes, so the morning starts at
-  # the alarm. Keep this in step
-  # with the lead_minutes variable, which explains it, and the Late start hold
-  # due trigger. A learned lead shrinks as the room warms, so once today's
-  # morning has started this stays true until the alarm, rather than turning
-  # false and firing again.
+  # The lead is the learned warm-up time with early start on, once a morning
+  # has been measured, otherwise 5 minutes, so the morning starts at the
+  # alarm. Keep this in step with the lead_minutes variable, which explains
+  # it, and the Late start hold due trigger. A learned lead shrinks as the room
+  # warms, so once today's morning has started this stays true until the alarm,
+  # rather than turning false and firing again.
   - alias: Early alarm window opened
     trigger: template
     id: early-alarm
