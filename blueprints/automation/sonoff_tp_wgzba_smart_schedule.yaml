@@ -526,7 +526,7 @@ triggers:
       {% set th = ents | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
       {% set hi = states(th) | float(0.2) if th != '' else 0.2 %}
       {% set la = l.a | default([0, 0, 0]) %}
-      {% set la = la if la[0] >= min_weight else [min_weight, start_dead, start_rate] %}
+      {% set la = la if la[0] >= min_weight else [0, start_dead, start_rate] %}
       {% set lead = ([[la[1] + la[2] * (p2t + hi - room), lead_min] | max, lead_max] | min) | int
            if early_start_enabled and room is not none and p2t is not none else 5 %}
       {{ a is not none and now() < a and (started or a - timedelta(minutes=lead) <= now()) }}
@@ -549,7 +549,7 @@ triggers:
       {% set th = ents | select('match', '^number\\..*_heating_high_threshold$') | first | default('') %}
       {% set hi = states(th) | float(0.2) if th != '' else 0.2 %}
       {% set la = l.a | default([0, 0, 0]) %}
-      {% set la = la if la[0] >= min_weight else [min_weight, start_dead, start_rate] %}
+      {% set la = la if la[0] >= min_weight else [0, start_dead, start_rate] %}
       {% set lead = ([[la[1] + la[2] * (p2t + hi - room), lead_min] | max, lead_max] | min) | int
            if early_start_enabled and room is not none and p2t is not none else 5 %}
       {% set p = ents | select('match', '^select\\..*_schedule_period_2_time$') | first | default('') %}
@@ -573,9 +573,10 @@ triggers:
       {% set s = states(p) if p != '' else '' %}
       {{ s is match('^[0-9]{2}:[0-9]{2}')
          and today_at(s[:5]) <= now() < today_at(s[:5]) + timedelta(minutes=2) }}
-  # A period warmer than the one before is within the lead of its start, and the room is cool enough for the thermostat to heat for it. Keep
-  # this in step with the early_period variable, which explains it. Once that
-  # early start has begun this stays true until the period starts, rather than
+  # A period warmer than the one before is within the lead of its start, and
+  # the room is cool enough for the thermostat to heat for it. Keep this in
+  # step with the early_period variable, which explains it. Once that early
+  # start has begun this stays true until the period starts, rather than
   # turning false as the room warms and firing again.
   - alias: Early start window opened
     trigger: template
@@ -593,7 +594,7 @@ triggers:
       {% set raw = states(state_helper) %}
       {% set st = raw | from_json(default={}) if raw is match('^\\{') else {} %}
       {% set a = (st.l | default({})).a | default([0, 0, 0]) %}
-      {% set a = a if a[0] >= min_weight else [min_weight, start_dead, start_rate] %}
+      {% set a = a if a[0] >= min_weight else [0, start_dead, start_rate] %}
       {% set r = st.r | default({}) %}
       {% set t = now().timestamp() %}
       {% set ns = namespace(on=r.k | default('') == 'e' and not r.c | default(0) and 0 < r.s | default(0) | int <= t < r.w | default(0) | int,
@@ -1080,19 +1081,22 @@ actions:
   #   the room reached it, at the idle, even if the target dropped later.
   #   The target dropped, and the latest report is above the lower stop
   #   point: cut short as the target fell below the room, so the latest report.
-  #   Otherwise the room reached the lower stop point at the idle. Between the first report and the end,
-  # the minutes per degree give the rate. The time to the first report, less
-  # the rate times the rise to it, gives the dead time. Both are added to
-  # learn.a ([weight, dead time, rate]), running averages with each earlier
-  # morning counting less (learning.memory), kept within their limits.
+  #   Otherwise the room reached the lower stop point at the idle.
+  # A target raised before the idle (a later period's early start) ends it
+  # too, at the latest report, as the room was heating all along. Between the
+  # first report and the end, the minutes per degree give the rate. The time
+  # to the first report, less the rate times the rise to it, gives the dead
+  # time. Both are added to learn.a ([weight, dead time, rate]), running
+  # averages with each earlier morning counting less (learning.memory), kept
+  # within their limits.
   # It is dropped if the room rose less than learning.min_rise in all or
   # learning.min_span between the first report and the end, took over
   # learning.max_minutes, or was not read within learning.read_within of the
   # idle. Before the idle, it is dropped if the group changed (also when the
   # thermostat dropped off or Home Assistant restarted), someone else takes
-  # over or cancels the routine (an Exit after the idle leaves it), the target
-  # is raised (a later early start or you), the thermostat leaves its schedule
-  # or the heating stopped and started again unseen. Times are in whole
+  # over or cancels the routine (an Exit after the idle leaves it), the
+  # thermostat leaves its schedule (as when you raise the target by hand) or
+  # the heating stopped and started again unseen. Times are in whole
   # seconds, like m's start.
   - alias: Learn the warm-up time
     if:
@@ -1131,11 +1135,17 @@ actions:
             {% set target = state_attr(climate_entity, 'temperature') | float(m[2]) %}
             {% set raised = target > m[2] + 0.05 %}
             {% set dropped = target < m[2] - 0.05 or (ns.after is not none and ns.after < m[2] - 0.05) %}
-            {% if warmed and not regrouped and not cancelled %}
+            {% set stopped = regrouped or cancelled
+                 or ((override_running or not on_schedule) and not routine_timer_running)
+                 or elapsed > c.max_minutes
+                 or (h is not none and h.state == 'heating' and since > m[0] + c.restart) %}
+            {% if (warmed and not regrouped and not cancelled) or (raised and not stopped) %}
               {% set orig = m[2] + high_threshold %}
               {% set low = [target, m[2]] | min + high_threshold %}
               {% if m | count < 7 %}
                 {% set te, ve = since, orig %}
+              {% elif raised %}
+                {% set te, ve = m[5], m[6] %}
               {% elif ns.cut and dropped %}
                 {% set te, ve = m[5], m[6] %}
               {% elif m[6] >= orig - 0.35 %}
@@ -1146,7 +1156,7 @@ actions:
                 {% set te, ve = since, low %}
               {% endif %}
               {% if m | count == 7 and ve - m[1] >= c.min_rise and ve - m[4] >= c.min_span and te > m[3]
-                    and elapsed <= c.max_minutes and now().timestamp() - since <= c.read_within %}
+                    and elapsed <= c.max_minutes and (raised or now().timestamp() - since <= c.read_within) %}
                 {% set rate = [[(te - m[3]) / 60 / (ve - m[4]), c.min_rate] | max, c.max_rate] | min %}
                 {% set dead = [[(m[3] - m[0]) / 60 - rate * (m[4] - m[1]), 0] | max, c.max_dead] | min %}
                 {% set w1 = a[0] * c.memory + 1 %}
@@ -1155,9 +1165,7 @@ actions:
               {% else %}
                 {% set out = kept %}
               {% endif %}
-            {% elif regrouped or cancelled or raised or ((override_running or not on_schedule) and not routine_timer_running)
-                  or elapsed > c.max_minutes
-                  or (h is not none and h.state == 'heating' and since > m[0] + c.restart) %}
+            {% elif stopped %}
               {% set out = kept %}
             {% elif rv is not none and rv > m[1] and rt >= m[0] and (m | count == 3 or rv != m[6]) %}
               {% set out = dict(l, m=(m + [rt, rv, rt, rv]) if m | count == 3 else m[:5] + [rt, rv]) %}
@@ -1449,21 +1457,23 @@ actions:
             {% set ns = namespace(t=none) %}
             {% for p in periods %}{% if today_at(p.time) <= now() %}{% set ns.t = p.temp %}{% endif %}{% endfor %}
             {{ ns.t }}
+          # The warm-up time as [dead time, minutes per degree]: the learned
+          # ones (learn.a, see Learn the warm-up time) once a morning has been
+          # measured, and start_dead and start_rate until then.
+          warm_up: >-
+            {% set a = (state.learn | default({})).a | default([0, 0, 0]) %}
+            {{ a[1:] if a[0] >= min_weight else [start_dead, start_rate] }}
           # Minutes before the alarm to start, with early start on: the dead
-          # time plus the minutes per degree times the rise from the room
-          # temperature now to where the thermostat stops (period 2's
-          # temperature plus its high threshold), kept within 10 and 180. They
-          # are the learned ones (learn.a, see Learn the warm-up time) once a
-          # morning has been measured, and start_dead and start_rate until
-          # then. With early start off, 5 minutes, so the morning starts
+          # time plus the minutes per degree (warm_up) times the rise from the
+          # room temperature now to where the thermostat stops (period 2's
+          # temperature plus its high threshold), kept within 10 and 180.
+          # With early start off, 5 minutes, so the morning starts
           # at the alarm: just before it, as the alarm sensor moves on to the
           # next alarm as it rings, and a run queued behind others still starts
           # it in time. Keep this in step with the alarm triggers.
           lead_minutes: >-
-            {% set a = (state.learn | default({})).a | default([0, 0, 0]) %}
-            {% set a = a if a[0] >= min_weight else [min_weight, start_dead, start_rate] %}
             {% set p2t = periods[1].temp if periods | count >= 2 else none %}
-            {{ ([[a[1] + a[2] * (p2t + high_threshold - room_temp), lead_min] | max, lead_max] | min) | int
+            {{ ([[warm_up[0] + warm_up[1] * (p2t + high_threshold - room_temp), lead_min] | max, lead_max] | min) | int
                if early_start_enabled and room_temp is not none and p2t is not none else 5 }}
           # The alarm minus the lead, when that is today too. Otherwise blank.
           alarm_start: >-
@@ -1530,11 +1540,9 @@ actions:
           # lead before it (to where the thermostat stops, as for the alarm)
           # until a minute before it, while the room is cool enough for the
           # thermostat to heat for it (below its temperature plus the low
-          # threshold). None with early start off. Keep this in step with the Early start window opened
-          # trigger.
+          # threshold). None with early start off. Keep this in step with the
+          # Early start window opened trigger.
           early_period: >-
-            {% set a = (state.learn | default({})).a | default([0, 0, 0]) %}
-            {% set a = a if a[0] >= min_weight else [min_weight, start_dead, start_rate] %}
             {% set ns = namespace(out=none) %}
             {% if early_start_enabled and room_temp is not none %}
               {% for i in range(1, periods | count) %}
@@ -1543,7 +1551,7 @@ actions:
                 {% set at = today_at(p.time).timestamp() | int %}
                 {% if ns.out is none and p.temp is not none and q.temp is not none and p.temp > q.temp
                       and room_temp < p.temp + low_threshold %}
-                  {% set lead = ([[a[1] + a[2] * (p.temp + high_threshold - room_temp), lead_min] | max, lead_max] | min) | int %}
+                  {% set lead = ([[warm_up[0] + warm_up[1] * (p.temp + high_threshold - room_temp), lead_min] | max, lead_max] | min) | int %}
                   {% if at - lead * 60 <= now().timestamp() <= at - min_stage %}
                     {% set ns.out = {'n': i + 1, 'at': at, 'temp': p.temp} %}
                   {% endif %}
