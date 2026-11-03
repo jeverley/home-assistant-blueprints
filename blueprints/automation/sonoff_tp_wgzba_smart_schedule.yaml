@@ -606,7 +606,7 @@ triggers:
           {% set tm = states(te) if te != '' else '' %}
           {% set temp = states(pe) | float(none) if pe != '' else none %}
           {% if ns.open and tm is match('^[0-9]{2}:[0-9]{2}') %}
-            {% if ns.prev is not none and temp is not none and temp > ns.prev and room < temp + low %}
+            {% if ns.prev is not none and temp is not none and temp > ns.prev and room <= temp + low + 0.05 %}
               {% set at = today_at(tm[:5]).timestamp() %}
               {% set lead = ([[a[1] + a[2] * (temp + hi - room), lead_min] | max, lead_max] | min) | int %}
               {% set ns.on = ns.on or at - lead * 60 <= t <= at - 60 %}
@@ -1539,9 +1539,10 @@ actions:
           # period warmer than the one before whose window is open, from the
           # lead before it (to where the thermostat stops, as for the alarm)
           # until a minute before it, while the room is cool enough for the
-          # thermostat to heat for it (below its temperature plus the low
-          # threshold). None with early start off. Keep this in step with the
-          # Early start window opened trigger.
+          # thermostat to heat for it (at or below its temperature plus the
+          # low threshold, as the thermostat heats at that point too). None
+          # with early start off. Keep this in step with the Early start window
+          # opened trigger.
           early_period: >-
             {% set ns = namespace(out=none) %}
             {% if early_start_enabled and room_temp is not none %}
@@ -1550,7 +1551,7 @@ actions:
                 {% set q = periods[i - 1] %}
                 {% set at = today_at(p.time).timestamp() | int %}
                 {% if ns.out is none and p.temp is not none and q.temp is not none and p.temp > q.temp
-                      and room_temp < p.temp + low_threshold %}
+                      and room_temp <= p.temp + low_threshold + 0.05 %}
                   {% set lead = ([[warm_up[0] + warm_up[1] * (p.temp + high_threshold - room_temp), lead_min] | max, lead_max] | min) | int %}
                   {% if at - lead * 60 <= now().timestamp() <= at - min_stage %}
                     {% set ns.out = {'n': i + 1, 'at': at, 'temp': p.temp} %}
@@ -1849,15 +1850,16 @@ actions:
                      and not routine_morning_today and not nobody_home and on_schedule and not override_running
                    else none }}
           # Measure the morning's warm-up if the room is cool enough for the
-          # thermostat to start heating (below the target plus its low
-          # threshold), has at least learning.min_rise to rise to where it stops, and
-          # no measurement is running. Saved at the end.
+          # thermostat to start heating (at or below the target plus its low
+          # threshold, as the thermostat heats at that point too), has at least
+          # learning.min_rise to rise to where it stops, and no measurement is
+          # running. Saved at the end.
           - alias: Start measuring the warm-up
             if:
               - condition: template
                 value_template: >-
                   {{ warm_up_target is not none and room_temp is not none
-                     and room_temp < warm_up_target + low_threshold
+                     and room_temp <= warm_up_target + low_threshold + 0.05
                      and warm_up_target + high_threshold - room_temp >= learning.min_rise
                      and (state.learn | default({})).m is not defined }}
             then:
