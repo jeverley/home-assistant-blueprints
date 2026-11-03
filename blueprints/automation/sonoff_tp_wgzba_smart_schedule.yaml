@@ -134,7 +134,7 @@ blueprint:
           description: |
             Pre-heats once someone heading home is within this distance. Allow roughly the distance you travel in the time your heating takes to warm up.
 
-            Uses the **Proximity** integration for the home zone. Set to 0 to pre-heat from the arriving sensors only.
+            Uses the **Proximity** integration for the home zone. Set to 0 to turn pre-heating off.
           default: 10
           selector:
             number:
@@ -192,20 +192,6 @@ blueprint:
               multiple: true
               filter:
                 - integration: proximity
-        arriving_sensors:
-          name: Arriving sensors (optional)
-          description: |
-            Binary sensors or toggles that turn on when someone is on their way home, such as a travel time helper.
-
-            Used as well as Proximity.
-          default: []
-          selector:
-            entity:
-              multiple: true
-              filter:
-                - domain:
-                    - binary_sensor
-                    - input_boolean
     routine:
       name: Routine
       icon: mdi:alarm
@@ -308,7 +294,6 @@ trigger_variables:
   geofencing_progress: !input geofencing_progress
   geofencing_timeout: !input geofencing_timeout
   proximity_devices: !input proximity_devices
-  arriving_sensors: !input arriving_sensors
   # Shared with the actions, so the triggers and actions agree: the weight one
   # measured morning gives, after which the learned warm-up time is used; the
   # dead time and minutes per degree used until then, a typical radiator
@@ -699,15 +684,14 @@ triggers:
       {{ ts | first is not defined
          or (ts | count >= (watched | count) / 2 and ts | max - ts | min <= 30) }}
   # Someone is heading home and close, from Proximity's per-person distance
-  # and direction sensors for the home zone, or an arriving sensor. Keep this
-  # in step with the heading_home variable.
+  # and direction sensors for the home zone. Keep this in step with the
+  # heading_home variable.
   - alias: Someone heading home
     trigger: template
     id: heading-home
     value_template: >-
       {% set ns = namespace(on=false, ents=[]) %}
       {% if away_enabled %}
-        {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
         {% if proximity_devices %}
           {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
         {% else %}
@@ -958,16 +942,15 @@ actions:
         {% set ts = watched | map(attribute='last_changed') | map('as_timestamp') | select('gt', cut) | list %}
         {{ ts | first is defined
            and not (ts | count >= (watched | count) / 2 and ts | max - ts | min <= burst_span) }}
-      # Someone is heading home and close: an arriving sensor is on, or someone
-      # within the geofencing distance is heading towards home and has come
-      # the progress distance closer than their furthest point. Keep this in
+      # Someone is heading home and close: someone within the geofencing
+      # distance is heading towards home and has come the progress distance
+      # closer than their furthest point. Keep this in
       # step with the Someone heading home trigger. Only used while the home
       # zone is empty, so it is skipped otherwise.
       heading_home: >-
         {% set ns = namespace(on=false) %}
         {% set prog = geofencing_progress | float(0) / 100 %}
         {% if away_enabled and states(home_zone) | int(0) == 0 %}
-          {% for e in arriving_sensors %}{% if is_state(e, 'on') %}{% set ns.on = true %}{% endif %}{% endfor %}
           {% for d in distances %}
             {% set e = proximity_distances[loop.index0] %}
             {% if d is not none and is_state(e[:-9] ~ '_direction_of_travel', 'towards')

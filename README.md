@@ -88,7 +88,7 @@ The lead is the dead time plus the minutes per degree times the rise from the ro
 | --- | --- |
 | Thermostat | the TP-WGZBA device, state helper (required), Warm on time (on) |
 | Occupancy | follow occupancy (on), heated areas (none), occupied delay (1 min), empty delay (5 min) |
-| Geofencing | away schedule (on), home zone (default `zone.home`), geofencing distance (10 km, 0 for arriving sensors only), progress distance (500 m), pre-heat schedule group (Schedule 2), geofencing timeout (45 min), Proximity devices (found from the home zone), arriving sensors (none) |
+| Geofencing | away schedule (on), home zone (default `zone.home`), geofencing distance (10 km, 0 to turn pre-heating off), progress distance (500 m), pre-heat schedule group (Schedule 2), geofencing timeout (45 min), Proximity devices (found from the home zone) |
 | Routine | next waking alarm sensor (optional, none), early alarm (on), late alarm (on), awake sensors (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
 
 ### Example configurations
@@ -141,9 +141,7 @@ Geofencing uses the built-in **Proximity** integration. Add it under **Settings*
 
 The blueprint finds that Proximity entry by its name, which defaults to the home zone's name, and reads each person's distance and direction of travel sensors. Someone counts as heading home when they are within the geofencing distance, moving `towards` home, and at least the **Progress distance** (500 m by default) closer than the furthest they have been since leaving. That last condition stops pre-heating while someone is somewhere nearby and their readings wobble towards home. In testing on a day out, it removed every false pre-heat (people at a shop 5.8 km away, and out for the evening 3.7 km away) and still pre-heated both journeys home, 10 and 6.5 minutes before arriving. The furthest points are kept in the State helper (`g`, one per person in the order of their distance sensors' entity ids, in hundreds of metres, reset once they are within 100 m of home), and a short run records each time someone heading away passes theirs by a quarter of the progress distance. These runs don't need the thermostat, so they still record while it is unavailable. Set the progress distance to 0 to pre-heat as soon as someone heads home. If the entry has been renamed, or the zone has, pick it under **Proximity devices**. Distances are converted from Proximity's unit (metres, kilometres or miles).
 
-While nobody is home, someone heading home switches the thermostat to the pre-heat group and records the time in the State helper. Pre-heating carries on until someone gets home, even if they stop on the way, or until the geofencing timeout passes, when it goes back to Schedule 3. If someone is still shown heading home then, it pre-heats again only once they stop and set off again, so a stuck reading cannot keep the house warm. To stop pre-heating but keep the away schedule, set **Geofencing distance** to 0 and leave **Arriving sensors** empty.
-
-**Arriving sensors** (binary sensors or toggles) count as well as Proximity, for example a template helper that is on when a Waze or Google travel time to home is under 15 minutes.
+While nobody is home, someone heading home switches the thermostat to the pre-heat group and records the time in the State helper. Pre-heating carries on until someone gets home, even if they stop on the way, or until the geofencing timeout passes, when it goes back to Schedule 3. If someone is still shown heading home then, it pre-heats again only once they stop and set off again, so a stuck reading cannot keep the house warm. To stop pre-heating but keep the away schedule, set **Geofencing distance** to 0.
 
 ### Requirements and caveats
 
