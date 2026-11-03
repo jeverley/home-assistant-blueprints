@@ -49,6 +49,7 @@ blueprint:
         - **Rated output**: the lumens on the bulb's packaging at full brightness.
         - **Distance to pillow**: straight-line distance from the bulb to your head.
         - **Output at lowest brightness** (optional): lumens at brightness 1, if known. Defaults to 1/255 of the rated output.
+        - **Shade factor** (optional): how much of a bare bulb's light reaches you, default `1`. Rough guides: fabric lampshade seen side-on `0.3`–`0.6`, opaque shade `0.1`–`0.2`, open-bottomed shade pointing at the bed `1.2`–`2`. To measure it, put a phone lux meter on the pillow with only that light on at full: factor = lux × 12.57 × distance² ÷ lumens.
 
         At the dimmest levels lights are brought in in list order, so put the light you want to come on first at the top.
       selector:
@@ -82,6 +83,15 @@ blueprint:
                   max: 10
                   step: 0.1
                   unit_of_measurement: m
+                  mode: box
+            shade_factor:
+              label: Shade factor
+              required: false
+              selector:
+                number:
+                  min: 0.05
+                  max: 3
+                  step: 0.05
                   mode: box
             min_lumens:
               label: Output at lowest brightness (lm)
@@ -438,14 +448,15 @@ actions:
   # --- LIGHTS ---
   - variables:
       # Lights that exist and have a rated output, with their lux at the pillow at
-      # full and lowest brightness. lux = lumens / (4π d²)
+      # full and lowest brightness. lux = lumens × shade factor / (4π d²)
       lights: |
         {% set ns = namespace(out=[]) %}
         {% for l in sunrise_lights | default([], true) %}
           {% if l is mapping and l.entity is defined and states[l.entity] is not none
             and l.lumens | default(0) | float(0) > 0 %}
             {% set d = [l.distance_m | default(1.5) | float(1.5), 0.1] | max %}
-            {% set f = 1 / (4 * pi * d * d) %}
+            {% set shade = l.shade_factor | default(1, true) | float(1) %}
+            {% set f = ([shade, 0.01] | max) / (4 * pi * d * d) %}
             {% set lm = l.lumens | float %}
             {% set mn = l.min_lumens | default(none) %}
             {% set mn = mn | float(lm / 255) if mn is not none else lm / 255 %}
