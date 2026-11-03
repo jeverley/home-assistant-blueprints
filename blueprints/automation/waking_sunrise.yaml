@@ -2,15 +2,23 @@ blueprint:
   domain: automation
   name: Waking Sunrise
   description: |
-    Biologically accurate sunrise simulation.
+    Biologically accurate sunrise simulation that targets illuminance (lux) at your pillow rather than a brightness percentage, so the result is the same whatever lights you use.
+
+    Each light is described by its rated output in lumens and its distance from your pillow. Brightness is worked out per light so that together they deliver each phase's lux target. At the dimmest levels only the first lights in the list are used. Lux targets above what your lights can deliver are capped at their combined maximum.
+
+    If the sunrise starts late (start conditions met late, or Home Assistant was offline) it is squeezed into the time left before the alarm, so it still begins from darkness. A sunrise interrupted by a restart carries on where it left off.
+
+    Turning a light off, or changing its brightness, stops the sunrise for that alarm. Run the automation manually to preview a full sunrise starting now.
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/waking_sunrise.yaml
+  homeassistant:
+    min_version: 2025.4.0
   input:
     alarm_sensor:
       name: Alarm sensor (optional)
       description: |
         A sensor that reports the next waking alarm time.
 
-        When the sensor state is `unknown` it is treated as unset.
+        When the sensor state is `unknown` it is treated as no alarm set.
       default: null
       selector:
         entity:
@@ -20,7 +28,7 @@ blueprint:
     fallback_time:
       name: Fallback time (optional)
       description: |
-        This time is used when an alarm sensor is unspecified or `unavailable`.
+        This time is used when the alarm sensor is not set, missing or `unavailable`.
       default: null
       selector:
         time:
@@ -33,19 +41,63 @@ blueprint:
         entity:
           domain: input_text
 
-    target_lights:
+    sunrise_lights:
       name: Lights
       description: |
-        Specify lights to use in the sunrise simulation.
+        The lights used for the sunrise, with their specifications.
+
+        - **Rated output**: the lumens on the bulb's packaging at full brightness.
+        - **Distance to pillow**: straight-line distance from the bulb to your head.
+        - **Output at lowest brightness** (optional): lumens at brightness 1, if known. Defaults to 1/255 of the rated output.
+
+        At the dimmest levels lights are brought in in list order, so put the light you want to come on first at the top.
       selector:
-        target:
-          entity:
-            domain: light
+        object:
+          multiple: true
+          label_field: entity
+          description_field: lumens
+          fields:
+            entity:
+              label: Light
+              required: true
+              selector:
+                entity:
+                  domain: light
+            lumens:
+              label: Rated output (lm)
+              required: true
+              selector:
+                number:
+                  min: 1
+                  max: 20000
+                  step: 1
+                  unit_of_measurement: lm
+                  mode: box
+            distance_m:
+              label: Distance to pillow (m)
+              required: true
+              selector:
+                number:
+                  min: 0.2
+                  max: 10
+                  step: 0.1
+                  unit_of_measurement: m
+                  mode: box
+            min_lumens:
+              label: Output at lowest brightness (lm)
+              required: false
+              selector:
+                number:
+                  min: 0.1
+                  max: 2000
+                  step: 0.1
+                  unit_of_measurement: lm
+                  mode: box
 
     start_conditions:
       name: Start conditions
       description: |
-        Prevent sunrise from starting until these conditions are true
+        Prevent sunrise from starting until these conditions are true. If they are still not true at the alarm time, the sunrise is skipped.
       default: []
       selector:
         condition: {}
@@ -55,14 +107,18 @@ blueprint:
       icon: mdi:cog
       collapsed: true
       input:
-        max_brightness_step:
-          name: Maximum brightness step per transition (uses the internal 1–255 range)
-          default: 3
+        max_lux_step_pct:
+          name: Maximum lux change per step
+          description: |
+            Each light command fades the lights by at most this much. Smaller steps send more commands.
+          default: 10
           selector:
             number:
-              min: 1
-              max: 10
+              min: 2
+              max: 50
               step: 1
+              unit_of_measurement: "%"
+              mode: slider
 
     nautical_phase_section:
       name: 1 - Nautical Dawn
@@ -82,15 +138,27 @@ blueprint:
               unit_of_measurement: min
               mode: slider
 
-        nautical_brightness_end:
-          name: End brightness (%)
-          default: 15
+        nautical_lux_end:
+          name: End illuminance (lx)
+          default: 3
           selector:
             number:
-              min: 1
-              max: 100
-              step: 1
-              unit_of_measurement: "%"
+              min: 0.1
+              max: 50
+              step: 0.1
+              unit_of_measurement: lx
+              mode: box
+
+        nautical_kelvin_start:
+          name: Start colour temperature (K)
+          default: 1800
+          selector:
+            number:
+              min: 1500
+              max: 2500
+              step: 50
+              unit_of_measurement: K
+              mode: slider
 
         nautical_kelvin_end:
           name: End colour temperature (K)
@@ -101,9 +169,10 @@ blueprint:
               max: 2500
               step: 50
               unit_of_measurement: K
+              mode: slider
 
         nautical_brightness_exponent:
-          name: Brightness slope (exponent)
+          name: Lux slope (exponent)
           default: 1.6
           selector:
             number:
@@ -111,6 +180,7 @@ blueprint:
               max: 2.5
               step: 0.1
               unit_of_measurement: "^"
+              mode: slider
 
     civil_phase_section:
       name: 2 - Civil Dawn
@@ -130,15 +200,16 @@ blueprint:
               unit_of_measurement: min
               mode: slider
 
-        civil_brightness_end:
-          name: End brightness (%)
-          default: 70
+        civil_lux_end:
+          name: End illuminance (lx)
+          default: 40
           selector:
             number:
               min: 1
-              max: 100
+              max: 500
               step: 1
-              unit_of_measurement: "%"
+              unit_of_measurement: lx
+              mode: box
 
         civil_kelvin_end:
           name: End colour temperature (K)
@@ -149,9 +220,10 @@ blueprint:
               max: 4500
               step: 50
               unit_of_measurement: K
+              mode: slider
 
         civil_brightness_exponent:
-          name: Brightness slope (exponent)
+          name: Lux slope (exponent)
           default: 1.8
           selector:
             number:
@@ -159,6 +231,7 @@ blueprint:
               max: 2.2
               step: 0.1
               unit_of_measurement: "^"
+              mode: slider
 
     sunrise_phase_section:
       name: 3 - Sunrise
@@ -178,15 +251,16 @@ blueprint:
               unit_of_measurement: min
               mode: slider
 
-        sunrise_brightness_end:
-          name: End brightness (%)
-          default: 100
+        sunrise_lux_end:
+          name: End illuminance (lx)
+          default: 250
           selector:
             number:
-              min: 1
-              max: 100
-              step: 1
-              unit_of_measurement: "%"
+              min: 10
+              max: 2000
+              step: 10
+              unit_of_measurement: lx
+              mode: box
 
         sunrise_kelvin_end:
           name: End colour temperature (K)
@@ -197,9 +271,10 @@ blueprint:
               max: 6500
               step: 50
               unit_of_measurement: K
+              mode: slider
 
         sunrise_brightness_exponent:
-          name: Brightness slope (exponent)
+          name: Lux slope (exponent)
           default: 1.0
           selector:
             number:
@@ -207,11 +282,12 @@ blueprint:
               max: 1.5
               step: 0.1
               unit_of_measurement: "^"
+              mode: slider
 
     maintenance_phase_section:
       name: 4 - Maintenance
       description: |
-        Pre-alarm plateau at peak intensity to reduce sleep inertia.
+        Pre-alarm plateau at peak intensity to reduce sleep inertia. A late sunrise uses this time to catch up.
       icon: mdi:alarm
       collapsed: true
       input:
@@ -226,341 +302,418 @@ blueprint:
               unit_of_measurement: min
               mode: slider
 
-mode: restart
+mode: single
+max_exceeded: silent
 
 trigger_variables:
   alarm_sensor: !input alarm_sensor
   fallback_time: !input fallback_time
   helper_entity: !input helper_entity
-  target_lights: !input target_lights
-  max_brightness_step: !input max_brightness_step
-
   nautical_duration_min: !input nautical_duration_min
   civil_duration_min: !input civil_duration_min
   sunrise_duration_min: !input sunrise_duration_min
   maintenance_duration_min: !input maintenance_duration_min
+  # Minutes from the start of the sunrise to the alarm
+  lead_min: "{{ nautical_duration_min|int + civil_duration_min|int + sunrise_duration_min|int + maintenance_duration_min|int }}"
 
-  nautical_brightness_end: !input nautical_brightness_end
-  civil_brightness_end: !input civil_brightness_end
-  sunrise_brightness_end: !input sunrise_brightness_end
-
-  nautical_brightness_exponent: !input nautical_brightness_exponent
-  civil_brightness_exponent: !input civil_brightness_exponent
-  sunrise_brightness_exponent: !input sunrise_brightness_exponent
-
-  nautical_kelvin_end: !input nautical_kelvin_end
-  civil_kelvin_end: !input civil_kelvin_end
-  sunrise_kelvin_end: !input sunrise_kelvin_end
-
-  duration_min: "{{ nautical_duration_min|int + civil_duration_min|int + sunrise_duration_min|int }}"
-  duration_s: "{{ duration_min|int * 60 }}"
-  duration: "{{ timedelta(minutes=duration_min|int) }}"
-
-trigger:
-  - platform: template
+triggers:
+  # The scheduled sunrise window has opened for an alarm that hasn't been handled yet
+  - trigger: template
+    id: schedule
     value_template: |
       {% set h = states(helper_entity) | from_json(default={}) %}
-      {% set last_alarm = as_datetime(h.last_alarm | default(none), none) %}
-      {% set active = h.active | default(false) %}
-
-      {% set started_today = not not last_alarm and as_local(last_alarm).date() == now().date() %}
+      {% set last_alarm = as_datetime(h.last_alarm | default(none), none) if h is mapping else none %}
 
       {% set sensor = states[alarm_sensor] if alarm_sensor else none %}
       {% set sensor_state = sensor.state if sensor else 'unavailable' %}
       {% if sensor_state == 'unavailable' %}
-        {% set sensor_dt = 'unavailable' %}
+        {% if fallback_time is not none %}
+          {% set f = today_at(fallback_time) %}
+          {% set alarm = f if now() < f else f + timedelta(days=1) %}
+        {% else %}
+          {% set alarm = none %}
+        {% endif %}
       {% else %}
-        {# none/unknown is handed as no alarm set #}
-        {% set sensor_dt = as_datetime(sensor_state, none) %}
+        {# unknown is handled as no alarm set #}
+        {% set alarm = as_datetime(sensor_state, none) %}
       {% endif %}
 
-      {% set fallback_dt = today_at(fallback_time) if fallback_time is not none else none %}
-
-      {% if started_today %}
-        {% set alarm_dt = last_alarm %}
-      {% elif sensor_dt == 'unavailable' %}
-        {% set alarm_dt = fallback_dt %}
-      {% elif sensor_dt %}
-        {% set alarm_dt = sensor_dt %}
-      {% else %}
-        {% set alarm_dt = none %}
-      {% endif %}
-
-      {% if alarm_dt %}
-        {% set start_dt = alarm_dt - timedelta(minutes=duration_min + maintenance_duration_min) %}
-        {% set end_dt = alarm_dt - timedelta(minutes=maintenance_duration_min) %}
-      {% else %}
-        {% set start_dt = none %}
-        {% set end_dt = none %}
-      {% endif %}
+      {% set handled = alarm is not none and last_alarm is not none
+        and ((alarm - last_alarm).total_seconds())|abs < 60 %}
 
       {{
-        alarm_dt and start_dt <= now() < alarm_dt
-        and (not started_today or active)
+        alarm is not none and not handled
+        and alarm - timedelta(minutes=lead_min) <= now() < alarm - timedelta(minutes=1)
       }}
 
-conditions:
-  - condition: template
-    value_template: "{{ state_attr(this.entity_id, 'current')|int(0) == 0 }}"
+  # Carry on a sunrise interrupted by a restart, or start one that was missed while offline
+  - trigger: homeassistant
+    id: resume
+    event: start
 
-action:
+actions:
   # --- RUNTIME VARIABLES ---
   - variables:
-      h: "{{ states(helper_entity) | from_json(default={}) }}"
-      last_alarm: "{{ as_datetime(h.last_alarm | default(none), none) }}"
-      active: "{{ h.active | default(false) }}"
-      aborted: "{{ h.aborted | default(false) }}"
+      sunrise_lights: !input sunrise_lights
+      max_lux_step_pct: !input max_lux_step_pct
+      nautical_lux_end: !input nautical_lux_end
+      civil_lux_end: !input civil_lux_end
+      sunrise_lux_end: !input sunrise_lux_end
+      nautical_kelvin_start: !input nautical_kelvin_start
+      nautical_kelvin_end: !input nautical_kelvin_end
+      civil_kelvin_end: !input civil_kelvin_end
+      sunrise_kelvin_end: !input sunrise_kelvin_end
+      nautical_brightness_exponent: !input nautical_brightness_exponent
+      civil_brightness_exponent: !input civil_brightness_exponent
+      sunrise_brightness_exponent: !input sunrise_brightness_exponent
 
-      started_today: "{{ not not last_alarm and as_local(as_datetime(last_alarm)).date() == now().date() }}"
+      h: |
+        {% set h = states(helper_entity) | from_json(default={}) %}
+        {{ h if h is mapping else {} }}
 
-      sensor_dt: |
-        {% set sensor = states[alarm_sensor] if alarm_sensor else none %}
-        {% set s = sensor.state if sensor else 'unavailable' %}
-        {% if s == 'unavailable' %}
-          {{ 'unavailable' }}
+      # test: manual run previewing a sunrise from now (never touches the helper)
+      # resume: carry on a sunrise that was running when Home Assistant stopped
+      # schedule: a normal sunrise for the next alarm
+      run_mode: |
+        {% if trigger.id is not defined %}
+          test
+        {% elif trigger.id == 'resume' and h.active | default(false)
+          and as_datetime(h.end | default(none), none) is not none
+          and now() < as_datetime(h.end) %}
+          resume
         {% else %}
-          {# none/unknown is handed as no alarm set #}
-          {{ as_datetime(s, none) }}
+          schedule
         {% endif %}
-
-      fallback_dt: |
-        {{ today_at(fallback_time) if fallback_time is not none else none }}
 
       alarm_dt: |
-        {% if trigger.id is not defined %}
-          {# manual trigger executes a test sunrise #}
-          {{ now() + timedelta(minutes=duration_min + maintenance_duration_min) }}
-        {% elif started_today %}
-          {{ last_alarm }}
-        {% elif sensor_dt == 'unavailable' %}
-          {{ fallback_dt }}
-        {% elif sensor_dt %}
-          {{ sensor_dt }}
+        {% if run_mode == 'test' %}
+          {{ (now() + timedelta(minutes=lead_min)).isoformat() }}
+        {% elif run_mode == 'resume' %}
+          {{ h.last_alarm }}
         {% else %}
-          {{ none }}
+          {% set sensor = states[alarm_sensor] if alarm_sensor else none %}
+          {% set s = sensor.state if sensor else 'unavailable' %}
+          {% if s == 'unavailable' %}
+            {% if fallback_time is not none %}
+              {% set f = today_at(fallback_time) %}
+              {{ (f if now() < f else f + timedelta(days=1)).isoformat() }}
+            {% else %}
+              {{ none }}
+            {% endif %}
+          {% else %}
+            {% set a = as_datetime(s, none) %}
+            {{ a.isoformat() if a is not none else none }}
+          {% endif %}
         {% endif %}
 
-      # Test runs leave the recorded alarm alone so they can't block a real sunrise
-      record_alarm: "{{ alarm_dt if trigger.id is defined else h.last_alarm | default(none) }}"
+      handled: |
+        {% set last = as_datetime(h.last_alarm | default(none), none) %}
+        {{ alarm_dt is not none and last is not none
+          and ((as_datetime(alarm_dt) - last).total_seconds())|abs < 60 }}
 
-      start_dt: "{{ as_datetime(alarm_dt) - timedelta(minutes=duration_min + maintenance_duration_min) if alarm_dt else none }}"
-      end_dt: "{{ as_datetime(alarm_dt) - timedelta(minutes=maintenance_duration_min) if alarm_dt else none }}"
+  # A restart left the helper marked as running, but that sunrise has finished
+  - if: "{{ trigger.id is defined and trigger.id == 'resume' and run_mode == 'schedule' and h.active | default(false) }}"
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: "{{ helper_entity }}"
+        data:
+          value: "{{ dict(h, active=false, status='interrupted') | to_json }}"
 
-      # Phase weights
-      w1: "{{ nautical_duration_min / duration_min }}"
-      w2: "{{ civil_duration_min / duration_min }}"
-      w3: "{{ sunrise_duration_min / duration_min }}"
+  # Only start a scheduled sunrise inside its window, once per alarm
+  - if: |
+      {{ run_mode == 'schedule' and not (
+        alarm_dt is not none and not handled
+        and as_datetime(alarm_dt) - timedelta(minutes=lead_min) <= now() < as_datetime(alarm_dt) - timedelta(minutes=1)
+      ) }}
+    then:
+      - stop: "No sunrise due"
 
-      # Phase boundaries
-      p1_end: "{{ w1 }}"
-      p2_end: "{{ w1 + w2 }}"
-      p3_end: 1
+  # Give lights time to come back after a restart
+  - if: "{{ trigger.id is defined and trigger.id == 'resume' }}"
+    then:
+      - delay:
+          seconds: 30
 
-      # Phase durations
-      p1_dur_s: "{{ nautical_duration_min * 60 }}"
-      p2_dur_s: "{{ civil_duration_min * 60 }}"
-      p3_dur_s: "{{ sunrise_duration_min * 60 }}"
+  # --- LIGHTS ---
+  - variables:
+      # Lights that exist and have a rated output, with their lux at the pillow at
+      # full and lowest brightness. lux = lumens / (4π d²)
+      lights: |
+        {% set ns = namespace(out=[]) %}
+        {% for l in sunrise_lights | default([], true) %}
+          {% if l is mapping and l.entity is defined and states[l.entity] is not none
+            and l.lumens | default(0) | float(0) > 0 %}
+            {% set d = [l.distance_m | default(1.5) | float(1.5), 0.1] | max %}
+            {% set f = 1 / (4 * pi * d * d) %}
+            {% set lm = l.lumens | float %}
+            {% set mn = l.min_lumens | default(none) %}
+            {% set mn = mn | float(lm / 255) if mn is not none else lm / 255 %}
+            {% set mn = [[mn, 0.0001] | max, lm] | min %}
+            {% set ns.out = ns.out + [{
+              "entity": l.entity, "lm": lm, "mn": mn, "f": f,
+              "max": lm * f, "min": mn * f
+            }] %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.out }}
 
-      # Kelvin boundaries
-      k0: 1800
-      k1: "{{ nautical_kelvin_end }}"
-      k2: "{{ civil_kelvin_end }}"
-      k3: "{{ sunrise_kelvin_end }}"
-
-      # Phase exponents
-      e1: "{{ nautical_brightness_exponent }}"
-      e2: "{{ civil_brightness_exponent }}"
-      e3: "{{ sunrise_brightness_exponent }}"
-
-      # Brightness boundaries (%)
-      b0: "{{ 1 / 255 * 100 }}"
-      b1: "{{ nautical_brightness_end }}"
-      b2: "{{ civil_brightness_end }}"
-      b3: "{{ sunrise_brightness_end }}"
-
-      # Max brightness step (%)
-      max_step_pct: "{{ max(max_brightness_step, 1) / 255 * 100 }}"
+  - if: "{{ lights | count == 0 }}"
+    then:
+      - stop: "No usable lights configured"
 
   # --- START CONDITIONS ---
-  - if: !input start_conditions
-    then: []
-    else:
-      - repeat:
-          until:
-            - or:
-                - and: !input start_conditions
-                - condition: template
-                  value_template: "{{ now() >= as_datetime(alarm_dt) }}"
-                - condition: template
-                  value_template: "{{ trigger.id is not defined }}"
-          sequence:
-            - delay:
-                seconds: 10
-      - if:
-          - or:
-              - and: !input start_conditions
-              - condition: template
-                value_template: "{{ trigger.id is not defined }}"
+  - if: "{{ run_mode == 'schedule' }}"
+    then:
+      - if: !input start_conditions
         then: []
         else:
-          - stop: "Start conditions not met"
+          - repeat:
+              until:
+                - or:
+                    - and: !input start_conditions
+                    - condition: template
+                      value_template: "{{ now() >= as_datetime(alarm_dt) - timedelta(minutes=1) }}"
+              sequence:
+                - delay:
+                    seconds: 10
+          - if: !input start_conditions
+            then: []
+            else:
+              - action: input_text.set_value
+                target:
+                  entity_id: "{{ helper_entity }}"
+                data:
+                  value: |
+                    {{ {"last_alarm": alarm_dt, "active": false, "status": "skipped"} | to_json }}
+              - stop: "Start conditions not met before the alarm"
 
-  # --- WRITE HELPER (start) ---
-  - service: input_text.set_value
-    target:
-      entity_id: "{{ helper_entity }}"
-    data:
-      value: |
-        {{ {"last_alarm": record_alarm, "active": trigger.id is defined, "aborted": false} | to_json }}
+  # --- SCHEDULE ---
+  - variables:
+      # Planned sunrise length, excluding maintenance
+      planned_s: "{{ (nautical_duration_min + civil_duration_min + sunrise_duration_min) * 60 }}"
+
+      # When the sunrise runs. A late start is squeezed into the time left before
+      # the alarm (using the maintenance time first) so it still begins from darkness.
+      sched: |
+        {% if run_mode == 'resume' %}
+          {{ {"start": h.start, "end": h.end} }}
+        {% elif run_mode == 'test' %}
+          {{ {"start": now().isoformat(), "end": (now() + timedelta(seconds=planned_s)).isoformat()} }}
+        {% else %}
+          {% set alarm = as_datetime(alarm_dt) %}
+          {% set start = alarm - timedelta(minutes=lead_min) %}
+          {% if (now() - start).total_seconds() <= 60 %}
+            {{ {"start": start.isoformat(), "end": (start + timedelta(seconds=planned_s)).isoformat()} }}
+          {% else %}
+            {% set run_s = [planned_s, (alarm - now()).total_seconds()] | min %}
+            {{ {"start": now().isoformat(), "end": (now() + timedelta(seconds=run_s)).isoformat()} }}
+          {% endif %}
+        {% endif %}
+
+      start_ts: "{{ as_datetime(sched.start).timestamp() }}"
+      run_s: "{{ [(as_datetime(sched.end) - as_datetime(sched.start)).total_seconds(), 1] | max }}"
+
+      # Phase boundaries as fractions of the sunrise
+      bounds: |
+        {% set total = nautical_duration_min + civil_duration_min + sunrise_duration_min %}
+        {{ [0, nautical_duration_min / total, (nautical_duration_min + civil_duration_min) / total, 1] }}
+
+      # Lux targets, capped at what the lights can deliver. The start is the
+      # first light at its lowest brightness.
+      max_lux: "{{ lights | sum(attribute='max') }}"
+      lux_pts: |
+        {{ [
+          lights[0].min,
+          [nautical_lux_end, max_lux] | min,
+          [civil_lux_end, max_lux] | min,
+          [sunrise_lux_end, max_lux] | min
+        ] }}
+      capped: "{{ [nautical_lux_end, civil_lux_end, sunrise_lux_end] | max > max_lux }}"
+      kelvin_pts: "{{ [nautical_kelvin_start, nautical_kelvin_end, civil_kelvin_end, sunrise_kelvin_end] }}"
+      exponents: "{{ [nautical_brightness_exponent, civil_brightness_exponent, sunrise_brightness_exponent] }}"
+
+      sent: []
+      step: {}
+
+  - if: "{{ run_mode != 'test' }}"
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: "{{ helper_entity }}"
+        data:
+          value: |
+            {{ {"last_alarm": alarm_dt, "active": true, "status": "running",
+                "start": sched.start, "end": sched.end} | to_json }}
 
   # --- MAIN LOOP ---
   - repeat:
       sequence:
-        # --- LOOP VARIABLES ---
+        # Work out the next fade: how long it should take and where each light should end up
         - variables:
-            state: |
-              {% set b = target_lights.entity_id | map('state_attr', 'brightness') | reject('eq', none) | list %}
-              {{ {
-                "is_off": target_lights.entity_id | select('is_state', 'off') | list | count > 0,
-                "b_max": b|max / 255 * 100 if b else 0
-              } }}
+            step: |
+              {%- macro seg(p) -%}
+                {{ 0 if p <= bounds[1] else 1 if p <= bounds[2] else 2 }}
+              {%- endmacro -%}
+              {%- macro lux_at(p) -%}
+                {%- set i = seg(p) | int -%}
+                {%- set x = (p - bounds[i]) / (bounds[i + 1] - bounds[i]) -%}
+                {{ lux_pts[i] + (lux_pts[i + 1] - lux_pts[i]) * ([x, 0] | max) ** exponents[i] }}
+              {%- endmacro -%}
+              {%- macro kelvin_at(p) -%}
+                {%- set i = seg(p) | int -%}
+                {%- set x = (p - bounds[i]) / (bounds[i + 1] - bounds[i]) -%}
+                {{ kelvin_pts[i] + (kelvin_pts[i + 1] - kelvin_pts[i]) * x }}
+              {%- endmacro -%}
 
-            # Normalised progress 0–1
-            p: |
-              {{ min(max((now().timestamp() - as_datetime(start_dt).timestamp()) / duration_s, 0), 1) }}
+              {% set min_iv = 5 %}
+              {% set p = [[(now().timestamp() - start_ts) / run_s, 0] | max, 1] | min %}
+              {% set i = seg(p) | int %}
+              {% set width = bounds[i + 1] - bounds[i] %}
+              {% set x = (p - bounds[i]) / width %}
+              {% set pd = width * run_s %}
+              {% set pr = (bounds[i + 1] - p) * run_s %}
+              {% set ls = lux_pts[i] %}
+              {% set span = lux_pts[i + 1] - ls %}
+              {% set ln = lux_at(p) | float %}
 
-            # Phase context dict (self-selecting based on p)
-            phase: |
-              {% set p = p|float %}
-              {% if p <= p1_end %}
-                {{ {
-                  "name": "nautical",
-                  "b_start": b0,
-                  "b_end": b1,
-                  "k_start": k0,
-                  "k_end": k1,
-                  "e": e1,
-                  "p_start": 0,
-                  "p_end": p1_end,
-                  "p_dur_s": p1_dur_s
-                } }}
-              {% elif p <= p2_end %}
-                {{ {
-                  "name": "civil",
-                  "b_start": b1,
-                  "b_end": b2,
-                  "k_start": k1,
-                  "k_end": k2,
-                  "e": e2,
-                  "p_start": p1_end,
-                  "p_end": p2_end,
-                  "p_dur_s": p2_dur_s
-                } }}
+              {# Time until lux has changed by the maximum step #}
+              {% set grow = 1 + max_lux_step_pct / 100 %}
+              {% if span | abs < 0.000001 %}
+                {% set iv = pr %}
               {% else %}
-                {{ {
-                  "name": "sunrise",
-                  "b_start": b2,
-                  "b_end": b3,
-                  "k_start": k2,
-                  "k_end": k3,
-                  "e": e3,
-                  "p_start": p2_end,
-                  "p_end": p3_end,
-                  "p_dur_s": p3_dur_s
-                } }}
-              {% endif %}
-
-            # Remaining time in this phase
-            phase_remaining_s: |
-              {{ max((phase.p_end - p|float) * duration_s, 0) }}
-
-            # Phase-local x (0–1)
-            x: |
-              {{ (p|float - phase.p_start) / (phase.p_end - phase.p_start) }}
-
-            # Current brightness
-            brightness_pct: |
-              {{ phase.b_start + (phase.b_end - phase.b_start) * (x|float ** phase.e) }}
-
-            # Current Kelvin (linear ramp)
-            kelvin: |
-              {{ (phase.k_start + (phase.k_end - phase.k_start) * x|float)|round }}
-
-            # --- INTERVAL: time until brightness reaches (current + max_step_pct) ---
-            interval: |
-              {% set pbr = phase.b_end - phase.b_start %}
-              {% set pd = phase.p_dur_s|float %}
-              {% set pr = phase_remaining_s|float %}
-              {% set b_now = brightness_pct|float %}
-              {% set b_target = b_now + max_step_pct|float %}
-              {% set x_now = x|float %}
-
-              {% if pbr <= 0 or pd <= 0 %}
-                {% set interval_curve = pr %}
-              {% elif b_target >= phase.b_end %}
-                {% set interval_curve = pr %}
-              {% else %}
-                {% set ratio = (b_target - phase.b_start) / pbr %}
-                {% if ratio <= 0 %}
-                  {% set interval_curve = 0 %}
+                {# At least one brightness unit of the first light, below which nothing changes #}
+                {% set unit = (lights[0].max - lights[0].min) / 254 %}
+                {% set lt = [ln * grow, ln + unit] | max if span > 0 else [ln / grow, ln - unit] | min %}
+                {% set ratio = (lt - ls) / span %}
+                {% if ratio >= 1 %}
+                  {% set iv = pr %}
+                {% elif ratio <= 0 %}
+                  {% set iv = 0 %}
                 {% else %}
-                  {% set x_target = ratio ** (1 / phase.e) %}
-                  {% set dx = x_target - x_now %}
-                  {% if dx <= 0 %}
-                    {% set interval_curve = 0 %}
-                  {% else %}
-                    {% set interval_curve = dx * pd %}
-                  {% endif %}
+                  {% set iv = (ratio ** (1 / exponents[i]) - x) * pd %}
                 {% endif %}
               {% endif %}
+              {% set iv = [iv, 300] | min %}
+              {% if pr >= min_iv %}
+                {% set iv = [iv, pr] | min %}
+              {% endif %}
+              {% set iv = [[iv, min_iv] | max, (1 - p) * run_s] | min %}
+              {% set tp = [p + iv / run_s, 1] | min %}
+              {% set lux = lux_at(tp) | float %}
+              {% set kelvin = kelvin_at(tp) | float | round | int %}
 
-              {{ min(interval_curve, pr, 300) }}
+              {# Bring lights in in list order until their lowest outputs would exceed the target #}
+              {% set ns = namespace(k=0, low=0, cap=0, open=true, plan=[]) %}
+              {% for l in lights %}
+                {% if ns.open and (loop.first or ns.low + l.min <= lux) %}
+                  {% set ns.low = ns.low + l.min %}
+                  {% set ns.cap = ns.cap + l.max %}
+                  {% set ns.k = loop.index %}
+                {% else %}
+                  {% set ns.open = false %}
+                {% endif %}
+              {% endfor %}
 
-            # Target progress
-            target_p: |
-              {{ min(p|float + (interval|float / duration_s), 1) }}
+              {# Share the target in proportion to each light's capacity #}
+              {% set frac = [lux / ns.cap, 1] | min %}
+              {% for l in lights %}
+                {% if loop.index <= ns.k %}
+                  {% set lm = ([frac * l.max, l.min] | max) / l.f %}
+                  {% set b = 255 if l.lm <= l.mn else 1 + (lm - l.mn) / (l.lm - l.mn) * 254 %}
+                  {% set b = [[b | round | int, 1] | max, 255] | min %}
+                {% else %}
+                  {% set b = 0 %}
+                {% endif %}
+                {% set ns.plan = ns.plan + [{"entity": l.entity, "brightness": b}] %}
+              {% endfor %}
 
-            # Target x
-            target_x: |
-              {{ min((target_p|float - phase.p_start) / (phase.p_end - phase.p_start), 1) }}
+              {{ {
+                "progress": p | round(4),
+                "target_progress": tp | round(4),
+                "interval": iv | round(1),
+                "lux": lux | round(3),
+                "kelvin": kelvin,
+                "plan": ns.plan
+              } }}
 
-            # Target brightness
-            target_brightness_pct: |
-              {{ phase.b_start + (phase.b_end - phase.b_start) * (target_x|float ** phase.e) }}
+            # A light the user has switched or dimmed. On the first step, lights that
+            # are already brighter than planned (someone is up) count too.
+            override: |
+              {% set ns = namespace(hit=false) %}
+              {% set first = repeat.first %}
+              {% set expected = step.plan if first else sent %}
+              {% for item in expected %}
+                {% set st = states[item.entity] %}
+                {% if st is not none and st.state in ['on', 'off'] %}
+                  {% set cur = st.attributes.brightness | int(0) if st.state == 'on' else 0 %}
+                  {% set tol = [10, item.brightness * 0.2] | max %}
+                  {% if first %}
+                    {% if st.state == 'on' and (item.brightness == 0 or cur > item.brightness + tol) %}
+                      {% set ns.hit = true %}
+                    {% endif %}
+                  {% elif item.brightness > 0 and st.state == 'off' %}
+                    {% set ns.hit = true %}
+                  {% elif item.brightness == 0 and st.state == 'on' %}
+                    {% set ns.hit = true %}
+                  {% elif item.brightness > 0 and (cur - item.brightness) | abs > tol %}
+                    {% set ns.hit = true %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+              {{ ns.hit and not (first and run_mode != 'schedule') }}
 
-            # Target kelvin
-            target_kelvin: |
-              {{ (phase.k_start + (phase.k_end - phase.k_start) * target_x|float)|round }}
-
-        # --- USER OVERRIDE DETECTION ---
-        - if: |
-            {{ (not repeat.first and state.is_off) or state.b_max - 1 > target_brightness_pct }}
+        - if: "{{ override }}"
           then:
-            - service: input_text.set_value
-              target:
-                entity_id: "{{ helper_entity }}"
-              data:
-                value: |
-                  {{ {"last_alarm": record_alarm, "active": false, "aborted": trigger.id is defined} | to_json }}
-            - stop: "User override detected"
+            - if: "{{ run_mode != 'test' }}"
+              then:
+                - action: input_text.set_value
+                  target:
+                    entity_id: "{{ helper_entity }}"
+                  data:
+                    value: |
+                      {{ {"last_alarm": alarm_dt, "active": false, "status": "aborted"} | to_json }}
+            - stop: "Lights were already on or have been changed, sunrise stopped"
 
-        # --- APPLY TARGET STATE ---
-        - service: light.turn_on
-          target: !input target_lights
-          data:
-            brightness_pct: "{{ max(target_brightness_pct, b0) }}"
-            color_temp_kelvin: "{{ max(target_kelvin, k0) }}"
-            transition: "{{ interval }}"
+        # --- APPLY ---
+        - repeat:
+            for_each: "{{ step.plan }}"
+            sequence:
+              - if: "{{ repeat.item.brightness > 0 }}"
+                then:
+                  - action: light.turn_on
+                    continue_on_error: true
+                    target:
+                      entity_id: "{{ repeat.item.entity }}"
+                    data:
+                      brightness: "{{ repeat.item.brightness }}"
+                      color_temp_kelvin: "{{ step.kelvin }}"
+                      transition: "{{ step.interval }}"
+                else:
+                  - if: "{{ is_state(repeat.item.entity, 'on') }}"
+                    then:
+                      - action: light.turn_off
+                        continue_on_error: true
+                        target:
+                          entity_id: "{{ repeat.item.entity }}"
+                        data:
+                          transition: "{{ step.interval }}"
+
+        - variables:
+            sent: "{{ step.plan }}"
+
         - delay:
-            seconds: "{{ interval }}"
+            seconds: "{{ step.interval }}"
       until:
         - condition: template
-          value_template: "{{ target_p >= 1 }}"
+          value_template: "{{ step.target_progress >= 1 }}"
 
   # --- FINAL WRITEBACK ---
-  - service: input_text.set_value
-    target:
-      entity_id: "{{ helper_entity }}"
-    data:
-      value: |
-        {{ {"last_alarm": record_alarm, "active": false, "aborted": false} | to_json }}
+  - if: "{{ run_mode != 'test' }}"
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: "{{ helper_entity }}"
+        data:
+          value: |
+            {{ {"last_alarm": alarm_dt, "active": false, "status": "done"} | to_json }}
