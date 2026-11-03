@@ -60,7 +60,7 @@ Schedule 00:00 16 °C, 06:30 21 °C, 08:00 18 °C, 22:00 16 °C, with a learned 
 
 A period's early start is a Timer at that period's temperature until its usual start, then the thermostat's schedule carries on. It only starts when:
 
-- the room is cool enough for the thermostat to heat for the period (below its temperature plus the **Heating low threshold**), so a room that is already warm is left alone;
+- the room is cool enough for the thermostat to heat for the period (at or below its temperature plus the **Heating low threshold**), so a room that is already warm is left alone;
 - no other routine plan is running, no override is running, and someone is home;
 - for period 2, no alarm still ahead today will move the morning (its **Early alarm** or **Late alarm** toggle is on) and there is no morning plan today, so alarm mornings and late holds are unchanged. If someone gets up during it, it becomes a getting-up morning, so period 2 counts its usual length from then.
 
