@@ -56,7 +56,7 @@ blueprint:
       collapsed: true
       input:
         max_brightness_step:
-          name: Maximum brightness step per transition (uses the intenal 1–255 range)
+          name: Maximum brightness step per transition (uses the internal 1–255 range)
           default: 3
           selector:
             number:
@@ -263,9 +263,10 @@ trigger:
       {% set last_alarm = as_datetime(h.last_alarm | default(none), none) %}
       {% set active = h.active | default(false) %}
 
-      {% set started_today = not not last_alarm and last_alarm.date() == now().date() %}
+      {% set started_today = not not last_alarm and as_local(last_alarm).date() == now().date() %}
 
-      {% set sensor_state = states[alarm_sensor].state|default('unavailable') %}
+      {% set sensor = states[alarm_sensor] if alarm_sensor else none %}
+      {% set sensor_state = sensor.state if sensor else 'unavailable' %}
       {% if sensor_state == 'unavailable' %}
         {% set sensor_dt = 'unavailable' %}
       {% else %}
@@ -310,10 +311,11 @@ action:
       active: "{{ h.active | default(false) }}"
       aborted: "{{ h.aborted | default(false) }}"
 
-      started_today: "{{ not not last_alarm and as_datetime(last_alarm).date() == now().date() }}"
+      started_today: "{{ not not last_alarm and as_local(as_datetime(last_alarm)).date() == now().date() }}"
 
       sensor_dt: |
-        {% set s = states[alarm_sensor].state|default('unavailable') %}
+        {% set sensor = states[alarm_sensor] if alarm_sensor else none %}
+        {% set s = sensor.state if sensor else 'unavailable' %}
         {% if s == 'unavailable' %}
           {{ 'unavailable' }}
         {% else %}
@@ -337,6 +339,9 @@ action:
         {% else %}
           {{ none }}
         {% endif %}
+
+      # Test runs leave the recorded alarm alone so they can't block a real sunrise
+      record_alarm: "{{ alarm_dt if trigger.id is defined else h.last_alarm | default(none) }}"
 
       start_dt: "{{ as_datetime(alarm_dt) - timedelta(minutes=duration_min + maintenance_duration_min) if alarm_dt else none }}"
       end_dt: "{{ as_datetime(alarm_dt) - timedelta(minutes=maintenance_duration_min) if alarm_dt else none }}"
@@ -391,7 +396,11 @@ action:
           sequence:
             - delay:
                 seconds: 10
-      - if: !input start_conditions
+      - if:
+          - or:
+              - and: !input start_conditions
+              - condition: template
+                value_template: "{{ trigger.id is not defined }}"
         then: []
         else:
           - stop: "Start conditions not met"
@@ -402,7 +411,7 @@ action:
       entity_id: "{{ helper_entity }}"
     data:
       value: |
-        {{ {"last_alarm": alarm_dt, "active": trigger.id is defined, "aborted": false} | to_json }}
+        {{ {"last_alarm": record_alarm, "active": trigger.id is defined, "aborted": false} | to_json }}
 
   # --- MAIN LOOP ---
   - repeat:
@@ -532,7 +541,7 @@ action:
                 entity_id: "{{ helper_entity }}"
               data:
                 value: |
-                  {{ {"last_alarm": alarm_dt, "active": false, "aborted": true} | to_json }}
+                  {{ {"last_alarm": record_alarm, "active": false, "aborted": trigger.id is defined} | to_json }}
             - stop: "User override detected"
 
         # --- APPLY TARGET STATE ---
@@ -554,4 +563,4 @@ action:
       entity_id: "{{ helper_entity }}"
     data:
       value: |
-        {{ {"last_alarm": alarm_dt, "active": false, "aborted": false} | to_json }}
+        {{ {"last_alarm": record_alarm, "active": false, "aborted": false} | to_json }}
