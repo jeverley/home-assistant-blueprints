@@ -51,6 +51,12 @@ blueprint:
             entity:
               filter:
                 - domain: input_text
+        early_start_enabled:
+          name: Early start
+          description: Starts heating early so the scheduled temperature is reached by the scheduled time.
+          default: true
+          selector:
+            boolean: {}
 
     occupancy:
       name: Occupancy
@@ -285,18 +291,6 @@ blueprint:
             seconds: 0
           selector:
             duration: {}
-    learning:
-      name: Learning
-      icon: mdi:brain
-      description: Learns how long the heated areas take to warm up.
-      collapsed: true
-      input:
-        early_start_enabled:
-          name: Early start
-          description: Starts heating early so the scheduled temperature is reached by the scheduled time.
-          default: true
-          selector:
-            boolean: {}
 
 mode: queued
 max: 25
