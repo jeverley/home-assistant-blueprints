@@ -42,7 +42,7 @@ blueprint:
         state_helper:
           name: State helper
           description: |
-            Keeps the blueprint's working state, such as the routine's plan, so it carries on after a restart or while the schedule is being edited.
+            Stores this automation's working state.
 
             Create a **Text** helper under **Settings > Devices & services > Helpers**:
             - Set its **Maximum length** to 255.
