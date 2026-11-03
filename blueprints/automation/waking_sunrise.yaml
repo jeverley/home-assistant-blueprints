@@ -49,7 +49,7 @@ blueprint:
         - **Rated output**: the lumens on the bulb's packaging at full brightness.
         - **Distance to pillow**: straight-line distance from the bulb to your head.
         - **Output at lowest brightness** (optional): lumens at brightness 1, if known. Defaults to 1/255 of the rated output.
-        - **Shade factor** (optional): how much of a bare bulb's light reaches you, default `1`. Rough guides: fabric lampshade seen side-on `0.3`–`0.6`, opaque shade `0.1`–`0.2`, open-bottomed shade pointing at the bed `1.2`–`2`. To measure it, put a phone lux meter on the pillow with only that light on at full: factor = lux × 12.57 × distance² ÷ lumens.
+        - **Shade** (optional): how the fitting directs light compared with a bare bulb, default bare bulb. Overhead options follow the CIE luminaire classes by share of light sent downward. To use a measured value instead, type it in: put a phone lux meter on the pillow with only that light on at full, then factor = lux × 12.57 × distance² ÷ lumens.
 
         At the dimmest levels lights are brought in in list order, so put the light you want to come on first at the top.
       selector:
@@ -85,14 +85,29 @@ blueprint:
                   unit_of_measurement: m
                   mode: box
             shade_factor:
-              label: Shade factor
+              label: Shade
               required: false
               selector:
-                number:
-                  min: 0.05
-                  max: 3
-                  step: 0.05
-                  mode: box
+                select:
+                  mode: dropdown
+                  custom_value: true
+                  options:
+                    - value: "1"
+                      label: "Bare bulb (1)"
+                    - value: "1.8"
+                      label: "Overhead, direct: 90–100% down, e.g. open-bottomed shade or downlight (1.8)"
+                    - value: "1.4"
+                      label: "Overhead, semi-direct: 60–90% down (1.4)"
+                    - value: "0.9"
+                      label: "Overhead, general diffuse: 40–60% down, e.g. globe (0.9)"
+                    - value: "0.5"
+                      label: "Overhead, semi-indirect: 10–40% down, e.g. bowl (0.5)"
+                    - value: "0.2"
+                      label: "Overhead, indirect: 0–10% down, e.g. uplighter (0.2)"
+                    - value: "0.45"
+                      label: "Bedside, translucent fabric shade seen side-on (0.45)"
+                    - value: "0.15"
+                      label: "Bedside, opaque shade seen side-on (0.15)"
             min_lumens:
               label: Output at lowest brightness (lm)
               required: false
