@@ -297,12 +297,14 @@ trigger_variables:
   # Shared with the actions, so the triggers and actions agree: the weight one
   # measured morning gives, after which the learned warm-up time is used; the
   # dead time and minutes per degree used until then, a typical radiator
-  # system's; and the limits on a lead in minutes.
+  # system's; and the limits on a lead in minutes. heat_within is the seconds
+  # after a warm-up measurement starts the thermostat must be heating by.
   min_weight: 1
   start_dead: 10
   start_rate: 20
   lead_min: 10
   lead_max: 180
+  heat_within: 120
 
 variables:
   # The thermostat's ZHA entities, matched on the device by domain and
@@ -389,8 +391,6 @@ variables:
   #   max_minutes: a longer warm-up is not counted.
   #   read_within: seconds after the idle a measurement must be read in, as
   #     the room keeps rising after the heating stops.
-  #   restart: seconds after the start that heating starting again means the
-  #     idle was missed.
   #   regroup_margin: seconds after the idle that a group change still counts.
   #   start_window: seconds after the start or period 2 a measurement may
   #     start, so a queued run still counts.
@@ -398,23 +398,17 @@ variables:
   #     degrees, for a morning's rate.
   #   min_rate, max_rate, max_dead: limits on a morning's rate (minutes per
   #     degree) and dead time (minutes).
-  #   heat_within: seconds after the start the thermostat must be heating by.
-  #   heat_before: seconds before the start heating may have begun, as our
-  #     run reaches it just after the thermostat starts.
   learning:
     memory: 0.8
     min_rise: 0.5
     max_minutes: 240
     read_within: 600
-    restart: 300
     regroup_margin: 60
     start_window: 300
     min_span: 0.2
     min_rate: 3
     max_rate: 60
     max_dead: 120
-    heat_within: 120
-    heat_before: 90
   # Nobody is home: the home zone is empty, and no area is occupied or has
   # been for the empty delay. The zone is checked first, so the areas are only
   # looked at when it is empty. Area sensors are occupancy sensors in any
@@ -651,6 +645,20 @@ triggers:
       {% set m = ((raw | from_json(default={})).l | default({})).m | default([]) if raw is match('^\\{') else [] %}
       {% set v = state_attr(c, 'current_temperature') | float(none) if c != '' else none %}
       {{ m | count in [3, 7] and v is not none and v > m[1] and (m | count == 3 or v != m[6]) }}
+  # A warm-up is being measured but the thermostat is still idle from before
+  # it started, heat_within later, so it judged the room warm enough. The run
+  # drops the measurement (see Learn the warm-up time) and stops, like a Room
+  # warming run.
+  - alias: Warm-up not started
+    trigger: template
+    id: warming
+    value_template: >-
+      {% set h = device_entities(thermostat_device)
+           | select('match', '^sensor\\..*_hvac_action$') | first | default('') %}
+      {% set raw = states(state_helper) %}
+      {% set m = ((raw | from_json(default={})).l | default({})).m | default([]) if raw is match('^\\{') else [] %}
+      {{ m | count in [3, 7] and h != '' and is_state(h, 'idle') and states[h].last_changed.timestamp() <= m[0]
+         and now().timestamp() - m[0] >= heat_within }}
   # The thermostat is back on its schedule after a hand adjustment (at the
   # next period) or manual mode, so the routine picks up where it left off.
   - alias: Back on schedule
@@ -1078,10 +1086,10 @@ actions:
   # thermostat dropped off or Home Assistant restarted), someone else takes
   # over or cancels the routine (an Exit after the idle leaves it), the
   # thermostat leaves its schedule (as when you raise the target by hand),
-  # the heating stopped and started again unseen, the thermostat was not
-  # heating learning.heat_within after the start (it judged the room warm
-  # enough), or it had been heating since well before the start. Times are in whole
-  # seconds, like m's start.
+  # it was still idle heat_within after the start (it judged the room warm
+  # enough; the Warm-up not started trigger makes a run then), or its heating
+  # began more than heat_within after the start (it started late, or stopped
+  # and started again unseen). Times are in whole seconds, like m's start.
   - alias: Learn the warm-up time
     if:
       - condition: template
@@ -1122,10 +1130,9 @@ actions:
             {% set stopped = regrouped or cancelled
                  or ((override_running or not on_schedule) and not routine_timer_running)
                  or elapsed > c.max_minutes
-                 or (h is not none and h.state == 'heating' and since > m[0] + c.restart)
-                 or (h is not none and h.state == 'heating' and since < m[0] - c.heat_before)
-                 or (not warmed and h is not none and h.state != 'heating'
-                     and now().timestamp() - m[0] > c.heat_within) %}
+                 or (h is not none and h.state == 'heating' and since > m[0] + heat_within)
+                 or (h is not none and h.state == 'idle' and since <= m[0]
+                     and now().timestamp() - m[0] >= heat_within) %}
             {% if (warmed and not regrouped and not cancelled) or (raised and not stopped) %}
               {% set orig = m[2] + high_threshold %}
               {% set low = [target, m[2]] | min + high_threshold %}
@@ -1198,14 +1205,15 @@ actions:
       - stop: >-
           Deferred: the schedule is being edited in the UI. A catch-up runs 5 minutes
           after the last change.
-  # A Room warming run only records a temperature report, so it stops here.
-  - alias: Stop after recording a temperature report
+  # A Room warming or Warm-up not started run only updates the warm-up
+  # measurement, so it stops here.
+  - alias: Stop after updating the warm-up measurement
     if:
       - condition: template
         value_template: "{{ run == 'warming' }}"
     then:
       - *save_state
-      - stop: Recorded a temperature report.
+      - stop: Updated the warm-up measurement.
   # The routine plan does not apply while nobody is home, so drop it and end
   # its Timer.
   - alias: Nobody home, end the routine
@@ -1840,7 +1848,8 @@ actions:
           # learning.min_rise to rise to where the thermostat stops and no
           # measurement is running. Whether the thermostat really heats is
           # read from its HVAC action afterwards (see Learn the warm-up time),
-          # rather than predicted, so it follows the thermostat's own logic. Saved at the end.
+          # rather than predicted, so it follows the thermostat's own logic.
+          # Saved at the end.
           - alias: Start measuring the warm-up
             if:
               - condition: template
