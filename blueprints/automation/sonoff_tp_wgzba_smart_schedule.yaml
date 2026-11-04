@@ -398,6 +398,9 @@ variables:
   #     degrees, for a morning's rate.
   #   min_rate, max_rate, max_dead: limits on a morning's rate (minutes per
   #     degree) and dead time (minutes).
+  #   heat_within: seconds after the start the thermostat must be heating by.
+  #   heat_before: seconds before the start heating may have begun, as our
+  #     run reaches it just after the thermostat starts.
   learning:
     memory: 0.8
     min_rise: 0.5
@@ -410,6 +413,8 @@ variables:
     min_rate: 3
     max_rate: 60
     max_dead: 120
+    heat_within: 120
+    heat_before: 90
   # Nobody is home: the home zone is empty, and no area is occupied or has
   # been for the empty delay. The zone is checked first, so the areas are only
   # looked at when it is empty. Area sensors are occupancy sensors in any
@@ -1072,8 +1077,10 @@ actions:
   # idle. Before the idle, it is dropped if the group changed (also when the
   # thermostat dropped off or Home Assistant restarted), someone else takes
   # over or cancels the routine (an Exit after the idle leaves it), the
-  # thermostat leaves its schedule (as when you raise the target by hand) or
-  # the heating stopped and started again unseen. Times are in whole
+  # thermostat leaves its schedule (as when you raise the target by hand),
+  # the heating stopped and started again unseen, the thermostat was not
+  # heating learning.heat_within after the start (it judged the room warm
+  # enough), or it had been heating since well before the start. Times are in whole
   # seconds, like m's start.
   - alias: Learn the warm-up time
     if:
@@ -1115,7 +1122,10 @@ actions:
             {% set stopped = regrouped or cancelled
                  or ((override_running or not on_schedule) and not routine_timer_running)
                  or elapsed > c.max_minutes
-                 or (h is not none and h.state == 'heating' and since > m[0] + c.restart) %}
+                 or (h is not none and h.state == 'heating' and since > m[0] + c.restart)
+                 or (h is not none and h.state == 'heating' and since < m[0] - c.heat_before)
+                 or (not warmed and h is not none and h.state != 'heating'
+                     and now().timestamp() - m[0] > c.heat_within) %}
             {% if (warmed and not regrouped and not cancelled) or (raised and not stopped) %}
               {% set orig = m[2] + high_threshold %}
               {% set low = [target, m[2]] | min + high_threshold %}
@@ -1819,28 +1829,23 @@ actions:
           # learning.start_window, from the same overnight cool-down as the
           # routine's. Only with someone home, on the schedule with no override,
           # and the routine not having warmed the room for a morning today.
-          # Applying our Timer makes the thermostat heat whenever the room is
-          # below its target, while a schedule change only does once the room
-          # is at or below the target plus its low threshold, so the margin
-          # follows which started it.
           - variables:
-              warm_up_margin: "{{ 0 if warm_up_target is not none else low_threshold }}"
               warm_up_target: >-
                 {% set p2 = today_at(periods[1].time).timestamp() if periods | count >= 2 else 0 %}
                 {{ warm_up_target if warm_up_target is not none
                    else periods[1].temp if run == 'period-2' and p2 > 0 and 0 <= now().timestamp() - p2 <= learning.start_window
                      and not routine_morning_today and not nobody_home and on_schedule and not override_running
                    else none }}
-          # Measure the morning's warm-up if the room is cool enough for the
-          # thermostat to start heating (at or below the target plus the
-          # margin), has at least learning.min_rise to rise to where it stops,
-          # and no measurement is running. Saved at the end.
+          # Measure the morning's warm-up if the room has at least
+          # learning.min_rise to rise to where the thermostat stops and no
+          # measurement is running. Whether the thermostat really heats is
+          # read from its HVAC action afterwards (see Learn the warm-up time),
+          # rather than predicted, so it follows the thermostat's own logic. Saved at the end.
           - alias: Start measuring the warm-up
             if:
               - condition: template
                 value_template: >-
                   {{ warm_up_target is not none and room_temp is not none
-                     and room_temp <= warm_up_target + warm_up_margin + 0.05
                      and warm_up_target + high_threshold - room_temp >= learning.min_rise
                      and (state.learn | default({})).m is not defined }}
             then:
