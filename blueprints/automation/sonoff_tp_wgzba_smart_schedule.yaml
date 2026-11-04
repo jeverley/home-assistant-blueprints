@@ -1819,7 +1819,12 @@ actions:
           # learning.start_window, from the same overnight cool-down as the
           # routine's. Only with someone home, on the schedule with no override,
           # and the routine not having warmed the room for a morning today.
+          # Applying our Timer makes the thermostat heat whenever the room is
+          # below its target, while a schedule change only does once the room
+          # is at or below the target plus its low threshold, so the margin
+          # follows which started it.
           - variables:
+              warm_up_margin: "{{ 0 if warm_up_target is not none else low_threshold }}"
               warm_up_target: >-
                 {% set p2 = today_at(periods[1].time).timestamp() if periods | count >= 2 else 0 %}
                 {{ warm_up_target if warm_up_target is not none
@@ -1827,16 +1832,15 @@ actions:
                      and not routine_morning_today and not nobody_home and on_schedule and not override_running
                    else none }}
           # Measure the morning's warm-up if the room is cool enough for the
-          # thermostat to start heating (at or below the target plus its low
-          # threshold, as the thermostat heats at that point too), has at least
-          # learning.min_rise to rise to where it stops, and no measurement is
-          # running. Saved at the end.
+          # thermostat to start heating (at or below the target plus the
+          # margin), has at least learning.min_rise to rise to where it stops,
+          # and no measurement is running. Saved at the end.
           - alias: Start measuring the warm-up
             if:
               - condition: template
                 value_template: >-
                   {{ warm_up_target is not none and room_temp is not none
-                     and room_temp <= warm_up_target + low_threshold + 0.05
+                     and room_temp <= warm_up_target + warm_up_margin + 0.05
                      and warm_up_target + high_threshold - room_temp >= learning.min_rise
                      and (state.learn | default({})).m is not defined }}
             then:
