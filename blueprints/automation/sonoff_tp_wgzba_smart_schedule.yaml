@@ -898,13 +898,14 @@ actions:
       #   arrival: when geofencing pre-heating started.
       #   learn: the learned warm-up time, see Learn the warm-up time.
       #   furthest: each person's furthest distance from home, see furthest.
+      #   morning: when a morning plan was last made, see late_start_due.
       # Times are Unix epoch seconds, 0 when unset. The helper is the only
       # copy: state holds its keys other than routine, plan holds the routine,
       # and the save step writes both back before any thermostat call that
       # depends on them and at the end. Writing an unchanged value changes
       # nothing. A thermostat call that fails stops the run, and what was
       # written lets a later run pick up from there. The helper stores each key
-      # as one letter (f, r, a, l, g, and in the plan k, s, w, u, t, p, x and c,
+      # as one letter (f, r, a, l, g, d, and in the plan k, s, w, u, t, p, x and c,
       # with kind m, b or e and cancelled 1) to fit its 255 characters, and stored
       # reads them back as these names.
       stored: >-
@@ -918,7 +919,7 @@ actions:
         {% endfor %}
         {% for k, v in (j.l | default({})).items() if k in ['a', 'm'] %}{% set ns.l = dict(ns.l, **{k: v}) %}{% endfor %}
         {{ {'fetch': j.f | default(0), 'arrival': j.a | default(0), 'routine': ns.r, 'learn': ns.l,
-            'furthest': j.g | default([])} }}
+            'furthest': j.g | default([]), 'morning': j.d | default(0)} }}
       state: >-
         {% set ns = namespace(out={}) %}
         {% for k, v in stored.items() if k != 'routine' %}{% set ns.out = dict(ns.out, **{k: v}) %}{% endfor %}
@@ -1029,23 +1030,10 @@ actions:
       empty_plan: >-
         {{ {'kind': '', 'start': 0, 'wake': 0, 'until': 0, 'temp': none, 'applied': 0,
             'exited': 0, 'cancelled': false} }}
-      # The plan once nobody is home: today's morning whose wake has passed is
-      # kept for the rest of the day, marked as cancelled, so a later alarm
-      # today does not start a second morning. Otherwise empty. (A morning
-      # that finishes runs past period 2, so it never needs this.) Bedtime
-      # and later periods' early starts still replace it. It has no Apply
-      # recorded, which tells it apart from a plan someone cancelled.
-      ended_plan: >-
-        {{ dict(empty_plan, kind='morning', start=plan.start, wake=plan.wake, cancelled=true)
-           if plan.kind == 'morning' and plan.start > 0
-              and plan.start | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d')
-              and plan.wake <= now().timestamp()
-           else empty_plan }}
       # The plan is for today. One from an earlier day is over.
       plan_today: "{{ plan.start > 0 and plan.start | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d') }}"
       plan_active: "{{ plan.kind != '' and not plan.cancelled and plan_today }}"
-      # The routine someone cancelled, or a morning ended as nobody was home,
-      # today, if any, so it does not start again.
+      # The routine someone cancelled today, if any, so it does not start again.
       cancelled_today: "{{ plan.kind if plan.cancelled and plan_today else '' }}"
       # Someone's Boost or Timer (the routine's or not) is running.
       override_running: "{{ states(override_state) in ['Boost', 'Timer'] }}"
@@ -1136,7 +1124,7 @@ actions:
             {% endfor %}
             {% set g = states[schedule_group].last_changed.timestamp() | int %}
             {% set regrouped = m[0] < g <= end + c.regroup_margin %}
-            {% set cancelled = plan_today and plan.cancelled and plan.applied > 0 and (not warmed or exit_pressed_at <= since) %}
+            {% set cancelled = plan_today and plan.cancelled and (not warmed or exit_pressed_at <= since) %}
             {% set target = state_attr(climate_entity, 'temperature') | float(m[2]) %}
             {% set raised = target > m[2] + 0.05 %}
             {% set dropped = target < m[2] - 0.05 or (ns.after is not none and ns.after < m[2] - 0.05) %}
@@ -1210,6 +1198,8 @@ actions:
             {% set out = {'f': state.fetch | default(0), 'a': state.arrival | default(0), 'r': ns.r} %}
             {% set g = state.furthest | default([]) %}
             {% set out = dict(out, g=g) if g | select('gt', 0) | first is defined else out %}
+            {% set d = state.morning | default(0) | int(0) %}
+            {% set out = dict(out, d=d) if d > 0 and d | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d') else out %}
             {% set full = dict(out, l=l) if l else out %}
             {% set ns.l = {} %}
             {% for k, v in l.items() if k != 'm' %}{% set ns.l = dict(ns.l, **{k: v}) %}{% endfor %}
@@ -1227,15 +1217,15 @@ actions:
     then:
       - *save_state
       - stop: Updated the warm-up measurement.
-  # The routine plan does not apply while nobody is home, so end it (see
-  # ended_plan) and its Timer.
+  # The routine plan does not apply while nobody is home, so drop it and end
+  # its Timer.
   - alias: Nobody home, end the routine
     if:
       - condition: template
         value_template: "{{ nobody_home }}"
     then:
       - variables:
-          plan: "{{ plan if plan.cancelled else ended_plan }}"
+          plan: "{{ empty_plan }}"
           plan_active: false
       - *save_state
       - if:
@@ -1513,10 +1503,15 @@ actions:
               {{ s <= now().timestamp() and s <= p2 and end - now().timestamp() >= min_stage }}
             {% else %}{{ false }}{% endif %}
           # A late start is due: nobody is up, period 2 is about to start (or has),
-          # and the routine start is at least a minute after it.
+          # and the routine start is at least a minute after it. Not once a
+          # morning plan was made today (state.morning), even if it has since
+          # ended or been dropped, as people are up and the house warmed:
+          # holding period 1 for a second alarm would cool it.
           late_start_due: >-
+            {% set d = state.morning | default(0) | int(0) %}
             {% if late_alarm_enabled and (run == 'late-alarm' or catch_up) and not getting_up
-                  and routine_start != '' and periods | count >= 2 %}
+                  and routine_start != '' and periods | count >= 2
+                  and (d == 0 or d | timestamp_custom('%Y-%m-%d') != now().strftime('%Y-%m-%d')) %}
               {% set start = routine_start | as_datetime %}
               {% set p2 = today_at(periods[1].time) %}
               {{ p2 < start and now() >= p2 - timedelta(minutes=1) and (start - now()).total_seconds() >= min_stage }}
@@ -1612,6 +1607,7 @@ actions:
                 sequence:
                   - variables:
                       plan: "{{ dict(plan, kind='morning', wake=now().timestamp() | int) }}"
+                      state: "{{ dict(state, morning=now().timestamp() | int) }}"
               - alias: Everyone asleep, start bedtime
                 conditions:
                   - alias: Everyone has been asleep long enough
@@ -1661,6 +1657,7 @@ actions:
                         {{ dict(empty_plan, kind='morning', start=(routine_start | as_datetime).timestamp() | int,
                                 wake=(routine_wake | as_datetime).timestamp() | int) }}
                       plan_active: true
+                      state: "{{ dict(state, morning=now().timestamp() | int) }}"
               # Early start: a period warmer than the one before starts now, so
               # the room is warm when it begins. Period 2 is left to the alarm
               # and getting up when either is involved today. A cancelled
