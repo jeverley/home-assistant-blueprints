@@ -1029,10 +1029,23 @@ actions:
       empty_plan: >-
         {{ {'kind': '', 'start': 0, 'wake': 0, 'until': 0, 'temp': none, 'applied': 0,
             'exited': 0, 'cancelled': false} }}
+      # The plan once nobody is home: today's morning whose wake has passed is
+      # kept for the rest of the day, marked as cancelled, so a later alarm
+      # today does not start a second morning. Otherwise empty. (A morning
+      # that finishes runs past period 2, so it never needs this.) Bedtime
+      # and later periods' early starts still replace it. It has no Apply
+      # recorded, which tells it apart from a plan someone cancelled.
+      ended_plan: >-
+        {{ dict(empty_plan, kind='morning', start=plan.start, wake=plan.wake, cancelled=true)
+           if plan.kind == 'morning' and plan.start > 0
+              and plan.start | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d')
+              and plan.wake <= now().timestamp()
+           else empty_plan }}
       # The plan is for today. One from an earlier day is over.
       plan_today: "{{ plan.start > 0 and plan.start | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d') }}"
       plan_active: "{{ plan.kind != '' and not plan.cancelled and plan_today }}"
-      # The routine someone cancelled today, if any, so it does not start again.
+      # The routine someone cancelled, or a morning ended as nobody was home,
+      # today, if any, so it does not start again.
       cancelled_today: "{{ plan.kind if plan.cancelled and plan_today else '' }}"
       # Someone's Boost or Timer (the routine's or not) is running.
       override_running: "{{ states(override_state) in ['Boost', 'Timer'] }}"
@@ -1123,7 +1136,7 @@ actions:
             {% endfor %}
             {% set g = states[schedule_group].last_changed.timestamp() | int %}
             {% set regrouped = m[0] < g <= end + c.regroup_margin %}
-            {% set cancelled = plan_today and plan.cancelled and (not warmed or exit_pressed_at <= since) %}
+            {% set cancelled = plan_today and plan.cancelled and plan.applied > 0 and (not warmed or exit_pressed_at <= since) %}
             {% set target = state_attr(climate_entity, 'temperature') | float(m[2]) %}
             {% set raised = target > m[2] + 0.05 %}
             {% set dropped = target < m[2] - 0.05 or (ns.after is not none and ns.after < m[2] - 0.05) %}
@@ -1214,15 +1227,15 @@ actions:
     then:
       - *save_state
       - stop: Updated the warm-up measurement.
-  # The routine plan does not apply while nobody is home, so drop it and end
-  # its Timer.
+  # The routine plan does not apply while nobody is home, so end it (see
+  # ended_plan) and its Timer.
   - alias: Nobody home, end the routine
     if:
       - condition: template
         value_template: "{{ nobody_home }}"
     then:
       - variables:
-          plan: "{{ empty_plan }}"
+          plan: "{{ plan if plan.cancelled else ended_plan }}"
           plan_active: false
       - *save_state
       - if:
