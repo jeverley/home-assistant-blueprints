@@ -398,6 +398,8 @@ variables:
   #     degrees, for a morning's rate.
   #   min_rate, max_rate, max_dead: limits on a morning's rate (minutes per
   #     degree) and dead time (minutes).
+  #   stop_within: seconds after the latest report an idle still counts as
+  #     the warm-up reaching the stop point, rather than a later top-up.
   learning:
     memory: 0.8
     min_rise: 0.4
@@ -409,6 +411,7 @@ variables:
     min_rate: 3
     max_rate: 60
     max_dead: 120
+    stop_within: 1800
   # Nobody is home: the home zone is empty, and no area is occupied or has
   # been for the empty delay. The zone is checked first, so the areas are only
   # looked at when it is empty. Area sensors are occupancy sensors in any
@@ -1060,13 +1063,16 @@ actions:
   # report if the target drops (the routine's Timer ending, or a cooler
   # period) or is raised (a later period's early start) first. Otherwise it
   # ends when the thermostat goes idle (Warmed up), on the first run after
-  # that:
+  # that, judged by the idle's own time:
   #   Within a minute of our Timer ending or a period starting: cut short, so
   #   the latest report, as the thermostat can report the idle before its new
   #   target.
-  #   The latest report is within a reporting step (0.35) of the stop point:
-  #   it stopped there by its own reading, at the idle, before reporting the
-  #   target (as with a high threshold of 0).
+  #   The latest report is within a reporting step (0.35) of the stop point,
+  #   or a report at or above the target came with the idle, and the idle is
+  #   within learning.stop_within of the latest report: it stopped there by
+  #   its own reading, at the idle (as with a high threshold of 0).
+  #   A report that comes with the idle is not used itself, as the reading
+  #   jumps once the heating stops.
   #   Otherwise it stopped for another reason (such as an open window), and
   #   the measurement is dropped.
   # It runs before a run defers, so a deferred run still counts. Between the
@@ -1078,15 +1084,16 @@ actions:
   # It is dropped if the room rose less than learning.min_rise in all or
   # learning.min_span between the first report and the end, took over
   # learning.max_minutes, or was not read within learning.read_within of an
-  # idle that ends it. Before it ends, it is dropped if the group changed
-  # (also when the thermostat dropped off or Home Assistant restarted),
-  # someone else takes over or cancels the routine (an Exit after the idle
-  # leaves it), the thermostat leaves its schedule (as when you change the
-  # target by hand), it was still idle heat_within after the start (it judged
-  # the room warm enough; the Warm-up not started trigger makes a run then),
-  # or its heating began more than heat_within after the start (it started
-  # late, or stopped and started again unseen). Times are in whole seconds,
-  # like m's start.
+  # idle that ends it (unless it had already reached the target). Before it
+  # ends, it is dropped if the group changed (also when the thermostat
+  # dropped off or Home Assistant restarted), someone else takes over or
+  # cancels the routine (an Exit after the idle leaves it), the thermostat
+  # leaves its schedule or its target no longer matches our Timer's a minute
+  # after we applied it (as when you change it by hand), it was still idle
+  # heat_within after the start (it judged the room warm enough; the Warm-up
+  # not started trigger makes a run then), or its heating began more than
+  # heat_within after the start (it started late, or stopped and started
+  # again unseen). Times are in whole seconds, like m's start.
   - alias: Learn the warm-up time
     if:
       - condition: template
@@ -1107,10 +1114,10 @@ actions:
             {% set o = states[climate_entity] %}
             {% set rt = o.last_updated.timestamp() | int if o is not none else 0 %}
             {% set rv = room_temp %}
-            {% set ns = namespace(cut=plan.until > 0 and (since - plan.until) | abs <= 60, te=none, ve=none) %}
+            {% set ns = namespace(cut=plan.until > 0 and (since - plan.until) | abs <= 60) %}
             {% for i in range(1, 13) %}
-              {% set te = period_entities | select('search', '_schedule_period_' ~ i ~ '_time$') | first | default('') %}
-              {% set v = states(te) if te != '' else '' %}
+              {% set pt = period_entities | select('search', '_schedule_period_' ~ i ~ '_time$') | first | default('') %}
+              {% set v = states(pt) if pt != '' else '' %}
               {% if v is match('^[0-9]{2}:[0-9]{2}') and (since - today_at(v[:5]).timestamp()) | abs <= 60 %}
                 {% set ns.cut = true %}
               {% endif %}
@@ -1121,7 +1128,9 @@ actions:
             {% set target = state_attr(climate_entity, 'temperature') | float(m[2]) %}
             {% set raised = target > m[2] + 0.05 %}
             {% set dropped = target < m[2] - 0.05 %}
-            {% set stopped = regrouped or cancelled
+            {% set hand = routine_timer_running and plan.temp is not none and now().timestamp() - plan.applied > 60
+                 and (target - plan.temp | float(target)) | abs > 0.05 %}
+            {% set stopped = regrouped or cancelled or hand
                  or ((override_running or not on_schedule) and not routine_timer_running)
                  or elapsed > c.max_minutes
                  or (h is not none and h.state == 'heating' and since > m[0] + heat_within)
@@ -1130,20 +1139,21 @@ actions:
             {% set fresh = rv is not none and rv > m[1] and rt >= m[0] and (m | count == 3 or rv != m[6]) %}
             {% set m = (m + [rt, rv, rt, rv] if m | count == 3 else m[:5] + [rt, rv]) if fresh and not warmed else m %}
             {% set reached = m | count == 7 and m[6] >= m[2] - 0.05 %}
-            {% if warmed and not regrouped and not cancelled %}
+            {% set te, ve = none, none %}
+            {% if warmed and not regrouped and not cancelled and not hand %}
               {% set stop = m[2] + high_threshold %}
-              {% if m | count == 7 and (reached or raised or dropped or ns.cut) %}
-                {% set ns.te = m[5] %}{% set ns.ve = m[6] %}
-              {% elif m | count == 7 and m[6] >= stop - 0.35 %}
-                {% set ns.te = since %}{% set ns.ve = stop %}
+              {% if m | count == 7 and (reached or ns.cut) %}
+                {% set te, ve = m[5], m[6] %}
+              {% elif m | count == 7 and since - m[5] <= c.stop_within and (m[6] >= stop - 0.35 or (fresh and rv >= m[2] - 0.05)) %}
+                {% set te, ve = since, stop %}
               {% endif %}
             {% elif m | count == 7 and (reached or raised or dropped) and not stopped %}
-              {% set ns.te = m[5] %}{% set ns.ve = m[6] %}
+              {% set te, ve = m[5], m[6] %}
             {% endif %}
-            {% if ns.te is not none %}
-              {% set te, ve = ns.te, ns.ve %}
-              {% if ve - m[1] >= c.min_rise - 0.05 and ve - m[4] >= c.min_span - 0.05 and te > m[3]
-                    and elapsed <= c.max_minutes and (te != since or now().timestamp() - since <= c.read_within) %}
+            {% if te is not none %}
+              {% if ve - m[1] >= c.min_rise - 0.01 and ve - m[4] >= c.min_span - 0.01 and te > m[3]
+                    and elapsed <= c.max_minutes
+                    and (not warmed or reached or now().timestamp() - since <= c.read_within) %}
                 {% set rate = [[(te - m[3]) / 60 / (ve - m[4]), c.min_rate] | max, c.max_rate] | min %}
                 {% set dead = [[(m[3] - m[0]) / 60 - rate * (m[4] - m[1]), 0] | max, c.max_dead] | min %}
                 {% set w1 = a[0] * c.memory + 1 %}
@@ -1855,7 +1865,7 @@ actions:
               - condition: template
                 value_template: >-
                   {{ warm_up_target is not none and room_temp is not none
-                     and warm_up_target - room_temp >= learning.min_rise - 0.05
+                     and warm_up_target - room_temp >= learning.min_rise - 0.01
                      and (state.learn | default({})).m is not defined }}
             then:
               - variables:
