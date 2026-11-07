@@ -298,7 +298,7 @@ blueprint:
             field: awake_sensors
             operator: exists
           description: Starts the morning heating as soon as an awake sensor reports someone up.
-          default: true
+          default: false
           selector:
             boolean: {}
         getting_up_delay:
@@ -327,7 +327,7 @@ blueprint:
             Starts the night temperature early once the awake sensors report everyone asleep.
 
             It ends again if someone gets up before the usual time.
-          default: true
+          default: false
           selector:
             boolean: {}
         bedtime_delay:
