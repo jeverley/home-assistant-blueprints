@@ -284,7 +284,7 @@ blueprint:
             Binary sensors or toggles that are **on while anyone is up** and **off once everyone is asleep**, such as a helper built from your motion sensors. Any one on counts as someone up, and all off as everyone asleep.
 
             Make it **unknown** when it can't tell, for example in the middle of the night or during the day. Only on and off are acted on.
-          default: []
+          default: ""
           selector:
             entity:
               multiple: true
@@ -295,8 +295,11 @@ blueprint:
         getting_up_enabled:
           name: Getting up
           visible:
-            field: awake_sensors
-            operator: exists
+            - field: awake_sensors
+              operator: exists
+            - field: awake_sensors
+              operator: not_eq
+              value: ""
           description: Starts the morning heating as soon as an awake sensor reports someone up.
           default: false
           selector:
@@ -306,6 +309,9 @@ blueprint:
           visible:
             - field: awake_sensors
               operator: exists
+            - field: awake_sensors
+              operator: not_eq
+              value: ""
             - field: getting_up_enabled
               value: true
           description: |
@@ -321,8 +327,11 @@ blueprint:
         bedtime_enabled:
           name: Bedtime
           visible:
-            field: awake_sensors
-            operator: exists
+            - field: awake_sensors
+              operator: exists
+            - field: awake_sensors
+              operator: not_eq
+              value: ""
           description: |
             Starts the night temperature early once the awake sensors report everyone asleep.
 
@@ -335,6 +344,9 @@ blueprint:
           visible:
             - field: awake_sensors
               operator: exists
+            - field: awake_sensors
+              operator: not_eq
+              value: ""
             - field: bedtime_enabled
               value: true
           description: How long every awake sensor must stay off before everyone counts as asleep.
@@ -1493,7 +1505,7 @@ actions:
           # An awake sensor has been on for the getting up delay, as its trigger
           # requires.
           someone_up: >-
-            {{ expand(awake_sensors) | selectattr('state', 'eq', 'on')
+            {{ expand(awake_sensors if awake_sensors is not string else []) | selectattr('state', 'eq', 'on')
                | selectattr('last_changed', 'le', now() - timedelta(seconds=delay_secs['getting_up']))
                | first is defined }}
           # Someone is up, and getting up is turned on. Its trigger only fires when
@@ -1504,7 +1516,7 @@ actions:
           # Everyone has been asleep long enough (every awake sensor off
           # for at least the bedtime delay).
           everyone_asleep: >-
-            {% set sensors = expand(awake_sensors) %}
+            {% set sensors = expand(awake_sensors if awake_sensors is not string else []) %}
             {{ sensors | first is defined
                and sensors | rejectattr('state', 'eq', 'off') | first is not defined
                and sensors | selectattr('last_changed', 'gt', now() - timedelta(seconds=delay_secs['bedtime'])) | first is not defined }}
