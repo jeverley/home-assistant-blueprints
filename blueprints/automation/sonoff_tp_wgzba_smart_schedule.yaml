@@ -218,10 +218,13 @@ blueprint:
             duration: {}
         empty_delay:
           name: Empty delay
+          visible:
+            field: follow_occupancy
+            value: true
           description: |
             The duration the heated areas must be empty before switching to Schedule 2.
 
-            Also how long every area must be empty before nobody counts as home, for **Away schedule**.
+            Also how long every area must be empty before nobody counts as home, for **Away schedule**. With **Follow occupancy** off, that is 5 minutes.
           default:
             hours: 0
             minutes: 5
