@@ -23,7 +23,7 @@ blueprint:
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/main/blueprints/automation/sonoff_tp_wgzba_smart_schedule.yaml
   homeassistant:
-    min_version: 2026.10.0
+    min_version: 2026.11.0
   input:
     thermostat:
       name: Thermostat
@@ -77,6 +77,9 @@ blueprint:
             boolean: {}
         home_zone:
           name: Home zone
+          visible:
+            field: away_enabled
+            value: true
           description: |
             The zone people head home to, used to find its **Proximity** entry.
 
@@ -88,6 +91,9 @@ blueprint:
                 - domain: zone
         geofencing_distance:
           name: Geofencing distance
+          visible:
+            field: away_enabled
+            value: true
           description: |
             Pre-heats once someone heading home is within this distance. Allow roughly the distance you travel in the time your heating takes to warm up.
 
@@ -102,6 +108,12 @@ blueprint:
               mode: box
         geofencing_progress:
           name: Progress distance
+          visible:
+            - field: away_enabled
+              value: true
+            - field: geofencing_distance
+              operator: not_eq
+              value: 0
           description: |
             Pre-heats only once someone has come this much closer than the furthest they have been since leaving, so moving around somewhere nearby does not start it.
 
@@ -116,6 +128,12 @@ blueprint:
               mode: box
         geofencing_group:
           name: Pre-heat schedule group
+          visible:
+            - field: away_enabled
+              value: true
+            - field: geofencing_distance
+              operator: not_eq
+              value: 0
           description: The schedule group to use while someone is on their way home.
           default: Schedule 2
           selector:
@@ -125,6 +143,12 @@ blueprint:
                 - Schedule 2
         geofencing_timeout:
           name: Geofencing timeout
+          visible:
+            - field: away_enabled
+              value: true
+            - field: geofencing_distance
+              operator: not_eq
+              value: 0
           description: |
             Switches back to Schedule 3 if nobody is home this long after pre-heating started.
 
@@ -139,6 +163,12 @@ blueprint:
               mode: box
         proximity_devices:
           name: Proximity devices (optional)
+          visible:
+            - field: away_enabled
+              value: true
+            - field: geofencing_distance
+              operator: not_eq
+              value: 0
           description: |
             The Proximity entry named after the home zone is normally found automatically.
 
@@ -166,6 +196,9 @@ blueprint:
             boolean: {}
         heated_areas:
           name: Heated areas
+          visible:
+            field: follow_occupancy
+            value: true
           description: The areas this thermostat heats, used by **Follow occupancy**.
           default: []
           selector:
@@ -173,6 +206,9 @@ blueprint:
               multiple: true
         occupied_delay:
           name: Occupied delay
+          visible:
+            field: follow_occupancy
+            value: true
           description: The duration the heated areas must be occupied before switching to Schedule 1.
           default:
             hours: 0
@@ -217,12 +253,24 @@ blueprint:
                 - domain: sensor
         early_alarm_enabled:
           name: Early alarm
+          visible:
+            - field: alarm_sensor
+              operator: exists
+            - field: alarm_sensor
+              operator: not_eq
+              value: ""
           description: Starts the morning heating early when the alarm is earlier than the schedule.
           default: true
           selector:
             boolean: {}
         late_alarm_enabled:
           name: Late alarm
+          visible:
+            - field: alarm_sensor
+              operator: exists
+            - field: alarm_sensor
+              operator: not_eq
+              value: ""
           description: Delays the morning heating when the alarm is later than the schedule.
           default: true
           selector:
@@ -243,12 +291,20 @@ blueprint:
                     - input_boolean
         getting_up_enabled:
           name: Getting up
+          visible:
+            field: awake_sensors
+            operator: exists
           description: Starts the morning heating as soon as an awake sensor reports someone up.
           default: true
           selector:
             boolean: {}
         getting_up_delay:
           name: Getting up delay
+          visible:
+            - field: awake_sensors
+              operator: exists
+            - field: getting_up_enabled
+              value: true
           description: |
             How long an awake sensor must stay on before someone counts as up.
 
@@ -261,6 +317,9 @@ blueprint:
             duration: {}
         bedtime_enabled:
           name: Bedtime
+          visible:
+            field: awake_sensors
+            operator: exists
           description: |
             Starts the night temperature early once the awake sensors report everyone asleep.
 
@@ -270,6 +329,11 @@ blueprint:
             boolean: {}
         bedtime_delay:
           name: Bedtime delay
+          visible:
+            - field: awake_sensors
+              operator: exists
+            - field: bedtime_enabled
+              value: true
           description: How long every awake sensor must stay off before everyone counts as asleep.
           default:
             hours: 0
@@ -705,7 +769,7 @@ triggers:
         {% if proximity_devices %}
           {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
         {% else %}
-          {% set zone_name = state_attr(home_zone, 'friendly_name') %}
+          {% set zone_name = entity_name(home_zone) %}
           {% for e in integration_entities('proximity') %}
             {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
           {% endfor %}
@@ -743,7 +807,7 @@ triggers:
         {% if proximity_devices %}
           {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
         {% else %}
-          {% set zone_name = state_attr(home_zone, 'friendly_name') %}
+          {% set zone_name = entity_name(home_zone) %}
           {% for e in integration_entities('proximity') %}
             {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
           {% endfor %}
@@ -813,7 +877,7 @@ actions:
         {% if proximity_devices %}
           {% for d in proximity_devices %}{% set ns.ents = ns.ents + device_entities(d) %}{% endfor %}
         {% else %}
-          {% set zone_name = state_attr(home_zone, 'friendly_name') %}
+          {% set zone_name = entity_name(home_zone) %}
           {% for e in integration_entities('proximity') %}
             {% if device_attr(e, 'name') == zone_name %}{% set ns.ents = ns.ents + [e] %}{% endif %}
           {% endfor %}
