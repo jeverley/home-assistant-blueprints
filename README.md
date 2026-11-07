@@ -88,7 +88,7 @@ The lead is the dead time plus the minutes per degree times the rise from the ro
 | --- | --- |
 | Thermostat | the TP-WGZBA device, state helper (required), Warm on time (on) |
 | Geofencing | away schedule (on), home zone (default `zone.home`), geofencing distance (10 km, 0 to turn pre-heating off), progress distance (500 m), pre-heat schedule group (Schedule 2), geofencing timeout (45 min), Proximity devices (found from the home zone) |
-| Occupancy | follow occupancy (on), heated areas (none), occupied delay (1 min), empty delay (5 min) |
+| Occupancy | follow occupancy (on), heated areas (none), occupied delay (1 min), empty delay (5 min, also used by the away schedule; 5 min with follow occupancy off) |
 | Routine | next waking alarm sensor (optional, none), early alarm (on), late alarm (on), awake sensors (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
 
 ### Example configurations
