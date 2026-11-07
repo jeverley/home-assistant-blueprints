@@ -3,15 +3,15 @@ blueprint:
   description: |
     Smart scheduling for a Sonoff TP-WGZBA thermostat on ZHA, using the schedules stored on the thermostat.
 
+    **Geofencing** follows whether anyone is home:
+    - **Away schedule** uses **Schedule 3** while nobody is home, ending any running override as it switches.
+    - It pre-heats, switching to the pre-heat group early, when someone is close and heading home.
+
     **Occupancy** switches the thermostat between its schedule groups:
     - **Schedule 1** while the heated areas are occupied.
     - **Schedule 2** when the heated areas are empty.
     - With **Follow occupancy** off or no heated areas, **Schedule 1** whenever someone is home.
     - A switch waits for your own **Boost** or **Timer** override to end.
-
-    **Geofencing** follows whether anyone is home:
-    - **Away schedule** uses **Schedule 3** while nobody is home, ending any running override as it switches.
-    - It pre-heats, switching to the pre-heat group early, when someone is close and heading home.
 
     **Routine** follows your day rather than the clock:
     - An **early alarm** starts the morning heating early.
@@ -58,49 +58,6 @@ blueprint:
           selector:
             boolean: {}
 
-    occupancy:
-      name: Occupancy
-      icon: mdi:home-account
-      description: Switches between Schedule 1 and Schedule 2 as the heated areas become occupied or empty.
-      collapsed: true
-      input:
-        follow_occupancy:
-          name: Follow occupancy
-          description: |
-            Uses Schedule 1 while the heated areas are occupied and Schedule 2 when they are empty.
-
-            When off, or with no heated areas, uses Schedule 1 whenever someone is home.
-          default: true
-          selector:
-            boolean: {}
-        heated_areas:
-          name: Heated areas
-          description: The areas this thermostat heats, used by **Follow occupancy**.
-          default: []
-          selector:
-            area:
-              multiple: true
-        occupied_delay:
-          name: Occupied delay
-          description: The duration the heated areas must be occupied before switching to Schedule 1.
-          default:
-            hours: 0
-            minutes: 1
-            seconds: 0
-          selector:
-            duration: {}
-        empty_delay:
-          name: Empty delay
-          description: |
-            The duration the heated areas must be empty before switching to Schedule 2.
-
-            Also how long every area must be empty before nobody counts as home, for **Away schedule**.
-          default:
-            hours: 0
-            minutes: 5
-            seconds: 0
-          selector:
-            duration: {}
     geofencing:
       name: Geofencing
       icon: mdi:map-marker-radius
@@ -192,6 +149,49 @@ blueprint:
               multiple: true
               filter:
                 - integration: proximity
+    occupancy:
+      name: Occupancy
+      icon: mdi:home-account
+      description: Switches between Schedule 1 and Schedule 2 as the heated areas become occupied or empty.
+      collapsed: true
+      input:
+        follow_occupancy:
+          name: Follow occupancy
+          description: |
+            Uses Schedule 1 while the heated areas are occupied and Schedule 2 when they are empty.
+
+            When off, or with no heated areas, uses Schedule 1 whenever someone is home.
+          default: true
+          selector:
+            boolean: {}
+        heated_areas:
+          name: Heated areas
+          description: The areas this thermostat heats, used by **Follow occupancy**.
+          default: []
+          selector:
+            area:
+              multiple: true
+        occupied_delay:
+          name: Occupied delay
+          description: The duration the heated areas must be occupied before switching to Schedule 1.
+          default:
+            hours: 0
+            minutes: 1
+            seconds: 0
+          selector:
+            duration: {}
+        empty_delay:
+          name: Empty delay
+          description: |
+            The duration the heated areas must be empty before switching to Schedule 2.
+
+            Also how long every area must be empty before nobody counts as home, for **Away schedule**.
+          default:
+            hours: 0
+            minutes: 5
+            seconds: 0
+          selector:
+            duration: {}
     routine:
       name: Routine
       icon: mdi:alarm
