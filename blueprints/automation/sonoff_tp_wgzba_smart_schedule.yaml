@@ -296,18 +296,16 @@ blueprint:
           name: Getting up
           visible:
             field: awake_sensors
-            operator: not_eq
-            value: []
+            operator: exists
           description: Starts the morning heating as soon as an awake sensor reports someone up.
-          default: true
+          default: false
           selector:
             boolean: {}
         getting_up_delay:
           name: Getting up delay
           visible:
             - field: awake_sensors
-              operator: not_eq
-              value: []
+              operator: exists
             - field: getting_up_enabled
               value: true
           description: |
@@ -324,21 +322,19 @@ blueprint:
           name: Bedtime
           visible:
             field: awake_sensors
-            operator: not_eq
-            value: []
+            operator: exists
           description: |
             Starts the night temperature early once the awake sensors report everyone asleep.
 
             It ends again if someone gets up before the usual time.
-          default: true
+          default: false
           selector:
             boolean: {}
         bedtime_delay:
           name: Bedtime delay
           visible:
             - field: awake_sensors
-              operator: not_eq
-              value: []
+              operator: exists
             - field: bedtime_enabled
               value: true
           description: How long every awake sensor must stay off before everyone counts as asleep.
