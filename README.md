@@ -12,14 +12,14 @@ Built for Sonoff TP-WGZBA Zigbee thermostats on ZHA. Create one automation per t
 
 ### What it does
 
+- **Geofencing:**
+  - **Away schedule:** Schedule 3 when nobody is home (the home zone is empty and no area is occupied). Any running override is ended as it switches, and one started while away (a Boost on the way home) is left alone. When off, the group follows Occupancy while nobody is home, and only the routine's own Timer is ended.
+  - **Pre-heat**, part of the away schedule: while nobody is home, once someone heading home is within the geofencing distance and has made real progress towards home, it switches to the pre-heat group (Schedule 2 by default) so the house warms before they arrive. See [Geofencing](#geofencing) below.
 - **Occupancy:** switches the thermostat's active schedule group using the native occupancy and zone triggers and conditions.
   - Schedule 1 when the heated areas are occupied.
   - Schedule 2 when the heated areas are empty.
   - Schedules 1 and 2 leave your own Boost or Timer override alone, and switch once it ends. The routine's own Timers (the routine pressed Apply last) don't hold up a switch. Their stage is worked out again from the new group's schedule and the Timer replaced.
   - With **Follow occupancy** turned off, or no heated areas set, Schedule 1 is used whenever someone is home, for areas you want on their occupied schedule all day.
-- **Geofencing:**
-  - **Away schedule:** Schedule 3 when nobody is home (the home zone is empty and no area is occupied). Any running override is ended as it switches, and one started while away (a Boost on the way home) is left alone. When off, the group follows Occupancy while nobody is home, and only the routine's own Timer is ended.
-  - **Pre-heat**, part of the away schedule: while nobody is home, once someone heading home is within the geofencing distance and has made real progress towards home, it switches to the pre-heat group (Schedule 2 by default) so the house warms before they arrive. See [Geofencing](#geofencing) below.
 - **Routine:** moves the start of the morning heating to match the next waking alarm. The wake-up start is the alarm minus the lead. With **Warm on time** on, that is the warm-up time, learned once a morning has been measured (see [Warm on time](#warm-on-time) below). Otherwise the morning starts at the alarm. Period 2's usual length counts from the alarm, so the room is warm when you get up and stays warm as long as usual. Early, late, wake and catch-up runs read today's schedule for the active group from the thermostat's schedule entities and count the configured periods (period 1 is fixed at 00:00, and counting stops at the first unset period). They only fetch it from the thermostat when those entities may be out of date: just after midnight, after a schedule group change, after a schedule entity changed (an edit, a restart or the thermostat rejoining), or when one cannot be read. Otherwise they use what is already shown, which saves Zigbee traffic on reloads. The schedule group is likewise only written when it changes.
   - **Early alarm** (wake-up start at or before period 2): today's morning starts early, at the schedule's own temperatures.
 
@@ -87,8 +87,8 @@ The lead is the dead time plus the minutes per degree times the rise from the ro
 | Section | Inputs |
 | --- | --- |
 | Thermostat | the TP-WGZBA device, state helper (required), Warm on time (on) |
-| Occupancy | follow occupancy (on), heated areas (none), occupied delay (1 min), empty delay (5 min) |
 | Geofencing | away schedule (on), home zone (default `zone.home`), geofencing distance (10 km, 0 to turn pre-heating off), progress distance (500 m), pre-heat schedule group (Schedule 2), geofencing timeout (45 min), Proximity devices (found from the home zone) |
+| Occupancy | follow occupancy (on), heated areas (none), occupied delay (1 min), empty delay (5 min) |
 | Routine | next waking alarm sensor (optional, none), early alarm (on), late alarm (on), awake sensors (none), getting up (on), getting up delay (0), bedtime (on), bedtime delay (15 min) |
 
 ### Example configurations
