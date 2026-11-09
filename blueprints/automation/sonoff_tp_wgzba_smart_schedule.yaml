@@ -710,8 +710,8 @@ triggers:
       {{ m | count in [3, 7] and h != '' and is_state(h, 'idle') and states[h].last_changed.timestamp() > m[0] }}
   # The thermostat reported a new temperature (its climate entity's current
   # temperature) during a warm-up being measured, above the start reading and
-  # different from the last report recorded, so the run records it (see Learn
-  # the warm-up time). It turns false once recorded, so each report fires it.
+  # the highest report recorded, so the run records it (see Learn the warm-up
+  # time). It turns false once recorded, so each new high fires it.
   - alias: Room warming
     trigger: template
     id: warming
@@ -720,7 +720,7 @@ triggers:
       {% set raw = states(state_helper) %}
       {% set m = ((raw | from_json(default={})).l | default({})).m | default([]) if raw is match('^\\{') else [] %}
       {% set v = state_attr(c, 'current_temperature') | float(none) if c != '' else none %}
-      {{ m | count in [3, 7] and v is not none and v > m[1] and (m | count == 3 or v != m[6]) }}
+      {{ m | count in [3, 7] and v is not none and v > m[1] and (m | count == 3 or v > m[6]) }}
   # A warm-up is being measured but the thermostat is still idle from before
   # it started, heat_within later, so it judged the room warm enough. The run
   # drops the measurement (see Learn the warm-up time) and stops, like a Room
@@ -1132,9 +1132,10 @@ actions:
   # A warm-up measurement (learn.m) records when it started, the room
   # temperature then and the target. Each report of its temperature above
   # that start reading (Room warming) is recorded too: the first one, and the
-  # latest one, each as [time, value], the time being when the climate entity
-  # was last updated. Each report is an exact pair, the reading when it was
-  # sent.
+  # latest new high, each as [time, value], the time being when the climate
+  # entity was last updated, so a reading that falls or wobbles back is left
+  # out and the latest report below is the highest so far. Each report is an
+  # exact pair, the reading when it was sent.
   # The measurement ends at the first report at or above the target: the
   # warm-up time is how long the thermostat takes to bring its reading to the
   # scheduled temperature, whatever it does about its own stop point (the
@@ -1215,7 +1216,7 @@ actions:
                  or (h is not none and h.state == 'heating' and since > m[0] + heat_within)
                  or (h is not none and h.state == 'idle' and since <= m[0]
                      and now().timestamp() - m[0] >= heat_within) %}
-            {% set fresh = rv is not none and rv > m[1] and rt >= m[0] and (m | count == 3 or rv != m[6]) %}
+            {% set fresh = rv is not none and rv > m[1] and rt >= m[0] and (m | count == 3 or rv > m[6]) %}
             {% set m = (m + [rt, rv, rt, rv] if m | count == 3 else m[:5] + [rt, rv]) if fresh and not warmed else m %}
             {% set reached = m | count == 7 and m[6] >= m[2] - 0.05 %}
             {% set te, ve = none, none %}
