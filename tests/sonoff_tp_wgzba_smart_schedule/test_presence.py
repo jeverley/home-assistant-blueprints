@@ -106,3 +106,59 @@ def test_the_furthest_point_resets_once_home():
     w.move('alex', 0, 'arrived')
     w.advance(t + dt.timedelta(minutes=2))
     assert 'g' not in w.helper(), w.helper()
+
+
+TRIPS = __import__('pathlib').Path(__file__).resolve().parent / 'data' / 'trips.csv'
+
+
+def replay_trips(day, progress=500):
+    """Drive both people's real Proximity readings for a day through the
+    blueprint; return the times pre-heating started."""
+    import csv
+    from sim import TZ
+    rows = []
+    for r in csv.DictReader(TRIPS.open()):
+        t = dt.datetime.fromisoformat(r['time_utc'].replace('Z', '+00:00')).astimezone(TZ)
+        if t.date() == day:
+            rows.append((t, r['person'], r['sensor'], r['value']))
+    w = World(start=dt.datetime.combine(day, dt.time(0, 0), TZ), room=20.0,
+              inputs={'getting_up_enabled': False, 'bedtime_enabled': False, 'proximity_devices': ['prox'],
+                      'geofencing_progress': progress, 'alarm_sensor': ''})
+    for p in ('person_a', 'person_b'):
+        w.add_person(p, 0, 'arrived')
+    w.prime()
+    w.run('catch-up')
+    dist = {'person_a': 0, 'person_b': 0}
+    starts = []
+    for t, person, sensor, value in rows:
+        w.advance(t)
+        if sensor == 'distance':
+            dist[person] = int(value)
+            w.set(f'sensor.home_{person}_distance', value)
+        else:
+            w.set(f'sensor.home_{person}_direction_of_travel', value)
+        home = sum(1 for d in dist.values() if d <= 100)
+        if str(home) != w.states['zone.home'].state:
+            w.set('zone.home', str(home))
+            w.set_occupied('living_room', home > 0)
+        before = w.helper().get('a', 0)
+        w.check_triggers()
+        if not before and w.helper().get('a', 0):
+            starts.append(w.now)
+    return starts
+
+
+def test_real_trips_pre_heat_only_on_the_way_home():
+    # 31 October: two outings, with readings wobbling towards home while
+    # parked. Pre-heating started on each real drive home only.
+    hm = lambda ts: [t.strftime('%H:%M') for t in ts]
+    s = replay_trips(dt.date(2026, 10, 31))
+    assert hm(s) == ['14:13', '23:13'], hm(s)
+    # 2 November: one outing; pre-heats 37 s into the drive home.
+    s = replay_trips(dt.date(2026, 11, 2))
+    assert hm(s) == ['22:22'], hm(s)
+
+
+def test_real_trips_without_the_progress_check_pre_heat_while_parked():
+    s = replay_trips(dt.date(2026, 10, 31), progress=0)
+    assert len(s) > 2, [t.strftime('%H:%M') for t in s]
