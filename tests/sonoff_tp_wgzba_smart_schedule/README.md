@@ -37,10 +37,19 @@ simulator never passes silently. The runner exits with 1 if any test failed.
   Warm on time for warmer periods.
 - `test_presence.py`: occupancy, the away schedule, and geofencing pre-heating.
 - `test_replay.py`: real mornings fed through the blueprint's own learning step,
-  from `data/mornings.csv`.
+  from `data/mornings.csv`, each checked against figures worked out
+  independently from its reports. `test_presence.py` also replays two days of
+  real trips from `data/trips.csv` and checks when pre-heating started.
 
 ## Data
 
-`data/mornings.csv` holds the two thermostats' climate entity between 05:30
-and 08:00 on real mornings: the time (UTC), the room, its reported temperature,
-its HVAC action and its target. Nothing else from the house is kept.
+`data/mornings.csv` holds the two thermostats' climate entity between 02:30
+and 08:30 on real mornings (31 October to 10 November 2026): the time (UTC),
+the room, its reported temperature, its HVAC action and its target.
+
+`data/trips.csv` holds two people's Proximity readings on 31 October and
+2 November 2026: the time (UTC), the person (as `person_a` or `person_b`), and
+either their distance from home, rounded to 100 m, or their direction of
+travel.
+
+Nothing else from the house is kept.

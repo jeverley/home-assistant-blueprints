@@ -73,3 +73,28 @@ def test_real_mornings_learn_what_the_rules_say():
     for key, (before, after) in EXPECTED.items():
         got = replay(data[key], before)
         assert got == after, (key, got, after)
+
+
+# Each morning on its own, from no learned values: the morning's own dead time
+# and minutes per degree. Worked out independently from the reports (first
+# report, then the first report at or above the target, or the highest report
+# when the warm-up was cut short).
+EACH = {
+    ('2026-11-02', 'upstairs'): (7.5, 17.9), ('2026-11-02', 'downstairs'): (6.6, 13.7),
+    ('2026-11-03', 'upstairs'): (7.4, 18.6), ('2026-11-03', 'downstairs'): (7.6, 10.7),
+    ('2026-11-04', 'upstairs'): (10.4, 15.3), ('2026-11-04', 'downstairs'): (5.5, 16.8),
+    ('2026-11-05', 'upstairs'): (6.8, 19.6), ('2026-11-05', 'downstairs'): (3.4, 17.8),
+    ('2026-11-06', 'upstairs'): (7.9, 26.4), ('2026-11-06', 'downstairs'): (3.7, 13.9),
+    ('2026-11-07', 'upstairs'): (7.6, 29.0), ('2026-11-07', 'downstairs'): (6.2, 16.1),
+    ('2026-11-08', 'upstairs'): (4.2, 24.6), ('2026-11-08', 'downstairs'): (7.4, 10.3),
+    ('2026-11-09', 'upstairs'): (5.1, 31.6), ('2026-11-09', 'downstairs'): (6.7, 13.2),
+    # 04:00 alarm, about 4 C outside: upstairs stalled at 19.9 with a 21 target.
+    ('2026-11-10', 'upstairs'): (0.8, 53.3), ('2026-11-10', 'downstairs'): (10.1, 13.9),
+}
+
+
+def test_each_real_morning_measures_what_its_reports_show():
+    data = load()
+    for key, (dead, rate) in EACH.items():
+        got = replay(data[key], [0, 0, 0])
+        assert got and got[0] == 1.0 and abs(got[1] - dead) <= 0.11 and abs(got[2] - rate) <= 0.11, (key, got, dead, rate)
