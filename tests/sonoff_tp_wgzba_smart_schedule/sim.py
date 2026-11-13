@@ -149,6 +149,7 @@ class World:
         self.bp = resolve(self.bp_raw, self.inputs)
         self.now = start or T(0, 0)
         self.states: dict[str, State] = {}
+        self.device_values: dict[str, str] = {}
         self.devices = {'dev': []}
         self.device_names = {'dev': 'Thermostat'}
         self.areas = {'living_room': [], 'garden': []}
@@ -169,6 +170,8 @@ class World:
     def set(self, entity_id, state, attributes=None, when=None, force_update=False):
         when = when or self.now
         state = str(state) if not isinstance(state, str) else state
+        if state not in ('unknown', 'unavailable'):
+            self.device_values[entity_id] = state
         old = self.states.get(entity_id)
         if old is None:
             self.states[entity_id] = State(entity_id, state, attributes, when)
@@ -220,9 +223,14 @@ class World:
         self._update_climate()
 
     # thermostat
+    def device(self, entity_id):
+        """The thermostat's own value behind an entity: its state, or the last
+        one it had while the entity is unavailable (as when ZHA reloads)."""
+        return self.device_values.get(entity_id, self.states[entity_id].state)
+
     def schedule_temp(self, group=None, when=None):
         when = when or self.now
-        periods = self.schedules[group or self.states['select.t_schedule_group'].state]
+        periods = self.schedules[group or self.device('select.t_schedule_group')]
         cur = periods[0][1]
         for hhmm, temp in periods:
             h, m = map(int, hhmm.split(':'))
@@ -231,8 +239,8 @@ class World:
         return cur
 
     def setpoint(self):
-        if self.states['sensor.t_override_mode'].state in ('Timer', 'Boost'):
-            return float(self.states['number.t_override_target_temperature'].state)
+        if self.device('sensor.t_override_mode') in ('Timer', 'Boost'):
+            return float(self.device('number.t_override_target_temperature'))
         return float(self.schedule_temp())
 
     def load_periods(self):
@@ -270,8 +278,8 @@ class World:
     def control(self):
         """The thermostat's own hysteresis, by its own (unreported) reading."""
         sp = self.setpoint()
-        hi = float(self.states['number.t_heating_high_threshold'].state)
-        lo = float(self.states['number.t_heating_low_threshold'].state)
+        hi = float(self.device('number.t_heating_high_threshold'))
+        lo = float(self.device('number.t_heating_low_threshold'))
         t = self.room['temp']
         if not self.room['heating'] and t <= sp + lo + 1e-9:
             self._set_heating(True)

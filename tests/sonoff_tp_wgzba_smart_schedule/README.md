@@ -33,8 +33,8 @@ simulator never passes silently. The runner exits with 1 if any test failed.
   override is applied.
 - `test_learning.py`: learning the warm-up time, how a measurement starts and
   ends, and what is learned.
-- `test_routine.py`: alarm mornings, getting up, bedtime, a second alarm, and
-  Warm on time for warmer periods.
+- `test_routine.py`: alarm mornings, getting up, bedtime, a second alarm, Warm
+  on time for warmer periods, and a ZHA reload.
 - `test_presence.py`: occupancy, the away schedule, and geofencing pre-heating.
 - `test_replay.py`: real mornings fed through the blueprint's own learning step,
   from `data/mornings.csv`, each checked against figures worked out

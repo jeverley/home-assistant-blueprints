@@ -1,5 +1,5 @@
-"""The routine: alarm mornings, getting up, bedtime, a second alarm, and Warm
-on time for warmer periods."""
+"""The routine: alarm mornings, getting up, bedtime, a second alarm, Warm on
+time for warmer periods, and a ZHA reload."""
 from sim import World, T
 
 UP = {'Schedule 1': [('00:00', 16), ('07:00', 21), ('07:30', 20), ('22:30', 16)],
@@ -132,3 +132,30 @@ def test_warm_on_time_leaves_an_already_warm_room_alone():
     w = world(schedules=DOWN, start=T(15, 0), room=19.5)
     w.advance(T(17, 10))
     assert not timers(w), timers(w)
+
+
+
+def test_no_thermostat_call_while_zha_is_reloading_then_a_catch_up():
+    # ZHA reloads from 05:00: every thermostat entity goes unavailable, and
+    # they come back one by one, the schedule group first. A ZHA call to an
+    # unavailable entity can wait forever and hold up every queued run, so no
+    # run touches the thermostat until all are back. Then a catch-up starts
+    # the morning that was due at 06:22.
+    w = world(alarm=T(7, 0))
+    ents = [e for e in w.devices['dev'] if not e.startswith('climate.')]
+    saved = {e: w.states[e].state for e in ents}
+    for e in ents:
+        w.set(e, 'unavailable')
+    w.advance(T(5, 0))
+    calls = len(w.log)
+    w.set('select.t_schedule_group', saved['select.t_schedule_group'])
+    w.advance(T(6, 0))
+    # A run in the meantime, here started by hand, stops at its start.
+    r = w.run('catch-up')
+    assert r['result'].startswith('stopped: The thermostat'), r['result']
+    w.advance(T(6, 30))
+    assert len(w.log) == calls, w.log[calls:]
+    for e in ents:
+        w.set(e, saved[e])
+    w.advance(T(6, 31))
+    assert [t[0] for t in timers(w)] == [T(6, 31)], timers(w)
