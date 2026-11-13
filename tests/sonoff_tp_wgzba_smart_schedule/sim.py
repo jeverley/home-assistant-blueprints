@@ -150,6 +150,7 @@ class World:
         self.now = start or T(0, 0)
         self.states: dict[str, State] = {}
         self.device_values: dict[str, str] = {}
+        self.device_attrs: dict[str, dict | None] = {}
         self.devices = {'dev': []}
         self.device_names = {'dev': 'Thermostat'}
         self.areas = {'living_room': [], 'garden': []}
@@ -187,6 +188,7 @@ class World:
 
     def add(self, entity_id, state, attributes=None, device='dev', area=None):
         self.set(entity_id, state, attributes)
+        self.device_values[entity_id] = str(state)
         if device:
             self.devices.setdefault(device, []).append(entity_id)
         if area:
@@ -224,9 +226,24 @@ class World:
 
     # thermostat
     def device(self, entity_id):
-        """The thermostat's own value behind an entity: its state, or the last
-        one it had while the entity is unavailable (as when ZHA reloads)."""
+        """The thermostat's own value behind an entity. Kept while the entity
+        reads unavailable (as when ZHA reloads) or unknown (a failed read),
+        as neither changes what the thermostat is doing."""
         return self.device_values.get(entity_id, self.states[entity_id].state)
+
+    def report(self, entity_id, state, attributes=None, force_update=False):
+        """The thermostat changing a value itself. Its entity only follows while
+        it is available: ZHA drops reports while it reloads."""
+        if self.states.get(entity_id) is not None and self.states[entity_id].state == 'unavailable':
+            self.device_values[entity_id] = str(state)
+            self.device_attrs[entity_id] = attributes
+            return
+        self.set(entity_id, state, attributes, force_update=force_update)
+
+    def restore(self, entity_id):
+        """ZHA bringing an entity back: it reads the thermostat's current value."""
+        attrs = self.device_attrs.pop(entity_id, None)
+        self.set(entity_id, self.device(entity_id), attrs)
 
     def schedule_temp(self, group=None, when=None):
         when = when or self.now
@@ -245,25 +262,25 @@ class World:
 
     def load_periods(self):
         """What a schedule fetch does: the active group's periods for the operating day."""
-        periods = self.schedules[self.states['select.t_schedule_group'].state]
+        periods = self.schedules[self.device('select.t_schedule_group')]
         for i in range(1, 13):
             if i <= len(periods):
-                self.set(f'select.t_schedule_period_{i}_time', periods[i - 1][0])
-                self.set(f'number.t_schedule_period_{i}_temp', f'{float(periods[i - 1][1]):.1f}')
+                self.report(f'select.t_schedule_period_{i}_time', periods[i - 1][0])
+                self.report(f'number.t_schedule_period_{i}_temp', f'{float(periods[i - 1][1]):.1f}')
             else:
-                self.set(f'select.t_schedule_period_{i}_time', 'NULL')
-                self.set(f'number.t_schedule_period_{i}_temp', '5.0')
+                self.report(f'select.t_schedule_period_{i}_time', 'NULL')
+                self.report(f'number.t_schedule_period_{i}_temp', '5.0')
 
     def _update_climate(self):
         st = self.states['climate.t']
-        attrs = dict(st.attributes, temperature=self.setpoint(), hvac_action=self.states['sensor.t_hvac_action'].state)
-        self.set('climate.t', 'heat', attrs)
+        attrs = dict(st.attributes, temperature=self.setpoint(), hvac_action=self.device('sensor.t_hvac_action'))
+        self.report('climate.t', 'heat', attrs)
 
     def _set_heating(self, on):
         r = self.room
         if r['heating'] != on:
             r['heating'], r['since'] = on, self.now
-            self.set('sensor.t_hvac_action', 'heating' if on else 'idle')
+            self.report('sensor.t_hvac_action', 'heating' if on else 'idle')
             self._update_climate()
 
     def _report(self, force=False):
@@ -273,7 +290,7 @@ class World:
                 or (self.now - r['rep_t']).total_seconds() >= 900:
             r['rep'], r['rep_t'] = v, self.now
             st = self.states['climate.t']
-            self.set('climate.t', 'heat', dict(st.attributes, current_temperature=v), force_update=True)
+            self.report('climate.t', 'heat', dict(st.attributes, current_temperature=v), force_update=True)
 
     def control(self):
         """The thermostat's own hysteresis, by its own (unreported) reading."""
@@ -299,15 +316,15 @@ class World:
         if entity_id == 'button.t_schedule_fetch':
             self.load_periods()
         elif entity_id == 'button.t_override_apply':
-            mode = self.states['select.t_override_mode'].state
-            self.set('sensor.t_override_mode', mode)
-            self.timer_end = self.now + dt.timedelta(minutes=float(self.states['number.t_override_period'].state))
+            mode = self.device('select.t_override_mode')
+            self.report('sensor.t_override_mode', mode)
+            self.timer_end = self.now + dt.timedelta(minutes=float(self.device('number.t_override_period')))
             self._update_climate()
             if self.fresh_on_apply and not self.room['heating'] and self.room['temp'] < self.setpoint() - 1e-9:
                 self._set_heating(True)
         elif entity_id == 'button.t_override_exit':
-            if self.states['sensor.t_override_mode'].state != 'Idle':
-                self.set('sensor.t_override_mode', 'Idle')
+            if self.device('sensor.t_override_mode') != 'Idle':
+                self.report('sensor.t_override_mode', 'Idle')
                 self.timer_end = None
                 self._update_climate()
 
@@ -659,7 +676,7 @@ class World:
             self.now = min(self.now + dt.timedelta(seconds=step), until)
             if self.timer_end and self.now >= self.timer_end:
                 self.timer_end = None
-                self.set('sensor.t_override_mode', 'Idle')
+                self.report('sensor.t_override_mode', 'Idle')
                 self._update_climate()
             self.physics_minute()
             self.control()
