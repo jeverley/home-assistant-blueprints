@@ -30,11 +30,13 @@ simulator never passes silently. The runner exits with 1 if any test failed.
   schedules, the override Timer, its heating hysteresis, the room warming and
   cooling, and its temperature reports in 0.3 °C steps or every 15 minutes).
   `fresh_on_apply=False` models firmware that keeps its hysteresis when an
-  override is applied.
+  override is applied. While an entity reads unavailable (as when ZHA reloads),
+  the thermostat carries on with its own values without reporting them, and
+  `restore()` brings the entity back with the thermostat's current value.
 - `test_learning.py`: learning the warm-up time, how a measurement starts and
   ends, and what is learned.
-- `test_routine.py`: alarm mornings, getting up, bedtime, a second alarm, and
-  Warm on time for warmer periods.
+- `test_routine.py`: alarm mornings, getting up, bedtime, a second alarm, Warm
+  on time for warmer periods, and a ZHA reload.
 - `test_presence.py`: occupancy, the away schedule, and geofencing pre-heating.
 - `test_replay.py`: real mornings fed through the blueprint's own learning step,
   from `data/mornings.csv`, each checked against figures worked out

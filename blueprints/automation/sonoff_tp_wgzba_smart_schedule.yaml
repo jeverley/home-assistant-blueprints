@@ -384,6 +384,12 @@ trigger_variables:
   lead_min: 10
   lead_max: 180
   heat_within: 120
+  # Every thermostat entity the blueprint writes to or presses, by its default
+  # entity ID ending. A ZHA call to one that is unavailable can wait forever
+  # for a reply (seen when ZHA reloads), holding up every queued run behind
+  # it, so runs only touch the thermostat once all are available.
+  written_pattern: >-
+    ^(select\.\S*_(schedule_group|schedule_operating_day|override_mode)|button\.\S*_(schedule_fetch|override_apply|override_exit)|number\.\S*_override_(target_temperature|period))$
 
 variables:
   # The thermostat's ZHA entities, matched on the device by domain and
@@ -408,6 +414,14 @@ variables:
     {{ thermostat_entities | select('match', '^button\\..*_override_apply$') | first | default('') }}
   override_exit: >-
     {{ thermostat_entities | select('match', '^button\\..*_override_exit$') | first | default('') }}
+  # The thermostat is ready to be written to: its schedule group has a value
+  # (every run reads it), and none of the entities the blueprint writes to is
+  # unavailable. Only unavailable counts for those, as a button reads unknown
+  # until it is first pressed, and so can the operating day. The Thermostat
+  # came back trigger works this out the same way.
+  written_entities: "{{ thermostat_entities | select('match', written_pattern) | list }}"
+  unavailable_entities: "{{ written_entities | select('is_state', 'unavailable') | list }}"
+  thermostat_ready: "{{ has_value(schedule_group) and unavailable_entities | first is not defined }}"
   override_state: >-
     {{ thermostat_entities | select('match', '^sensor\\..*_override_mode$') | first | default('') }}
   work_mode_state: >-
@@ -550,15 +564,17 @@ triggers:
     options:
       for: "00:00:00"
       zone: !input home_zone
-  # The thermostat is back after being unavailable (at startup or after
-  # dropping off), so catch up on anything runs skipped or left undone.
+  # The thermostat is back after being unavailable (at startup, after ZHA
+  # reloads or after dropping off), so catch up on anything runs skipped or
+  # left undone. Its entities come back one by one, so this waits until it is
+  # ready, worked out as for the thermostat_ready variable.
   - alias: Thermostat came back
     trigger: template
     id: catch-up
     value_template: >-
-      {% set e = device_entities(thermostat_device)
-           | select('match', '^select\\..*_schedule_group$') | first | default('') %}
-      {{ e != '' and has_value(e) }}
+      {% set ents = device_entities(thermostat_device) | select('match', written_pattern) | list %}
+      {% set g = ents | select('match', '^select\\..*_schedule_group$') | first | default('') %}
+      {{ g != '' and has_value(g) and ents | select('is_state', 'unavailable') | first is not defined }}
   # The lead is the warm-up time with Warm on time on (learned once a morning
   # has been measured, from start_dead and start_rate until then), otherwise 5
   # minutes, so the morning starts at the alarm. Keep this in step with the
@@ -955,13 +971,14 @@ actions:
             {% set trimmed = dict(full, l=ns.l) %}
             {{ (full if full | to_json | length <= state_attr(state_helper, 'max') | int(255) or 'l' not in full else trimmed) | to_json }}
       - stop: Recorded a furthest point.
-  # The thermostat is not ready yet (at startup or after dropping off), so
-  # nothing is written, fetched or decided. Checked when the run starts, so
-  # queued runs and Run actions are covered too.
+  # The thermostat is not ready yet (at startup, while ZHA reloads or after
+  # dropping off), so nothing is written, fetched or decided. Checked when
+  # the run starts, so queued runs and Run actions are covered too. The
+  # trace's unavailable_entities variable lists what it is waiting for.
   - alias: Stop if the thermostat is not available
     if:
       - condition: template
-        value_template: "{{ not has_value(schedule_group) }}"
+        value_template: "{{ not thermostat_ready }}"
     then:
       - stop: The thermostat is not available yet. A catch-up runs once it is back.
   - variables:

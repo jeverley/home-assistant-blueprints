@@ -1,5 +1,5 @@
-"""The routine: alarm mornings, getting up, bedtime, a second alarm, and Warm
-on time for warmer periods."""
+"""The routine: alarm mornings, getting up, bedtime, a second alarm, Warm on
+time for warmer periods, and a ZHA reload."""
 from sim import World, T
 
 UP = {'Schedule 1': [('00:00', 16), ('07:00', 21), ('07:30', 20), ('22:30', 16)],
@@ -132,3 +132,36 @@ def test_warm_on_time_leaves_an_already_warm_room_alone():
     w = world(schedules=DOWN, start=T(15, 0), room=19.5)
     w.advance(T(17, 10))
     assert not timers(w), timers(w)
+
+
+
+
+def test_no_thermostat_call_while_zha_is_reloading_then_a_catch_up():
+    # ZHA reloads from 05:00: every thermostat entity bar the climate entity
+    # goes unavailable, and they come back one by one, the schedule group
+    # first. A ZHA call to an unavailable entity can wait forever and hold up
+    # every queued run, so no run touches the thermostat until all are back.
+    # The room cools and the thermostat heats and idles meanwhile, unreported.
+    # Then a catch-up starts the morning that fell due during the reload.
+    w = world(alarm=T(7, 0), room=15.8)
+    w.advance(T(5, 0))
+    ents = [e for e in w.devices['dev'] if not e.startswith('climate.')]
+    for e in ents:
+        w.set(e, 'unavailable')
+    w.room['loss'] = 1.0
+    calls = len(w.log)
+    heating = set()
+    w.advance(T(6, 0), on_minute=lambda w: heating.add(w.room['heating']))
+    assert heating == {True, False}, 'the thermostat should heat and idle during the reload'
+    assert w.states['sensor.t_hvac_action'].state == 'unavailable'
+    w.restore('select.t_schedule_group')
+    # A run in the meantime, here started by hand, stops at its start.
+    r = w.run('catch-up')
+    assert r['result'].startswith('stopped: The thermostat'), r['result']
+    w.advance(T(6, 30))
+    assert len(w.log) == calls, w.log[calls:]
+    for e in ents:
+        w.restore(e)
+    assert w.states['sensor.t_hvac_action'].state == ('heating' if w.room['heating'] else 'idle')
+    w.advance(T(6, 31))
+    assert [t[0] for t in timers(w)] == [T(6, 31)], timers(w)
