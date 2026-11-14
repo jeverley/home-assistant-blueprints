@@ -46,8 +46,9 @@ simulator never passes silently. The runner exits with 1 if any test failed.
 ## Data
 
 `data/mornings.csv` holds the two thermostats' climate entity between 02:30
-and 08:30 on real mornings (31 October to 10 November 2026): the time (UTC),
-the room, its reported temperature, its HVAC action and its target.
+and 08:30 on real mornings (31 October to 14 November 2026, and until 09:30
+from 11 November, as cold mornings ran later): the time (UTC), the room, its
+reported temperature, its HVAC action and its target.
 
 `data/trips.csv` holds two people's Proximity readings on 31 October and
 2 November 2026: the time (UTC), the person (as `person_a` or `person_b`), and

@@ -1,8 +1,8 @@
 """Replays real mornings through the blueprint's own learning step.
 
-data/mornings.csv holds the two thermostats' climate entity between 05:30 and
-08:00: the time (UTC), the room, its reported temperature, its HVAC action
-and its target. Each morning is fed, event by event, through the Learn the
+data/mornings.csv holds the two thermostats' climate entity on real mornings:
+the time (UTC), the room, its reported temperature, its HVAC action and its
+target. Each morning is fed, event by event, through the Learn the
 warm-up time template, starting from the learned values the blueprint held
 that morning (on the current measuring rules), and the result is checked.
 """
@@ -90,6 +90,16 @@ EACH = {
     ('2026-11-09', 'upstairs'): (5.1, 31.6), ('2026-11-09', 'downstairs'): (6.7, 13.2),
     # 04:00 alarm, about 4 C outside: upstairs stalled at 19.9 with a 21 target.
     ('2026-11-10', 'upstairs'): (0.8, 53.3), ('2026-11-10', 'downstairs'): (10.1, 13.9),
+    ('2026-11-11', 'upstairs'): (0.6, 39.7), ('2026-11-11', 'downstairs'): (11.1, 8.7),
+    ('2026-11-12', 'upstairs'): (9.2, 26.6), ('2026-11-12', 'downstairs'): (7.4, 12.7),
+    # The automation was stuck: the thermostat's own period 2 started both rooms
+    # at 07:00, with about -2 C outside. Downstairs aimed for 21, not the
+    # routine's usual 20, and its climb above 20 slowed sharply. Upstairs was
+    # cut short at 07:30.
+    ('2026-11-13', 'upstairs'): (6.7, 20.2), ('2026-11-13', 'downstairs'): (4.5, 35.3),
+    # About -1.5 C outside. With both rooms heating, upstairs fell back and
+    # downstairs levelled off below its target until it dropped at 08:00.
+    ('2026-11-14', 'upstairs'): (3.2, 51.0), ('2026-11-14', 'downstairs'): (8.5, 38.8),
 }
 
 
