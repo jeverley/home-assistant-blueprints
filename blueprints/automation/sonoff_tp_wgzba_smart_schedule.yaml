@@ -231,7 +231,7 @@ blueprint:
         window_delay:
           name: Window delay
           description: |
-            Turns the thermostat off once a window in the heated areas has been open this long, and back to its schedule when every window has closed. It only turns off a thermostat on its schedule, and only turns one back on that it turned off.
+            Turns the thermostat off once a window in the heated areas has been open this long, and back to its schedule when every window has closed. It only turns off a thermostat on its schedule, and turning off ends any Boost, Timer or hand adjustment. It only turns one back on that it turned off, and if you turn it back on with a window still open, it stays on.
 
             Set to 0 to turn this off.
           default:
@@ -459,13 +459,6 @@ variables:
   heated_areas: !input heated_areas
   follow_occupancy: !input follow_occupancy
   window_delay: !input window_delay
-  # Turning the thermostat off while a window is open: on with heated areas
-  # and a window delay above 0.
-  windows_enabled: >-
-    {% set d = window_delay %}
-    {% set secs = (d.days | default(0)) * 86400 + (d.hours | default(0)) * 3600
-                  + (d.minutes | default(0)) * 60 + (d.seconds | default(0)) if d is mapping else 0 %}
-    {{ heated_areas | first is defined and secs > 0 }}
   early_alarm_enabled: !input early_alarm_enabled
   late_alarm_enabled: !input late_alarm_enabled
   getting_up_enabled: !input getting_up_enabled
@@ -483,7 +476,10 @@ variables:
       {%- else -%}{{ d | float(0) }}{%- endif -%}
     {%- endmacro -%}
     {{ {'getting_up': secs(getting_up_delay) | float(0), 'bedtime': secs(bedtime_delay) | float(0),
-        'empty': secs(empty_delay) | float(0)} }}
+        'empty': secs(empty_delay) | float(0), 'window': secs(window_delay) | float(0)} }}
+  # Turning the thermostat off while a window is open: on with heated areas
+  # and a window delay above 0.
+  windows_enabled: "{{ heated_areas | first is defined and delay_secs['window'] > 0 }}"
   # Timings in seconds used in more than one place. The Schedule editing
   # finished trigger cannot read variables, so it repeats the first three.
   #   fetch_grace: a fetch's own changes land within this after it starts.
@@ -1190,18 +1186,21 @@ actions:
       - variables:
           plan: "{{ empty_plan }}"
   # A window in the heated areas has been open for the window delay: the
-  # thermostat turns off, so only its frost protection heats, and a warm-up
-  # measurement in progress is dropped, as the open window slows the room.
-  # Only from its schedule (Manual and Off are yours), and noted in the State
-  # helper (window_off), so only an Off we set is undone. While it is off for
-  # a window, runs stop here. Once every window has closed it goes back to its
-  # schedule, if it is still Off, and the Back on schedule trigger catches up
-  # from there. With Window delay set to 0 (or no heated areas), an Off we set
+  # thermostat turns off, so only its frost protection heats, ending any Boost,
+  # Timer or hand adjustment, and a warm-up measurement in progress is
+  # dropped, as the open window slows the room. Only from its schedule
+  # (Manual and Off are yours), and noted in the State helper (window_off), so
+  # only an Off we set is undone. While it stays off, runs stop here. If you
+  # turn it back on (or to Manual) with a window still open, runs carry on and
+  # it is not turned off again until every window has closed. Once they have,
+  # the note is cleared: if it is still Off it goes back to its schedule and
+  # the Back on schedule trigger catches up, otherwise this run carries on as a
+  # catch-up. With Window delay set to 0 (or no heated areas), an Off we set
   # earlier is still undone. Keep this in step with the Window open trigger.
   - variables:
       window_off: "{{ state.window_off | default(0) | int(0) > 0 }}"
-      window_open: false
-  - if:
+  - alias: Turn off while a window is open
+    if:
       - condition: template
         value_template: "{{ windows_enabled and not window_off and is_state(work_mode_select, 'Schedule') }}"
       - condition: window.is_open
@@ -1210,13 +1209,6 @@ actions:
         options:
           behavior: any
           for: !input window_delay
-    then:
-      - variables:
-          window_open: true
-  - alias: Turn off while a window is open
-    if:
-      - condition: template
-        value_template: "{{ window_open }}"
     then:
       - variables:
           state: >-
@@ -1278,6 +1270,7 @@ actions:
         then:
           - variables:
               state: "{{ dict(state, window_off=0) }}"
+              window_off: false
           - *save_state
           - if:
               - condition: template
@@ -1289,10 +1282,19 @@ actions:
                   entity_id: "{{ work_mode_select }}"
                 data:
                   option: Schedule
-          - stop: >-
-              Every window has closed, so the thermostat is back on its schedule. The
-              Back on schedule trigger catches up.
-      - stop: A window is still open, so the thermostat stays off.
+              - stop: >-
+                  Every window has closed, so the thermostat is back on its schedule. The
+                  Back on schedule trigger catches up.
+          # Someone changed its mode while it was off, so nothing triggers a
+          # catch-up: this run is one.
+          - variables:
+              run: catch-up
+        else:
+          - if:
+              - condition: template
+                value_template: "{{ is_state(work_mode_select, 'Off') }}"
+            then:
+              - stop: A window is still open, so the thermostat stays off.
   # A warm-up measurement (learn.m) records when it started, the room
   # temperature then and the target. Each report of its temperature above
   # that start reading (Room warming) is recorded too: the first one, and the

@@ -90,6 +90,42 @@ def test_a_mode_you_change_while_off_is_kept():
     assert 'o' not in w.helper(), w.helper()
 
 
+def test_turned_back_on_with_the_window_open_stays_on_and_carries_on():
+    # Turned off for a window, then you put it back on its schedule with the
+    # window still open. It is not turned off again, runs carry on (the room
+    # empties and Schedule 2 follows), and closing the window clears the note
+    # without touching the mode, with a catch-up run.
+    w = world(alarm=None)
+    w.advance(T(10, 0))
+    w.set_window('living_room', True)
+    w.advance(T(10, 3))
+    assert mode(w) == 'Off'
+    w.set_work_mode('Schedule')
+    w.advance(T(10, 10))
+    assert mode(w) == 'Schedule', 'not turned off again while the same window is open'
+    w.set_occupied('living_room', False)
+    w.advance(T(10, 20))
+    assert w.group() == 'Schedule 2', 'runs carry on'
+    n = len(w.runs)
+    w.set_window('living_room', False)
+    w.advance(T(10, 21))
+    assert mode(w) == 'Schedule' and 'o' not in w.helper(), w.helper()
+    assert not any('t_device_work_mode' in c for r in w.runs[n:] for c in r['calls'])
+    assert any(r['result'] == 'done' for r in w.runs[n:]), [(r['id'], r['result']) for r in w.runs[n:]]
+    # A window opening again later turns it off as before.
+    w.set_window('living_room', True)
+    w.advance(T(10, 24))
+    assert mode(w) == 'Off'
+
+
+def test_a_window_delay_written_as_text_works():
+    w = world(alarm=None, window_delay='00:02:00')
+    w.advance(T(10, 0))
+    w.set_window('living_room', True)
+    w.advance(T(10, 3))
+    assert mode(w) == 'Off'
+
+
 def test_a_window_closed_while_zha_reloads_is_still_caught():
     # Off for a window. ZHA reloads, and the window closes meanwhile: once
     # the thermostat is back, a catch-up puts it back on its schedule.
