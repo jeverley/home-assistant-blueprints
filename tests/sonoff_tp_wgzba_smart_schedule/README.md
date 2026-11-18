@@ -27,7 +27,8 @@ simulator never passes silently. The runner exits with 1 if any test failed.
 - `sim.py`: the simulator. It loads the blueprint with a set of inputs and models
   just enough of Home Assistant (states, the template functions the blueprint
   uses, its triggers, conditions and actions) and of the thermostat (its stored
-  schedules, the override Timer, its heating hysteresis, the room warming and
+  schedules, the override Timer, its work mode (Off heats only for frost
+  protection), its heating hysteresis, the room warming and
   cooling, and its temperature reports in 0.3 °C steps or every 15 minutes).
   `fresh_on_apply=False` models firmware that keeps its hysteresis when an
   override is applied. While an entity reads unavailable (as when ZHA reloads),
@@ -38,6 +39,8 @@ simulator never passes silently. The runner exits with 1 if any test failed.
 - `test_routine.py`: alarm mornings, getting up, bedtime, a second alarm, Warm
   on time for warmer periods, and a ZHA reload.
 - `test_presence.py`: occupancy, the away schedule, and geofencing pre-heating.
+- `test_windows.py`: turning the thermostat off while a window is open, and
+  back on its schedule once every window has closed.
 - `test_replay.py`: real mornings fed through the blueprint's own learning step,
   from `data/mornings.csv`, each checked against figures worked out
   independently from its reports. `test_presence.py` also replays two days of
