@@ -209,6 +209,7 @@ class World:
         a('button.t_override_exit', 'unknown')
         a('sensor.t_override_mode', 'Idle')
         a('sensor.t_device_work_mode_state', 'Schedule')
+        a('select.t_device_work_mode', 'Schedule', {'options': ['Off', 'Schedule', 'Manual']})
         a('number.t_heating_high_threshold', '0.2')
         a('number.t_heating_low_threshold', '-0.6')
         a('sensor.t_hvac_action', 'idle')
@@ -220,6 +221,7 @@ class World:
         a('binary_sensor.awake', 'unknown', device=None)
         a('binary_sensor.living_room_occupancy', 'on', {'device_class': 'occupancy'}, device=None, area='living_room')
         a('binary_sensor.garden_occupancy', 'off', {'device_class': 'occupancy'}, device=None, area='garden')
+        a('binary_sensor.living_room_window', 'off', {'device_class': 'window'}, device=None, area='living_room')
         self.load_periods()
         self._report(force=True)
         self._update_climate()
@@ -255,7 +257,21 @@ class World:
                 cur = temp
         return cur
 
+    FROST = 7.0
+
+    def set_work_mode(self, mode):
+        """The thermostat's own mode. Off ends any override and heats only for
+        frost protection."""
+        self.report('select.t_device_work_mode', mode)
+        self.report('sensor.t_device_work_mode_state', {'Off': 'Frost_Protection'}.get(mode, mode))
+        if mode == 'Off' and self.device('sensor.t_override_mode') != 'Idle':
+            self.timer_end = None
+            self.report('sensor.t_override_mode', 'Idle')
+        self._update_climate()
+
     def setpoint(self):
+        if self.device('select.t_device_work_mode') == 'Off':
+            return self.FROST
         if self.device('sensor.t_override_mode') in ('Timer', 'Boost'):
             return float(self.device('number.t_override_target_temperature'))
         return float(self.schedule_temp())
@@ -274,7 +290,7 @@ class World:
     def _update_climate(self):
         st = self.states['climate.t']
         attrs = dict(st.attributes, temperature=self.setpoint(), hvac_action=self.device('sensor.t_hvac_action'))
-        self.report('climate.t', 'heat', attrs)
+        self.report('climate.t', 'off' if self.device('select.t_device_work_mode') == 'Off' else 'heat', attrs)
 
     def _set_heating(self, on):
         r = self.room
@@ -535,23 +551,27 @@ class World:
             return any(self._cond(x, ctx) for x in c['conditions'])
         if kind == 'and':
             return all(self._cond(x, ctx) for x in c['conditions'])
-        if kind in ('occupancy.is_detected', 'occupancy.is_not_detected'):
+        if kind in ('occupancy.is_detected', 'occupancy.is_not_detected', 'window.is_open', 'window.is_closed'):
             areas = c['target']['area_id']
-            ents = [e for a in areas for e in self.areas.get(a, []) if self._is_occupancy(e)]
+            cls = kind.split('.')[0]
+            ents = [e for a in areas for e in self.areas.get(a, []) if self._is_class(e, cls)]
             hold = duration_seconds((c.get('options') or {}).get('for'))
             on = [e for e in ents if self.states[e].state == 'on'
                   and (self.now - self.states[e].last_changed).total_seconds() >= hold]
             off = [e for e in ents if self.states[e].state == 'off'
                    and (self.now - self.states[e].last_changed).total_seconds() >= hold]
             behavior = (c.get('options') or {}).get('behavior', 'any')
-            if kind == 'occupancy.is_detected':
+            if kind in ('occupancy.is_detected', 'window.is_open'):
                 return bool(on) if behavior == 'any' else bool(ents) and len(on) == len(ents)
             return bool(ents) and len(off) == len(ents) if behavior == 'all' else bool(off)
         raise ValueError(f'condition {kind}')
 
-    def _is_occupancy(self, e):
+    def _is_class(self, e, device_class):
         st = self.states.get(e)
-        return st is not None and e.startswith('binary_sensor.') and st.attributes.get('device_class') == 'occupancy'
+        return st is not None and e.startswith('binary_sensor.') and st.attributes.get('device_class') == device_class
+
+    def _is_occupancy(self, e):
+        return self._is_class(e, 'occupancy')
 
     def _seq(self, steps, ctx):
         for s in steps:
@@ -606,6 +626,9 @@ class World:
                 raise Stop(f'{e} value longer than its maximum', True)
             self.set(e, v)
         elif action == 'select.select_option':
+            if e == 'select.t_device_work_mode':
+                self.set_work_mode(data['option'])
+                return
             self.set(e, data['option'])
             if e == 'select.t_schedule_group':
                 self._update_climate()
@@ -628,6 +651,13 @@ class World:
             if kind == 'occupancy.detected':
                 return bool(on) if behavior in ('any', 'first') else bool(ents) and len(on) == len(ents)
             return bool(ents) and not on
+        if kind in ('window.opened', 'window.closed'):
+            ents = [e for a in t['target']['area_id'] for e in self.areas.get(a, []) if self._is_class(e, 'window')]
+            behavior = (t.get('options') or {}).get('behavior', 'each')
+            on = [e for e in ents if self.states[e].state == 'on']
+            if kind == 'window.opened':
+                return bool(on) if behavior in ('each', 'first') else bool(ents) and len(on) == len(ents)
+            return bool(ents) and not on if behavior == 'all' else len(on) < len(ents)
         if kind in ('zone.occupancy_detected', 'zone.occupancy_cleared'):
             n = int(float(self.states['zone.home'].state or 0))
             return n > 0 if kind == 'zone.occupancy_detected' else n == 0
@@ -708,6 +738,9 @@ class World:
 
     def set_alarm(self, when):
         self.set('sensor.alarm', when.isoformat() if when else 'unknown')
+
+    def set_window(self, area, open_):
+        self.set(f'binary_sensor.{area}_window', 'on' if open_ else 'off')
 
     def set_occupied(self, area, on):
         e = f'binary_sensor.{area}_occupancy'
