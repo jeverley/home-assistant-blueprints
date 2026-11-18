@@ -147,9 +147,24 @@ def test_a_window_closed_while_zha_reloads_is_still_caught():
     assert 'o' not in w.helper(), w.helper()
 
 
-def test_a_window_delay_of_0_turns_this_off():
-    w = world(alarm=None, window_delay={'hours': 0, 'minutes': 0, 'seconds': 0})
+def test_window_control_off_leaves_the_thermostat_alone():
+    w = world(alarm=None, window_control_enabled=False)
     w.advance(T(10, 0))
     w.set_window('living_room', True)
     w.advance(T(10, 30))
     assert mode(w) == 'Schedule'
+
+
+def test_turning_window_control_off_undoes_an_off_it_set():
+    # Off for a window, then Window control is turned off with the window
+    # still open: the next run puts the thermostat back on its schedule.
+    w = world(alarm=None)
+    w.advance(T(10, 0))
+    w.set_window('living_room', True)
+    w.advance(T(10, 3))
+    assert mode(w) == 'Off'
+    w.inputs['window_control_enabled'] = False
+    w.bp = __import__('sim').resolve(w.bp_raw, w.inputs)
+    w.run('catch-up')
+    w.advance(T(10, 4))
+    assert mode(w) == 'Schedule' and 'o' not in w.helper(), w.helper()

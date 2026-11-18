@@ -51,6 +51,13 @@ blueprint:
             entity:
               filter:
                 - domain: input_text
+        heated_areas:
+          name: Heated areas
+          description: The areas this thermostat heats. **Occupancy** follows their occupancy sensors, and **Windows** their window sensors.
+          default: []
+          selector:
+            area:
+              multiple: true
         warm_on_time_enabled:
           name: Warm on time
           description: Starts heating early so the scheduled temperature is reached by the scheduled time.
@@ -194,13 +201,6 @@ blueprint:
           default: true
           selector:
             boolean: {}
-        heated_areas:
-          name: Heated areas
-          description: The areas this thermostat heats, used by **Follow occupancy** and **Window delay**.
-          default: []
-          selector:
-            area:
-              multiple: true
         occupied_delay:
           name: Occupied delay
           visible:
@@ -228,18 +228,35 @@ blueprint:
             seconds: 0
           selector:
             duration: {}
+
+    windows:
+      name: Windows
+      icon: mdi:window-open-variant
+      description: Turns the thermostat off while a window in the heated areas is open, using their window sensors.
+      collapsed: true
+      input:
+        window_control_enabled:
+          name: Window control
+          description: |
+            Turns the thermostat off once a window in the heated areas has been open for the **Window delay**, and back to its schedule when every window has closed.
+
+            It only turns off a thermostat on its schedule, and turning off ends any Boost, Timer or hand adjustment. It only turns one back on that it turned off, and if you turn it back on with a window still open, it stays on.
+          default: true
+          selector:
+            boolean: {}
         window_delay:
           name: Window delay
-          description: |
-            Turns the thermostat off once a window in the heated areas has been open this long, and back to its schedule when every window has closed. It only turns off a thermostat on its schedule, and turning off ends any Boost, Timer or hand adjustment. It only turns one back on that it turned off, and if you turn it back on with a window still open, it stays on.
-
-            Set to 0 to turn this off.
+          visible:
+            field: window_control_enabled
+            value: true
+          description: How long a window in the heated areas must be open before the thermostat turns off.
           default:
             hours: 0
             minutes: 2
             seconds: 0
           selector:
             duration: {}
+
     routine:
       name: Routine
       icon: mdi:alarm
@@ -458,6 +475,7 @@ variables:
     {{ states(e) | float(-0.6) if e != '' else -0.6 }}
   heated_areas: !input heated_areas
   follow_occupancy: !input follow_occupancy
+  window_control_enabled: !input window_control_enabled
   window_delay: !input window_delay
   early_alarm_enabled: !input early_alarm_enabled
   late_alarm_enabled: !input late_alarm_enabled
@@ -476,10 +494,10 @@ variables:
       {%- else -%}{{ d | float(0) }}{%- endif -%}
     {%- endmacro -%}
     {{ {'getting_up': secs(getting_up_delay) | float(0), 'bedtime': secs(bedtime_delay) | float(0),
-        'empty': secs(empty_delay) | float(0), 'window': secs(window_delay) | float(0)} }}
-  # Turning the thermostat off while a window is open: on with heated areas
-  # and a window delay above 0.
-  windows_enabled: "{{ heated_areas | first is defined and delay_secs['window'] > 0 }}"
+        'empty': secs(empty_delay) | float(0)} }}
+  # Turning the thermostat off while a window is open: Window control on,
+  # with heated areas.
+  windows_enabled: "{{ window_control_enabled and heated_areas | first is defined }}"
   # Timings in seconds used in more than one place. The Schedule editing
   # finished trigger cannot read variables, so it repeats the first three.
   #   fetch_grace: a fetch's own changes land within this after it starts.
@@ -1195,7 +1213,7 @@ actions:
   # it is not turned off again until every window has closed. Once they have,
   # the note is cleared: if it is still Off it goes back to its schedule and
   # the Back on schedule trigger catches up, otherwise this run carries on as a
-  # catch-up. With Window delay set to 0 (or no heated areas), an Off we set
+  # catch-up. With Window control turned off (or no heated areas), an Off we set
   # earlier is still undone. Keep this in step with the Window open trigger.
   - variables:
       window_off: "{{ state.window_off | default(0) | int(0) > 0 }}"
