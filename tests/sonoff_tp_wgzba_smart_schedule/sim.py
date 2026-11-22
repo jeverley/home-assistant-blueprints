@@ -188,8 +188,6 @@ class World:
         self.room = dict(temp=room, rate=rate, lag=lag, loss=loss, heating=False, since=self.now,
                          rep=None, rep_t=None)
         self.trigger_state: dict[int, dict] = {}
-        self.version = 0  # changes whenever a state does, see _trigger_true
-        self._template_cache: dict[int, tuple] = {}
         self.held: set[str] = set()
         self.env = self._make_env()
         self._build_entities(group)
@@ -203,7 +201,6 @@ class World:
         old = self.states.get(entity_id)
         if old is None:
             self.states[entity_id] = State(entity_id, state, attributes, when)
-            self.version += 1
             return
         changed = old.state != state
         new_attrs = old.attributes if attributes is None else dict(attributes)
@@ -211,7 +208,6 @@ class World:
             old.last_changed = when
         if changed or new_attrs != old.attributes or force_update:
             old.last_updated = when
-            self.version += 1
         old.state = state
         old.attributes = new_attrs
 
@@ -672,17 +668,7 @@ class World:
     def _trigger_true(self, i, t, tv):
         kind = t['trigger']
         if kind == 'template':
-            # As in Home Assistant: a template that reads the time is
-            # re-rendered every minute and when an entity changes, others only
-            # when an entity changes.
-            timed = re.search(r'now\(|today_at|utcnow', t['value_template'])
-            key = (self.version, self.now if timed else None)
-            hit = self._template_cache.get(i)
-            if hit and hit[0] == key:
-                return hit[1]
-            v = bool(self.render(t['value_template'], tv))
-            self._template_cache[i] = (key, v)
-            return v
+            return bool(self.render(t['value_template'], tv))
         if kind in ('occupancy.detected', 'occupancy.cleared'):
             ents = [e for a in t['target']['area_id'] for e in self.areas.get(a, []) if self._is_occupancy(e)]
             behavior = (t.get('options') or {}).get('behavior', 'any')
@@ -807,7 +793,6 @@ class World:
         """Change a blueprint input, as editing the automation does."""
         self.inputs[name] = value
         self.bp = resolve(self.bp_raw, self.inputs)
-        self.version += 1
 
     def thermostat_offline(self):
         """ZHA reloading: every thermostat entity bar the climate entity reads

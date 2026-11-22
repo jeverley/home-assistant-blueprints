@@ -41,9 +41,7 @@ simulator never passes silently. The runner exits with 1 if any test failed.
   `jump_to()` moves the clock, `set_input()` changes an input,
   `hold_trigger()` keeps a trigger from firing, `thermostat_stops()` keeps the
   thermostat off, and `thermostat_offline()` and `thermostat_online()` model a
-  ZHA reload. Template triggers are re-rendered as Home Assistant does: those
-  that read the time every minute and when an entity changes, the rest only
-  when an entity changes.
+  ZHA reload.
 - `test_learning.py`: learning the warm-up time, how a measurement starts and
   ends, and what is learned.
 - `test_routine.py`: alarm mornings, getting up, bedtime, a second alarm, Warm
