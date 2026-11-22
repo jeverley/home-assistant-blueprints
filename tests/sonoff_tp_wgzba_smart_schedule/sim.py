@@ -96,6 +96,30 @@ class State:
         return f'<State {self.entity_id}={self.state}>'
 
 
+def house(schedules=None, room=19.0, start=None, alarm=None, learned=None, hold=True,
+          high_threshold=None, inputs=None, catch_up=True, **world):
+    """A simulated house ready to run: getting up and bedtime off unless
+    given, the learned values seeded, the alarm set, the triggers primed and a
+    catch-up run, as after a restart. hold keeps the room at its start
+    temperature until it is heated. world: World options (rate, lag, loss,
+    group, reporting, fresh_on_apply)."""
+    inputs = dict(inputs or {})
+    inputs.setdefault('getting_up_enabled', False)
+    inputs.setdefault('bedtime_enabled', False)
+    w = World(schedules=schedules, room=room, start=start or T(4, 0), inputs=inputs, **world)
+    if hold:
+        w.room['loss'] = 0.0
+    if high_threshold is not None:
+        w.set('number.t_heating_high_threshold', str(high_threshold))
+    if learned:
+        w.seed(learned=learned)
+    w.set_alarm(alarm)
+    w.prime()
+    if catch_up:
+        w.run('catch-up')
+    return w
+
+
 class Stop(Exception):
     def __init__(self, message, error=False):
         super().__init__(message)
@@ -164,6 +188,7 @@ class World:
         self.room = dict(temp=room, rate=rate, lag=lag, loss=loss, heating=False, since=self.now,
                          rep=None, rep_t=None)
         self.trigger_state: dict[int, dict] = {}
+        self.held: set[str] = set()
         self.env = self._make_env()
         self._build_entities(group)
 
@@ -685,7 +710,7 @@ class World:
                     st.update(value=False, since=None, done=False)
                 if v and not st['done'] and (self.now - st['since']).total_seconds() >= hold:
                     st['done'] = True
-                    if fire and st['since'] is not None:
+                    if fire and st['since'] is not None and t.get('id') not in self.held:
                         fired.append(t.get('id') or str(i))
             if not fired:
                 return
@@ -735,6 +760,66 @@ class World:
 
     def override(self):
         return self.states['sensor.t_override_mode'].state
+
+    def seed(self, learned=None, measuring=None, fetch=0):
+        """Write the State helper as the blueprint stores it. learned: [weight,
+        dead time, rate]. measuring: (start, room, target) and optionally the
+        first and highest reports as (time, value), times as datetimes."""
+        lv = {}
+        if learned:
+            lv['v'] = list(learned)
+        if measuring:
+            start, room, target, *reports = measuring
+            m = [int(start.timestamp()), room, target]
+            for t, v in reports:
+                m += [int(t.timestamp()), v]
+            lv['m'] = m
+        state = {'f': fetch, 'a': 0, 'r': {}}
+        if lv:
+            state['l'] = lv
+        self.set('input_text.state', json.dumps(state, separators=(',', ':')))
+
+    def jump_to(self, when):
+        """Move the clock without running the minutes between, and let the
+        thermostat show its target for then."""
+        self.now = when
+        self.refresh()
+
+    def refresh(self):
+        """The climate entity reports the thermostat's current target."""
+        self._update_climate()
+
+    def set_input(self, name, value):
+        """Change a blueprint input, as editing the automation does."""
+        self.inputs[name] = value
+        self.bp = resolve(self.bp_raw, self.inputs)
+
+    def thermostat_offline(self):
+        """ZHA reloading: every thermostat entity bar the climate entity reads
+        unavailable, while the thermostat carries on."""
+        for e in self.devices['dev']:
+            if not e.startswith('climate.'):
+                self.set(e, 'unavailable')
+
+    def thermostat_online(self, *entities):
+        """ZHA bringing the given entities back (all if none given), each with
+        the thermostat's current value."""
+        for e in entities or [e for e in self.devices['dev'] if not e.startswith('climate.')]:
+            self.restore(e)
+
+    def hold_trigger(self, trigger_id):
+        """Keep a trigger from firing, as if its run were held up."""
+        self.held.add(trigger_id)
+
+    def thermostat_stops(self, temp=None):
+        """The thermostat stops heating and stays off (an open window, or its
+        reading jumping to temp), reporting at once."""
+        self.room['rate'] = 0.0
+        if temp is not None:
+            self.room['temp'] = temp
+        self._set_heating(False)
+        self._report(force=True)
+        self.control = lambda: None
 
     def set_alarm(self, when):
         self.set('sensor.alarm', when.isoformat() if when else 'unknown')

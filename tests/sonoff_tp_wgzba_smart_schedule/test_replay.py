@@ -57,7 +57,7 @@ def replay(rows, learned):
         timer_on = drop is None or t < drop
         ctx = dict(state=state, learning=learning, heat_within=w.bp['trigger_variables']['heat_within'],
                    hvac_action_sensor='sensor.t_hvac_action', climate_entity='climate.t', room_temp=cur,
-                   schedule_group='select.t_schedule_group', period_entities=[],
+                   schedule_group='select.t_schedule_group', period_entities=[], override_state='sensor.t_override_mode',
                    plan={'until': int(drop.timestamp()) if drop else 0, 'cancelled': False, 'temp': target,
                          'applied': int(t0.timestamp())},
                    plan_today=True, exit_pressed_at=0, override_running=timer_on, on_schedule=True,

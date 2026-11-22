@@ -1,19 +1,11 @@
 """Windows: the thermostat turns off while a window in the heated areas is
 open, and goes back to its schedule once every window has closed."""
-from sim import World, T
+from sim import T, house
 from test_routine import UP, LEARNED, timers
 
 
 def world(room=19.0, alarm=T(7, 0), **inputs):
-    inputs.setdefault('getting_up_enabled', False)
-    inputs.setdefault('bedtime_enabled', False)
-    w = World(schedules=UP, room=room, start=T(4, 0), inputs=inputs)
-    w.room['loss'] = 0.0
-    w.set('input_text.state', LEARNED)
-    w.set_alarm(alarm)
-    w.prime()
-    w.run('catch-up')
-    return w
+    return house(schedules=UP, room=room, alarm=alarm, learned=LEARNED, inputs=inputs)
 
 
 def mode(w):
@@ -134,14 +126,11 @@ def test_a_window_closed_while_zha_reloads_is_still_caught():
     w.set_window('living_room', True)
     w.advance(T(10, 3))
     assert mode(w) == 'Off'
-    ents = [e for e in w.devices['dev'] if not e.startswith('climate.')]
-    for e in ents:
-        w.set(e, 'unavailable')
+    w.thermostat_offline()
     w.set_window('living_room', False)
     w.advance(T(10, 10))
     assert w.helper().get('o'), 'nothing written while the thermostat is unavailable'
-    for e in ents:
-        w.restore(e)
+    w.thermostat_online()
     w.advance(T(10, 11))
     assert mode(w) == 'Schedule'
     assert 'o' not in w.helper(), w.helper()
@@ -163,8 +152,7 @@ def test_turning_window_control_off_undoes_an_off_it_set():
     w.set_window('living_room', True)
     w.advance(T(10, 3))
     assert mode(w) == 'Off'
-    w.inputs['window_control_enabled'] = False
-    w.bp = __import__('sim').resolve(w.bp_raw, w.inputs)
+    w.set_input('window_control_enabled', False)
     w.run('catch-up')
     w.advance(T(10, 4))
     assert mode(w) == 'Schedule' and 'o' not in w.helper(), w.helper()

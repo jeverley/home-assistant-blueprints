@@ -2,16 +2,11 @@
 go, and pre-heating on the way home."""
 import datetime as dt
 
-from sim import World, T
+from sim import T, house
 
 
 def world(start=T(12, 0), **inputs):
-    inputs.setdefault('getting_up_enabled', False)
-    inputs.setdefault('bedtime_enabled', False)
-    w = World(start=start, inputs=inputs, room=20.0)
-    w.prime()
-    w.run('catch-up')
-    return w
+    return house(start=start, room=20.0, hold=False, inputs=inputs)
 
 
 def leave_home(w):
@@ -121,9 +116,8 @@ def replay_trips(day, progress=500):
         t = dt.datetime.fromisoformat(r['time_utc'].replace('Z', '+00:00')).astimezone(TZ)
         if t.date() == day:
             rows.append((t, r['person'], r['sensor'], r['value']))
-    w = World(start=dt.datetime.combine(day, dt.time(0, 0), TZ), room=20.0,
-              inputs={'getting_up_enabled': False, 'bedtime_enabled': False, 'proximity_devices': ['prox'],
-                      'geofencing_progress': progress, 'alarm_sensor': ''})
+    w = house(start=dt.datetime.combine(day, dt.time(0, 0), TZ), room=20.0, hold=False, catch_up=False,
+              inputs={'proximity_devices': ['prox'], 'geofencing_progress': progress, 'alarm_sensor': ''})
     for p in ('person_a', 'person_b'):
         w.add_person(p, 0, 'arrived')
     w.prime()

@@ -34,6 +34,14 @@ simulator never passes silently. The runner exits with 1 if any test failed.
   override is applied. While an entity reads unavailable (as when ZHA reloads),
   the thermostat carries on with its own values without reporting them, and
   `restore()` brings the entity back with the thermostat's current value.
+
+  Tests set up a house with `house()`, which primes the triggers and runs a
+  catch-up as after a restart, and use the World's helpers rather than its
+  internals: `seed()` writes the State helper as the blueprint stores it,
+  `jump_to()` moves the clock, `set_input()` changes an input,
+  `hold_trigger()` keeps a trigger from firing, `thermostat_stops()` keeps the
+  thermostat off, and `thermostat_offline()` and `thermostat_online()` model a
+  ZHA reload.
 - `test_learning.py`: learning the warm-up time, how a measurement starts and
   ends, and what is learned.
 - `test_routine.py`: alarm mornings, getting up, bedtime, a second alarm, Warm
