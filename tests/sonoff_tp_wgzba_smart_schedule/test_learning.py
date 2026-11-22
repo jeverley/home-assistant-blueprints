@@ -212,19 +212,13 @@ def test_a_later_top_up_idle_is_not_taken_for_the_stop_point():
     # (within 0.35 of the 21.2 stop point); an idle 46 minutes later belongs
     # to a later top-up, so the measurement is dropped rather than ended at
     # the stop point then. Within 30 minutes it would count.
-    # Period 2 runs to 08:00, so the target has not dropped at either idle.
-    sched = {'Schedule 1': [('00:00', 16), ('06:00', 21), ('08:00', 20), ('22:30', 16)],
-             'Schedule 2': [('00:00', 16), ('06:00', 19), ('08:00', 18), ('22:30', 16)],
-             'Schedule 3': [('00:00', 12)]}
     for idle_at, counted in ((T(7, 16), False), (T(6, 50), True)):
-        w = World(room=20.9, start=T(5, 50), schedules=sched,
-                  inputs={'getting_up_enabled': False, 'bedtime_enabled': False})
+        w = World(room=20.9, start=T(5, 50), inputs={'getting_up_enabled': False, 'bedtime_enabled': False})
         t0, t1, t2 = (int(x.timestamp()) for x in (T(5, 50), T(6, 0), T(6, 30)))
         w.set('input_text.state', '{"f":0,"a":0,"r":{},"l":{"v":%s,"m":[%d,19.0,21.0,%d,19.3,%d,20.9]}}'
               % (LEARNED, t0, t1, t2))
         w.set('sensor.t_hvac_action', 'heating', when=T(5, 50))
         w.now = idle_at
-        w._update_climate()
         w.set('sensor.t_hvac_action', 'idle')
         w.run('warmed')
         assert (w.learned() != LEARNED) == counted, (idle_at, w.helper())
@@ -246,25 +240,59 @@ def test_a_later_periods_early_start_raising_the_target_ends_the_measurement():
     assert v and v[0] == 1.0 and abs(v[2] - 40.0) < 2.0, w.helper()
 
 
-def test_an_idle_after_our_timer_ends_with_the_target_dropped_counts():
-    # Upstairs, 17 November: our Timer ended at 07:30, dropping the target
-    # from 21 to 20, but the run then read the old target and kept measuring.
-    # The thermostat went idle 84 s later at 20.1, far below the 21.2 stop
-    # point. The target had dropped, so it was cut short: it ends at the
-    # highest report rather than being dropped.
+
+def _timer_ended_then_idle(idle_at=T(7, 31, 25), before_idle=None):
+    """Upstairs, 17 November: our Timer from 04:51 to 07:30 at 21, readings
+    18.5 at 05:02 to 20.1 at 07:19, then an idle well below the 21.2 stop
+    point. before_idle(w) changes something before the idle."""
     from test_routine import UP
     w = World(room=20.1, start=T(4, 51), schedules=UP, inputs={'getting_up_enabled': False, 'bedtime_enabled': False})
     t0, t1, t2 = (int(x.timestamp()) for x in (T(4, 51), T(5, 2), T(7, 19)))
     w.set('button.t_override_apply', T(4, 51).isoformat())
-    w.set('input_text.state', '{"f":0,"a":0,"r":{"k":"m","s":%d,"w":%d,"u":%d,"t":21.0,"p":%d},"l":{"v":%s,"m":[%d,18.2,21.0,%d,18.5,%d,20.1]}}'
-          % (t0, int(T(7, 0).timestamp()), int(T(7, 30).timestamp()), t0, LEARNED, t0, t1, t2))
+    w.set('sensor.t_override_mode', 'Timer', when=T(4, 51))
+    w.set('input_text.state', '{"f":0,"a":0,"r":{},"l":{"v":%s,"m":[%d,18.2,21.0,%d,18.5,%d,20.1]}}'
+          % (LEARNED, t0, t1, t2))
     w.set('sensor.t_hvac_action', 'heating', when=T(4, 51))
-    w.now = T(7, 31, 25)
+    # Our Timer ends at 07:30 and the routine clears its plan, as it does.
+    w.now = T(7, 30)
+    w.set('sensor.t_override_mode', 'Idle')
     w._update_climate()
-    assert w.states['climate.t'].attributes['temperature'] == 20.0
+    if before_idle:
+        before_idle(w)
+    w.now = idle_at
     w.set('sensor.t_hvac_action', 'idle')
+    w.now = max(idle_at, T(7, 31, 25))
     w.run('warmed')
+    return w
+
+
+def test_an_idle_after_our_timer_ends_with_the_target_dropped_counts():
+    # The run at 07:30 read the old target, so the measurement went on. The
+    # idle came 85 s later: the target had dropped as our Timer ended, so it
+    # was cut short and ends at the highest report rather than being dropped.
+    w = _timer_ended_then_idle()
+    assert w.states['climate.t'].attributes['temperature'] == 20.0
     v = w.learned()
     assert w.measuring() is None and v[0] == 2.6, w.helper()
     # 137 minutes for 1.6 C is 85.6 minutes per degree, capped at 60.
     assert abs(v[2] - (15.0 + (60.0 - 15.0) / 2.6)) < 0.11, v
+
+
+def test_a_target_lowered_by_hand_after_our_timer_is_not_counted():
+    def hand(w):
+        w.set('sensor.t_device_work_mode_state', 'Temporary_Manual')
+        w.set('number.t_override_target_temperature', '18')
+    w = _timer_ended_then_idle(before_idle=hand)
+    assert w.learned() == LEARNED and w.measuring() is None, w.helper()
+
+
+def test_turning_the_thermostat_off_is_not_counted():
+    w = _timer_ended_then_idle(before_idle=lambda w: w.set_work_mode('Off'))
+    assert w.learned() == LEARNED and w.measuring() is None, w.helper()
+
+
+def test_an_idle_before_our_timer_ended_is_not_counted():
+    # The thermostat went idle at 07:24 for another reason, and the run that
+    # read it came after our Timer ended at 07:30.
+    w = _timer_ended_then_idle(idle_at=T(7, 24))
+    assert w.learned() == LEARNED and w.measuring() is None, w.helper()

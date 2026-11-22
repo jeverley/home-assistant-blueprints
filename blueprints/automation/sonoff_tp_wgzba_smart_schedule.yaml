@@ -1337,9 +1337,13 @@ actions:
   #   its own reading, at the idle (as with a high threshold of 0).
   #   A report that comes with the idle is not used itself, as the reading
   #   jumps once the heating stops.
-  #   Otherwise, the target has already dropped below the warm-up's: cut
-  #   short, so the latest report, as a run can read the old target just
-  #   before it drops and the idle come over a minute later.
+  #   Otherwise, if our Timer ended after the start and at or before the idle,
+  #   the target has dropped below the warm-up's and the thermostat is on its
+  #   schedule: cut short, so the latest report. A run can read the old target
+  #   just before it drops, and the idle comes over a minute later. Any other
+  #   override running during the warm-up would already have dropped it, so
+  #   one that ended is ours. A target lowered by hand or the thermostat
+  #   turned off takes it off its schedule, so is not counted.
   #   Otherwise it stopped for another reason (such as an open window), and
   #   the measurement is dropped.
   # It runs before a run defers, so a deferred run still counts. Between the
@@ -1395,6 +1399,8 @@ actions:
             {% set target = state_attr(climate_entity, 'temperature') | float(m[2]) %}
             {% set raised = target > m[2] + 0.05 %}
             {% set dropped = target < m[2] - 0.05 %}
+            {% set ov = states[override_state] %}
+            {% set timer_ended = ov is not none and ov.state == 'Idle' and m[0] < ov.last_changed.timestamp() <= since %}
             {% set hand = routine_timer_running and plan.temp is not none and now().timestamp() - plan.applied > 60
                  and (target - plan.temp | float(target)) | abs > 0.05 %}
             {% set stopped = regrouped or cancelled or hand
@@ -1413,7 +1419,7 @@ actions:
                 {% set te, ve = m[5], m[6] %}
               {% elif m | count == 7 and since - m[5] <= c.stop_within and (m[6] >= stop - 0.35 or (fresh and rv >= m[2] - 0.05)) %}
                 {% set te, ve = since, stop %}
-              {% elif m | count == 7 and dropped %}
+              {% elif m | count == 7 and dropped and timer_ended and on_schedule %}
                 {% set te, ve = m[5], m[6] %}
               {% endif %}
             {% elif m | count == 7 and (reached or raised or dropped) and not stopped %}
