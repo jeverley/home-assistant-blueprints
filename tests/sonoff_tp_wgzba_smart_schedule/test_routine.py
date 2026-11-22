@@ -1,6 +1,6 @@
 """The routine: alarm mornings, getting up, bedtime, a second alarm, Warm on
 time for warmer periods, and a ZHA reload."""
-from sim import World, T
+from sim import T, house
 
 UP = {'Schedule 1': [('00:00', 16), ('07:00', 21), ('07:30', 20), ('22:30', 16)],
       'Schedule 2': [('00:00', 16), ('07:00', 19), ('07:30', 18), ('22:30', 16)],
@@ -8,20 +8,12 @@ UP = {'Schedule 1': [('00:00', 16), ('07:00', 21), ('07:30', 20), ('22:30', 16)]
 DOWN = {'Schedule 1': [('00:00', 15), ('07:00', 20), ('08:00', 19), ('17:00', 20), ('22:30', 15)],
         'Schedule 2': [('00:00', 15), ('07:00', 19), ('08:00', 18), ('17:00', 19), ('22:30', 15)],
         'Schedule 3': [('00:00', 12)]}
-LEARNED = '{"f":0,"a":0,"r":{},"l":{"v":[2.0,8.0,15.0]}}'
+LEARNED = [2.0, 8.0, 15.0]  # weight, dead time (min), minutes per degree
 
 
 def world(schedules=UP, room=19.0, alarm=None, start=T(4, 0), learned=True, **inputs):
-    inputs.setdefault('getting_up_enabled', False)
-    inputs.setdefault('bedtime_enabled', False)
-    w = World(schedules=schedules, room=room, start=start, inputs=inputs)
-    w.room['loss'] = 0.0
-    if learned:
-        w.set('input_text.state', LEARNED)
-    w.set_alarm(alarm)
-    w.prime()
-    w.run('catch-up')
-    return w
+    return house(schedules=schedules, room=room, start=start, alarm=alarm,
+                 learned=LEARNED if learned else None, inputs=inputs)
 
 
 def timers(w):
@@ -145,23 +137,20 @@ def test_no_thermostat_call_while_zha_is_reloading_then_a_catch_up():
     # Then a catch-up starts the morning that fell due during the reload.
     w = world(alarm=T(7, 0), room=15.8)
     w.advance(T(5, 0))
-    ents = [e for e in w.devices['dev'] if not e.startswith('climate.')]
-    for e in ents:
-        w.set(e, 'unavailable')
+    w.thermostat_offline()
     w.room['loss'] = 1.0
     calls = len(w.log)
     heating = set()
     w.advance(T(6, 0), on_minute=lambda w: heating.add(w.room['heating']))
     assert heating == {True, False}, 'the thermostat should heat and idle during the reload'
     assert w.states['sensor.t_hvac_action'].state == 'unavailable'
-    w.restore('select.t_schedule_group')
+    w.thermostat_online('select.t_schedule_group')
     # A run in the meantime, here started by hand, stops at its start.
     r = w.run('catch-up')
     assert r['result'].startswith('stopped: The thermostat'), r['result']
     w.advance(T(6, 30))
     assert len(w.log) == calls, w.log[calls:]
-    for e in ents:
-        w.restore(e)
+    w.thermostat_online()
     assert w.states['sensor.t_hvac_action'].state == ('heating' if w.room['heating'] else 'idle')
     w.advance(T(6, 31))
     assert [t[0] for t in timers(w)] == [T(6, 31)], timers(w)

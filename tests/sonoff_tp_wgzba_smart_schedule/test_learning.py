@@ -1,6 +1,6 @@
 """Learning the warm-up time: when a measurement starts, how it ends, and what
 is learned. Each test runs a morning in the simulator and checks the result."""
-from sim import World, T
+from sim import World, T, house
 
 LEARNED = [2.0, 8.0, 15.0]  # weight, dead time (min), minutes per degree
 
@@ -8,23 +8,12 @@ LEARNED = [2.0, 8.0, 15.0]  # weight, dead time (min), minutes per degree
 def morning(room=19.0, alarm=T(7, 0), until=T(7, 50), learned=LEARNED, events=None, **kw):
     """An alarm morning from 04:00. events: {(h, m): f(world)} applied before
     that minute's triggers are checked."""
-    inputs = kw.pop('inputs', {})
-    inputs.setdefault('getting_up_enabled', False)
-    inputs.setdefault('bedtime_enabled', False)
-    w = World(room=room, inputs=inputs, start=T(4, 0), **kw)
-    if learned:
-        w.set('input_text.state', '{"f":0,"a":0,"r":{},"l":{"v":%s}}' % learned)
-    w.set_alarm(alarm)
-    w.prime()
-    w.run('catch-up')
+    w = house(room=room, alarm=alarm, learned=learned, **kw)
 
     def hook(w):
         f = (events or {}).get((w.now.hour, w.now.minute))
         if f:
             f(w)
-
-    if room is not None:
-        w.room['loss'] = 0.0  # hold the room at its start temperature until the warm-up
     w.advance(until, on_minute=hook)
     return w
 
@@ -49,12 +38,7 @@ def test_the_morning_reaches_the_target_by_the_alarm():
     def watch(w):
         if 'at' not in reached and w.room['temp'] >= 21.0:
             reached['at'] = w.now
-    w = World(room=19.0, start=T(4, 0), inputs={'getting_up_enabled': False, 'bedtime_enabled': False})
-    w.set('input_text.state', '{"f":0,"a":0,"r":{},"l":{"v":[3.0,8.0,15.0]}}')
-    w.room['loss'] = 0.0
-    w.set_alarm(T(7, 0))
-    w.prime()
-    w.run('catch-up')
+    w = house(room=19.0, alarm=T(7, 0), learned=[3.0, 8.0, 15.0])
     w.advance(T(7, 30), on_minute=watch)
     assert T(6, 57) <= reached['at'] <= T(7, 2), reached
 
@@ -85,25 +69,15 @@ def test_cut_short_by_our_timer_ends_at_the_highest_report_not_a_later_fall():
 
 def test_high_threshold_zero_ends_at_the_stop_point():
     w = morning(room=19.0)
-    w2 = World(room=19.0, start=T(4, 0), inputs={'getting_up_enabled': False, 'bedtime_enabled': False})
-    w2.set('number.t_heating_high_threshold', '0')
-    w2.set('input_text.state', '{"f":0,"a":0,"r":{},"l":{"v":%s}}' % LEARNED)
-    w2.room['loss'] = 0.0
-    w2.set_alarm(T(7, 0))
-    w2.prime()
-    w2.run('catch-up')
+    w2 = house(room=19.0, alarm=T(7, 0), learned=LEARNED, high_threshold=0)
     w2.advance(T(7, 50))
     assert w2.learned() and w2.learned()[0] == 2.6, w2.learned()
     assert close(w2.learned()[2], w.learned()[2], 1.0), (w.learned(), w2.learned())
 
 
 def test_an_idle_well_below_the_stop_point_is_dropped():
-    def window(w):
-        w.room['rate'] = 0.0
-        w.room['heating'] = False
-        w.set('sensor.t_hvac_action', 'idle')
-        w.control = lambda: None  # the open window keeps it off
-    w = morning(room=19.0, events={(6, 47): window})
+    # An open window keeps the thermostat off.
+    w = morning(room=19.0, events={(6, 47): lambda w: w.thermostat_stops()})
     assert w.learned() == LEARNED, w.learned()
     assert w.measuring() is None
 
@@ -118,7 +92,7 @@ def test_a_target_changed_by_hand_during_our_timer_is_dropped():
     for value in (22, 20):
         def hand(w, value=value):
             w.set('number.t_override_target_temperature', str(value))
-            w._update_climate()
+            w.refresh()
         w = morning(room=19.0, events={(6, 45): hand})
         assert w.learned() == LEARNED, (value, w.learned())
 
@@ -126,8 +100,7 @@ def test_a_target_changed_by_hand_during_our_timer_is_dropped():
 def test_a_thermostat_that_does_not_heat_is_dropped_after_two_minutes():
     # Strict hysteresis firmware: applying our Timer with the room inside the
     # band (above 21 - 0.6) does not start the heating.
-    w = morning(room=20.5, fresh_on_apply=False, until=T(7, 0),
-                inputs={'getting_up_enabled': False, 'bedtime_enabled': False, 'warm_on_time_enabled': True})
+    w = morning(room=20.5, fresh_on_apply=False, until=T(7, 0), inputs={'warm_on_time_enabled': True})
     starts = [r for r in w.runs if r['id'] == 'early-alarm']
     assert starts, 'the morning should start'
     assert w.measuring() is None and w.learned() == LEARNED
@@ -149,31 +122,12 @@ def test_the_helper_stays_within_255_characters():
     assert len(w.states['input_text.state'].state) <= 255
 
 
-def _custom(room, hi=None, learned=LEARNED, schedules=None, alarm=T(7, 0)):
-    w = World(room=room, start=T(4, 0), schedules=schedules,
-              inputs={'getting_up_enabled': False, 'bedtime_enabled': False})
-    if hi is not None:
-        w.set('number.t_heating_high_threshold', str(hi))
-    w.set('input_text.state', '{"f":0,"a":0,"r":{},"l":{"v":%s}}' % learned)
-    w.room['loss'] = 0.0
-    w.set_alarm(alarm)
-    w.prime()
-    w.run('catch-up')
-    return w
-
-
 def test_a_target_report_that_arrives_with_the_idle_confirms_the_stop_point():
     # High threshold 0.5: the first report at or above 21 comes in the same
     # minute as the idle, so the stop point (21.5 at the idle) is the end.
-    w = _custom(19.0, hi=0.5)
-
-    def jump(w):
-        w.room.update(temp=21.5, rate=0.0)
-        w._set_heating(False)
-        w._report(force=True)
-        w.control = lambda: None
+    w = house(room=19.0, alarm=T(7, 0), learned=LEARNED, high_threshold=0.5)
     # At 06:56, clear of period 2's start, with the latest report 20.6.
-    w.advance(T(7, 40), on_minute=lambda w: jump(w) if w.now == T(6, 56) else None)
+    w.advance(T(7, 40), on_minute=lambda w: w.thermostat_stops(temp=21.5) if w.now == T(6, 56) else None)
     assert w.learned()[0] == 2.6 and w.measuring() is None, w.helper()
 
 
@@ -183,18 +137,8 @@ def test_an_idle_handled_after_our_timer_drops_still_ends_at_the_stop_point():
     sched = {'Schedule 1': [('00:00', 16), ('06:30', 21), ('06:50', 20), ('22:30', 16)],
              'Schedule 2': [('00:00', 16), ('06:30', 19), ('06:50', 18), ('22:30', 16)],
              'Schedule 3': [('00:00', 12)]}
-    w = _custom(19.0, hi=0, schedules=sched, alarm=T(6, 20))
-    w.room['rate'] = 2.2
-    blocked = {'on': True}
-    real = w.check_triggers
-
-    def held(fire=True):
-        if blocked['on'] and w.states['sensor.t_hvac_action'].state == 'idle' and w.measuring():
-            for i, t in enumerate(w.bp['triggers']):
-                if t.get('id') == 'warmed':
-                    w.trigger_state.setdefault(i, {}).update(value=True, since=w.now, done=True)
-        return real(fire)
-    w.check_triggers = held
+    w = house(room=19.0, alarm=T(6, 20), learned=LEARNED, high_threshold=0, schedules=sched, rate=2.2)
+    w.hold_trigger('warmed')
     seen = {}
 
     def note(w):
@@ -214,9 +158,7 @@ def test_a_later_top_up_idle_is_not_taken_for_the_stop_point():
     # the stop point then. Within 30 minutes it would count.
     for idle_at, counted in ((T(7, 16), False), (T(6, 50), True)):
         w = World(room=20.9, start=T(5, 50), inputs={'getting_up_enabled': False, 'bedtime_enabled': False})
-        t0, t1, t2 = (int(x.timestamp()) for x in (T(5, 50), T(6, 0), T(6, 30)))
-        w.set('input_text.state', '{"f":0,"a":0,"r":{},"l":{"v":%s,"m":[%d,19.0,21.0,%d,19.3,%d,20.9]}}'
-              % (LEARNED, t0, t1, t2))
+        w.seed(learned=LEARNED, measuring=(T(5, 50), 19.0, 21.0, (T(6, 0), 19.3), (T(6, 30), 20.9)))
         w.set('sensor.t_hvac_action', 'heating', when=T(5, 50))
         w.now = idle_at
         w.set('sensor.t_hvac_action', 'idle')
@@ -229,12 +171,7 @@ def test_a_later_periods_early_start_raising_the_target_ends_the_measurement():
     sched = {'Schedule 1': [('00:00', 15), ('06:30', 20), ('08:00', 21), ('22:30', 15)],
              'Schedule 2': [('00:00', 15), ('06:30', 19), ('08:00', 20), ('22:30', 15)],
              'Schedule 3': [('00:00', 12)]}
-    w = World(room=16.0, rate=1.5, start=T(4, 0), schedules=sched,
-              inputs={'getting_up_enabled': False, 'bedtime_enabled': False})
-    w.room['loss'] = 0.0
-    w.set_alarm(None)
-    w.prime()
-    w.run('catch-up')
+    w = house(room=16.0, rate=1.5, schedules=sched)
     w.advance(T(8, 0))
     v = w.learned()
     assert v and v[0] == 1.0 and abs(v[2] - 40.0) < 2.0, w.helper()
@@ -247,16 +184,14 @@ def _timer_ended_then_idle(idle_at=T(7, 31, 25), before_idle=None):
     point. before_idle(w) changes something before the idle."""
     from test_routine import UP
     w = World(room=20.1, start=T(4, 51), schedules=UP, inputs={'getting_up_enabled': False, 'bedtime_enabled': False})
-    t0, t1, t2 = (int(x.timestamp()) for x in (T(4, 51), T(5, 2), T(7, 19)))
     w.set('button.t_override_apply', T(4, 51).isoformat())
     w.set('sensor.t_override_mode', 'Timer', when=T(4, 51))
-    w.set('input_text.state', '{"f":0,"a":0,"r":{},"l":{"v":%s,"m":[%d,18.2,21.0,%d,18.5,%d,20.1]}}'
-          % (LEARNED, t0, t1, t2))
+    w.seed(learned=LEARNED, measuring=(T(4, 51), 18.2, 21.0, (T(5, 2), 18.5), (T(7, 19), 20.1)))
     w.set('sensor.t_hvac_action', 'heating', when=T(4, 51))
     # Our Timer ends at 07:30 and the routine clears its plan, as it does.
     w.now = T(7, 30)
     w.set('sensor.t_override_mode', 'Idle')
-    w._update_climate()
+    w.refresh()
     if before_idle:
         before_idle(w)
     w.now = idle_at
