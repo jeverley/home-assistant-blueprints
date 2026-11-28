@@ -189,6 +189,7 @@ class World:
                          rep=None, rep_t=None)
         self.trigger_state: dict[int, dict] = {}
         self.held: set[str] = set()
+        self.failing: set[str] = set()
         self.env = self._make_env()
         self._build_entities(group)
 
@@ -650,6 +651,9 @@ class World:
         e = e[0] if isinstance(e, list) else e
         self.log.append(f"{self.now:%H:%M} {action} {e} {json.dumps(data) if data else ''}".rstrip())
         domain, service = action.split('.')
+        if action in self.failing:
+            self.failing.discard(action)
+            raise Stop(f'{action} failed: the thermostat did not answer', True)
         if action == 'input_text.set_value':
             v = data['value']
             v = json.dumps(v, separators=(',', ':')) if isinstance(v, (dict, list)) else str(v)
@@ -815,6 +819,17 @@ class World:
         the thermostat's current value."""
         for e in entities or [e for e in self.devices['dev'] if not e.startswith('climate.')]:
             self.restore(e)
+
+    def set_contact(self, on):
+        """You turn the thermostat's external contact sensor on or off, and it
+        suspends or resumes its heating."""
+        self.set('switch.t_external_contact_sensor', 'on' if on else 'off')
+        self.control()
+
+    def fail_next(self, action):
+        """The next call of this action fails, as when the thermostat does not
+        answer."""
+        self.failing.add(action)
 
     def hold_trigger(self, trigger_id):
         """Keep a trigger from firing, as if its run were held up."""

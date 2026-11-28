@@ -939,8 +939,8 @@ actions:
           {{ '' in ents or expand(ents) | count < ents | count }}
     then:
       - stop: >-
-          Could not find every schedule, override, work mode and HVAC action entity on
-          the thermostat. Check they are enabled and their entity IDs still end with their
+          Could not find every schedule, override, work mode, HVAC action and External
+          contact sensor entity on the thermostat. Check they are enabled and their entity IDs still end with their
           default names.
         error: true
   - alias: Stop if the State helper is too short
@@ -1207,8 +1207,10 @@ actions:
   # heating, and a warm-up measurement in progress is dropped, as the open
   # window slows the room. This is noted in the State helper (window_off), so
   # only a contact sensor we turned on is turned off. While it is on, runs stop
-  # here, so nothing is written to the thermostat with a window open. If you
-  # turn it off with a window still open, runs carry on and it is not turned on
+  # here, so nothing is written to the thermostat with a window open; a state
+  # other than off counts as on. If our call to turn it on did not take effect
+  # (it has not changed since the note), the next run tries again. If you turn
+  # it off with a window still open, runs carry on and it is not turned on
   # again until every window has closed. Once they have, the note is cleared,
   # the contact sensor is turned off if it is still on, and this run carries on
   # as a catch-up. With Window control turned off (or no heated areas), a
@@ -1219,7 +1221,7 @@ actions:
   - alias: Suspend heating while a window is open
     if:
       - condition: template
-        value_template: "{{ windows_enabled and not window_off and is_state(contact_switch, 'off') }}"
+        value_template: "{{ windows_enabled and not window_off and not is_state(contact_switch, 'on') }}"
       - condition: window.is_open
         target:
           area_id: !input heated_areas
@@ -1300,11 +1302,24 @@ actions:
           - variables:
               run: catch-up
         else:
+          # Unless it reads off, the contact sensor counts as on (as when its
+          # state is not known yet), so nothing is written with a window open.
           - if:
               - condition: template
-                value_template: "{{ is_state(contact_switch, 'on') }}"
+                value_template: "{{ not is_state(contact_switch, 'off') }}"
             then:
               - stop: A window is still open, so the thermostat's heating stays suspended.
+          # Off, and unchanged since we noted turning it on: our call did not
+          # take effect, so try again. Changed since, you turned it off.
+          - if:
+              - condition: template
+                value_template: "{{ states[contact_switch].last_changed.timestamp() < state.window_off | int(0) }}"
+            then:
+              - alias: Turn the external contact sensor on again
+                action: switch.turn_on
+                target:
+                  entity_id: "{{ contact_switch }}"
+              - stop: A window is open, so the thermostat's heating is suspended until every window has closed.
   # A warm-up measurement (learn.m) records when it started, the room
   # temperature then and the target. Each report of its temperature above
   # that start reading (Room warming) is recorded too: the first one, and the

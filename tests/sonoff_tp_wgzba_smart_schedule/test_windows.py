@@ -81,7 +81,7 @@ def test_a_contact_sensor_you_turn_on_is_left_alone():
     # does not turn it off.
     w = world(alarm=None)
     w.advance(T(10, 0))
-    w.set(SWITCH, 'on')
+    w.set_contact(True)
     w.advance(T(10, 5))
     w.set_window('living_room', True)
     w.advance(T(10, 10))
@@ -102,7 +102,7 @@ def test_turned_off_with_the_window_open_stays_off_and_carries_on():
     w.set_window('living_room', True)
     w.advance(T(10, 3))
     assert contact(w) == 'on'
-    w.set(SWITCH, 'off')
+    w.set_contact(False)
     w.advance(T(10, 10))
     assert contact(w) == 'off', 'not turned on again while the same window is open'
     w.set_occupied('living_room', False)
@@ -166,3 +166,29 @@ def test_a_window_delay_written_as_text_works():
     w.set_window('living_room', True)
     w.advance(T(10, 3))
     assert contact(w) == 'on'
+
+
+def test_a_failed_turn_on_is_tried_again():
+    # The call to turn the contact sensor on fails. The next run sees it still
+    # off and unchanged since the note, so it is not taken for you turning it
+    # off, and tries again.
+    w = world(alarm=None)
+    w.advance(T(10, 0))
+    w.fail_next('switch.turn_on')
+    w.set_window('living_room', True)
+    w.advance(T(10, 3))
+    assert contact(w) == 'off' and w.helper().get('o'), w.helper()
+    assert w.runs[-1]['result'].startswith('error: switch.turn_on failed'), w.runs[-1]['result']
+    w.run('catch-up')
+    assert contact(w) == 'on' and not w.room['heating']
+
+
+def test_a_contact_sensor_not_known_yet_counts_as_needing_to_be_on():
+    # After a restart its state is not known yet. A window opens: it is
+    # turned on rather than left alone.
+    w = world(alarm=None)
+    w.advance(T(10, 0))
+    w.set(SWITCH, 'unknown')
+    w.set_window('living_room', True)
+    w.advance(T(10, 3))
+    assert contact(w) == 'on' and w.helper().get('o'), w.helper()
