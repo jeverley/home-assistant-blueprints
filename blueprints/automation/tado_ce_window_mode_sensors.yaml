@@ -2,6 +2,8 @@ blueprint:
   name: Tado CE – Window Mode Sensors
   description: |
     Control Tado CE Window Mode using window and door sensors.
+
+    Requires Tado CE v5.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/tado_ce_window_mode_sensors.yaml
 
@@ -76,6 +78,7 @@ blueprint:
               selector:
                 number:
                   min: 1
+                  max: 60
                   unit_of_measurement: min
                   mode: box
 
@@ -212,21 +215,21 @@ action:
           - choose:
               - conditions: "{{ is_open and not is_aborted }}"
                 sequence:
-                  - action: tado_ce.set_open_window_mode
+                  - action: tado_ce.set_climate_open_window_mode
                     target:
                       entity_id: "{{ zone.climate_entity }}"
                     data: |
                       {% if indefinite or duration == 0 %}
-                        {{ {'duration': 0} }}
-                      {% elif duration and duration > 0 %}
-                        {{ {'duration': duration * 60} }}
+                        {{ {'time_period': '00:00:00'} }}
+                      {% elif duration is number %}
+                        {{ {'time_period': timedelta(minutes=duration)|string} }}
                       {% else %}
                         {{ {} }}
                       {% endif %}
 
               - conditions: "{{ is_closed and not is_aborted }}"
                 sequence:
-                  - action: tado_ce.restore_previous_state
+                  - action: tado_ce.restore_climate_previous_state
                     target:
                       entity_id: "{{ zone.climate_entity }}"
 
