@@ -3,7 +3,7 @@ blueprint:
   description: |
     Control Tado CE Window Mode using window and door sensors.
 
-    Requires Tado CE 5.0.0-beta.2 or later.
+    Requires Tado CE v5.
   domain: automation
   source_url: https://raw.githubusercontent.com/jeverley/home-assistant-blueprints/refs/heads/main/blueprints/automation/tado_ce_window_mode_sensors.yaml
 
