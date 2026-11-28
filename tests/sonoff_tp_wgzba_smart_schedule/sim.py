@@ -235,6 +235,7 @@ class World:
         a('sensor.t_override_mode', 'Idle')
         a('sensor.t_device_work_mode_state', 'Schedule')
         a('select.t_device_work_mode', 'Schedule', {'options': ['Off', 'Schedule', 'Manual']})
+        a('switch.t_external_contact_sensor', 'off')
         a('number.t_heating_high_threshold', '0.2')
         a('number.t_heating_low_threshold', '-0.6')
         a('sensor.t_hvac_action', 'idle')
@@ -334,7 +335,12 @@ class World:
             self.report('climate.t', 'heat', dict(st.attributes, current_temperature=v), force_update=True)
 
     def control(self):
-        """The thermostat's own hysteresis, by its own (unreported) reading."""
+        """The thermostat's own hysteresis, by its own (unreported) reading.
+        With its external contact sensor on (a window open) it suspends its
+        heating."""
+        if self.device('switch.t_external_contact_sensor') == 'on':
+            self._set_heating(False)
+            return
         sp = self.setpoint()
         hi = float(self.device('number.t_heating_high_threshold'))
         lo = float(self.device('number.t_heating_low_threshold'))
@@ -661,6 +667,9 @@ class World:
             self.set(e, str(data['value']))
         elif action == 'button.press':
             self.press(e)
+        elif action in ('switch.turn_on', 'switch.turn_off'):
+            self.set(e, 'on' if service == 'turn_on' else 'off')
+            self.control()
         else:
             raise ValueError(action)
 

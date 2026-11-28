@@ -232,15 +232,15 @@ blueprint:
     windows:
       name: Windows
       icon: mdi:window-open-variant
-      description: Turns the thermostat off while a window in the heated areas is open, using their window sensors.
+      description: Suspends the thermostat's heating while a window in the heated areas is open, using their window sensors.
       collapsed: true
       input:
         window_control_enabled:
           name: Window control
           description: |
-            Turns the thermostat off once a window in the heated areas has been open for the **Window delay**, and back to its schedule when every window has closed.
+            Turns on the thermostat's **External contact sensor** once a window in the heated areas has been open for the **Window delay**, so the thermostat suspends its heating, and turns it off again when every window has closed.
 
-            It only turns off a thermostat on its schedule, and turning off ends any Boost, Timer or hand adjustment. It only turns one back on that it turned off, and if you turn it back on with a window still open, it stays on.
+            It only turns off a contact sensor that it turned on, and if you turn it off with a window still open, it stays off until the windows have closed.
           default: true
           selector:
             boolean: {}
@@ -249,7 +249,7 @@ blueprint:
           visible:
             field: window_control_enabled
             value: true
-          description: How long a window in the heated areas must be open before the thermostat turns off.
+          description: How long a window in the heated areas must be open before the thermostat's heating is suspended.
           default:
             hours: 0
             minutes: 2
@@ -415,7 +415,7 @@ trigger_variables:
   # for a reply (seen when ZHA reloads), holding up every queued run behind
   # it, so runs only touch the thermostat once all are available.
   written_pattern: >-
-    ^(select\.\S*_(schedule_group|schedule_operating_day|override_mode|device_work_mode)|button\.\S*_(schedule_fetch|override_apply|override_exit)|number\.\S*_override_(target_temperature|period))$
+    ^(select\.\S*_(schedule_group|schedule_operating_day|override_mode)|button\.\S*_(schedule_fetch|override_apply|override_exit)|number\.\S*_override_(target_temperature|period)|switch\.\S*_external_contact_sensor)$
 
 variables:
   # The thermostat's ZHA entities, matched on the device by domain and
@@ -450,10 +450,9 @@ variables:
   thermostat_ready: "{{ has_value(schedule_group) and unavailable_entities | first is not defined }}"
   override_state: >-
     {{ thermostat_entities | select('match', '^sensor\\..*_override_mode$') | first | default('') }}
-  # The thermostat's own mode: Off, Schedule or Manual. Turned off while a
-  # window is open.
-  work_mode_select: >-
-    {{ thermostat_entities | select('match', '^select\\..*_device_work_mode$') | first | default('') }}
+  # Tells the thermostat a window is open: on, it suspends its heating.
+  contact_switch: >-
+    {{ thermostat_entities | select('match', '^switch\\..*_external_contact_sensor$') | first | default('') }}
   work_mode_state: >-
     {{ thermostat_entities | select('match', '^sensor\\..*_device_work_mode_state$') | first | default('') }}
   # For learning the warm-up time. The hvac action sensor ends each
@@ -495,7 +494,7 @@ variables:
     {%- endmacro -%}
     {{ {'getting_up': secs(getting_up_delay) | float(0), 'bedtime': secs(bedtime_delay) | float(0),
         'empty': secs(empty_delay) | float(0)} }}
-  # Turning the thermostat off while a window is open: Window control on,
+  # Suspending heating while a window is open: Window control on,
   # with heated areas.
   windows_enabled: "{{ window_control_enabled and heated_areas | first is defined }}"
   # Timings in seconds used in more than one place. The Schedule editing
@@ -580,8 +579,8 @@ triggers:
       behavior: all
       for: !input empty_delay
   # A window in the heated areas has been open for the window delay, so the
-  # thermostat turns off. Keep this in step with the Turn off while a window
-  # is open step.
+  # thermostat's heating is suspended. Keep this in step with the Suspend
+  # heating while a window is open step.
   - alias: Window open
     trigger: window.opened
     id: window
@@ -590,8 +589,8 @@ triggers:
     options:
       behavior: first
       for: !input window_delay
-  # Every window in the heated areas has closed, so the thermostat goes back
-  # to its schedule.
+  # Every window in the heated areas has closed, so the thermostat's heating
+  # resumes.
   - alias: Windows closed
     trigger: window.closed
     id: window
@@ -935,7 +934,7 @@ actions:
         value_template: >-
           {% set ents = [schedule_group, operating_day, fetch_button, override_mode,
                          override_target, override_period, override_apply,
-                         override_exit, override_state, work_mode_state, work_mode_select,
+                         override_exit, override_state, work_mode_state, contact_switch,
                          hvac_action_sensor] %}
           {{ '' in ents or expand(ents) | count < ents | count }}
     then:
@@ -1048,7 +1047,7 @@ actions:
       #   learn: the learned warm-up time, see Learn the warm-up time.
       #   furthest: each person's furthest distance from home, see furthest.
       #   morning: when a morning plan was last made, see late_start_due.
-      #   window_off: when we turned the thermostat off for an open window.
+      #   window_off: when we turned the external contact sensor on for an open window.
       # Times are Unix epoch seconds, 0 when unset. The helper is the only
       # copy: state holds its keys other than routine, plan holds the routine,
       # and the save step writes both back before any thermostat call that
@@ -1204,23 +1203,23 @@ actions:
       - variables:
           plan: "{{ empty_plan }}"
   # A window in the heated areas has been open for the window delay: the
-  # thermostat turns off, so only its frost protection heats, ending any Boost,
-  # Timer or hand adjustment, and a warm-up measurement in progress is
-  # dropped, as the open window slows the room. Only from its schedule
-  # (Manual and Off are yours), and noted in the State helper (window_off), so
-  # only an Off we set is undone. While it stays off, runs stop here. If you
-  # turn it back on (or to Manual) with a window still open, runs carry on and
-  # it is not turned off again until every window has closed. Once they have,
-  # the note is cleared: if it is still Off it goes back to its schedule and
-  # the Back on schedule trigger catches up, otherwise this run carries on as a
-  # catch-up. With Window control turned off (or no heated areas), an Off we set
-  # earlier is still undone. Keep this in step with the Window open trigger.
+  # thermostat's external contact sensor is turned on, so it suspends its
+  # heating, and a warm-up measurement in progress is dropped, as the open
+  # window slows the room. This is noted in the State helper (window_off), so
+  # only a contact sensor we turned on is turned off. While it is on, runs stop
+  # here, so nothing is written to the thermostat with a window open. If you
+  # turn it off with a window still open, runs carry on and it is not turned on
+  # again until every window has closed. Once they have, the note is cleared,
+  # the contact sensor is turned off if it is still on, and this run carries on
+  # as a catch-up. With Window control turned off (or no heated areas), a
+  # contact sensor we turned on is still turned off. Keep this in step with the
+  # Window open trigger.
   - variables:
       window_off: "{{ state.window_off | default(0) | int(0) > 0 }}"
-  - alias: Turn off while a window is open
+  - alias: Suspend heating while a window is open
     if:
       - condition: template
-        value_template: "{{ windows_enabled and not window_off and is_state(work_mode_select, 'Schedule') }}"
+        value_template: "{{ windows_enabled and not window_off and is_state(contact_switch, 'off') }}"
       - condition: window.is_open
         target:
           area_id: !input heated_areas
@@ -1263,14 +1262,12 @@ actions:
             {% for k, v in l.items() if k != 'm' %}{% set ns.l = dict(ns.l, **{k: v}) %}{% endfor %}
             {% set trimmed = dict(out, l=ns.l) if ns.l else out %}
             {{ (full if full | to_json | length <= state_attr(state_helper, 'max') | int(255) else trimmed) | to_json }}
-      - alias: Turn the thermostat off
-        action: select.select_option
+      - alias: Turn the external contact sensor on
+        action: switch.turn_on
         target:
-          entity_id: "{{ work_mode_select }}"
-        data:
-          option: "Off"
-      - stop: A window is open, so the thermostat is off until every window has closed.
-  - alias: Back on its schedule once every window has closed
+          entity_id: "{{ contact_switch }}"
+      - stop: A window is open, so the thermostat's heating is suspended until every window has closed.
+  - alias: Resume heating once every window has closed
     if:
       - condition: template
         value_template: "{{ window_off }}"
@@ -1292,27 +1289,22 @@ actions:
           - *save_state
           - if:
               - condition: template
-                value_template: "{{ is_state(work_mode_select, 'Off') }}"
+                value_template: "{{ is_state(contact_switch, 'on') }}"
             then:
-              - alias: Put the thermostat back on its schedule
-                action: select.select_option
+              - alias: Turn the external contact sensor off
+                action: switch.turn_off
                 target:
-                  entity_id: "{{ work_mode_select }}"
-                data:
-                  option: Schedule
-              - stop: >-
-                  Every window has closed, so the thermostat is back on its schedule. The
-                  Back on schedule trigger catches up.
-          # Someone changed its mode while it was off, so nothing triggers a
-          # catch-up: this run is one.
+                  entity_id: "{{ contact_switch }}"
+          # Nothing else triggers a catch-up when the heating resumes, so this
+          # run is one.
           - variables:
               run: catch-up
         else:
           - if:
               - condition: template
-                value_template: "{{ is_state(work_mode_select, 'Off') }}"
+                value_template: "{{ is_state(contact_switch, 'on') }}"
             then:
-              - stop: A window is still open, so the thermostat stays off.
+              - stop: A window is still open, so the thermostat's heating stays suspended.
   # A warm-up measurement (learn.m) records when it started, the room
   # temperature then and the target. Each report of its temperature above
   # that start reading (Room warming) is recorded too: the first one, and the
