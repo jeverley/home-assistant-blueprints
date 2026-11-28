@@ -189,6 +189,7 @@ class World:
                          rep=None, rep_t=None)
         self.trigger_state: dict[int, dict] = {}
         self.held: set[str] = set()
+        self.failing: set[str] = set()
         self.env = self._make_env()
         self._build_entities(group)
 
@@ -235,6 +236,7 @@ class World:
         a('sensor.t_override_mode', 'Idle')
         a('sensor.t_device_work_mode_state', 'Schedule')
         a('select.t_device_work_mode', 'Schedule', {'options': ['Off', 'Schedule', 'Manual']})
+        a('switch.t_external_contact_sensor', 'off')
         a('number.t_heating_high_threshold', '0.2')
         a('number.t_heating_low_threshold', '-0.6')
         a('sensor.t_hvac_action', 'idle')
@@ -334,7 +336,12 @@ class World:
             self.report('climate.t', 'heat', dict(st.attributes, current_temperature=v), force_update=True)
 
     def control(self):
-        """The thermostat's own hysteresis, by its own (unreported) reading."""
+        """The thermostat's own hysteresis, by its own (unreported) reading.
+        With its external contact sensor on (a window open) it suspends its
+        heating."""
+        if self.device('switch.t_external_contact_sensor') == 'on':
+            self._set_heating(False)
+            return
         sp = self.setpoint()
         hi = float(self.device('number.t_heating_high_threshold'))
         lo = float(self.device('number.t_heating_low_threshold'))
@@ -644,6 +651,9 @@ class World:
         e = e[0] if isinstance(e, list) else e
         self.log.append(f"{self.now:%H:%M} {action} {e} {json.dumps(data) if data else ''}".rstrip())
         domain, service = action.split('.')
+        if action in self.failing:
+            self.failing.discard(action)
+            raise Stop(f'{action} failed: the thermostat did not answer', True)
         if action == 'input_text.set_value':
             v = data['value']
             v = json.dumps(v, separators=(',', ':')) if isinstance(v, (dict, list)) else str(v)
@@ -661,6 +671,9 @@ class World:
             self.set(e, str(data['value']))
         elif action == 'button.press':
             self.press(e)
+        elif action in ('switch.turn_on', 'switch.turn_off'):
+            self.set(e, 'on' if service == 'turn_on' else 'off')
+            self.control()
         else:
             raise ValueError(action)
 
@@ -806,6 +819,17 @@ class World:
         the thermostat's current value."""
         for e in entities or [e for e in self.devices['dev'] if not e.startswith('climate.')]:
             self.restore(e)
+
+    def set_contact(self, on):
+        """You turn the thermostat's external contact sensor on or off, and it
+        suspends or resumes its heating."""
+        self.set('switch.t_external_contact_sensor', 'on' if on else 'off')
+        self.control()
+
+    def fail_next(self, action):
+        """The next call of this action fails, as when the thermostat does not
+        answer."""
+        self.failing.add(action)
 
     def hold_trigger(self, trigger_id):
         """Keep a trigger from firing, as if its run were held up."""
